@@ -16,5 +16,10 @@ applications:
       cache:
         paths:
           - node_modules/**/*
+      rewritesAndRedirects:
+        - source: '/<*>'
+          target: '/index.html'
+          status: '200'
+          type: 'rewrite'
 
 
