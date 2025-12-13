@@ -1,0 +1,46 @@
+@router.post("/draft-next")
+def draft_next_lecture_endpoint(
+    payload: dict,
+    session=Depends(get_neo4j_session),
+):
+    """
+    Draft a follow-up lecture outline based on seed concepts and teaching style.
+    
+    Request body:
+    {
+        "seed_concepts": ["Concept Name 1", "Concept Name 2"],
+        "source_lecture_id": "LECTURE_ABC123" (optional),
+        "target_level": "intro" | "intermediate" | "advanced"
+    }
+    
+    Response:
+    {
+        "outline": ["1. Section title", ...],
+        "sections": [{"title": "...", "summary": "..."}, ...],
+        "suggested_analogies": [{"label": "...", "description": "...", "target_concepts": [...]}, ...]
+    }
+    """
+    try:
+        seed_concepts = payload.get("seed_concepts", [])
+        if not seed_concepts:
+            raise HTTPException(status_code=400, detail="seed_concepts is required")
+        
+        source_lecture_id = payload.get("source_lecture_id")
+        target_level = payload.get("target_level", "intermediate")
+        
+        if target_level not in ["intro", "intermediate", "advanced"]:
+            target_level = "intermediate"
+        
+        result = draft_next_lecture(
+            session=session,
+            seed_concepts=seed_concepts,
+            source_lecture_id=source_lecture_id,
+            target_level=target_level,
+        )
+        
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"ERROR in draft-next lecture: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to draft lecture: {str(e)}")

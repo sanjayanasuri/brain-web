@@ -1,0 +1,89 @@
+"""
+API endpoints for user preferences and personalization settings.
+
+This module handles:
+- Response style profile (how Brain Web should answer)
+- Focus areas (current learning themes)
+- User profile (background, interests, weak spots, learning preferences)
+"""
+
+from fastapi import APIRouter, Depends
+from typing import List
+
+from models import (
+    ResponseStyleProfileWrapper,
+    FocusArea,
+    UserProfile
+)
+from db_neo4j import get_neo4j_session
+from services_graph import (
+    get_response_style_profile,
+    update_response_style_profile,
+    get_focus_areas,
+    upsert_focus_area,
+    set_focus_area_active,
+    get_user_profile,
+    update_user_profile
+)
+
+router = APIRouter(prefix="/preferences", tags=["preferences"])
+
+
+@router.get("/response-style", response_model=ResponseStyleProfileWrapper)
+def get_response_style(session=Depends(get_neo4j_session)):
+    """
+    Get the current response style profile.
+    This profile shapes how Brain Web answers questions.
+    """
+    return get_response_style_profile(session)
+
+
+@router.post("/response-style", response_model=ResponseStyleProfileWrapper)
+def set_response_style(wrapper: ResponseStyleProfileWrapper, session=Depends(get_neo4j_session)):
+    """
+    Update the response style profile.
+    """
+    return update_response_style_profile(session, wrapper)
+
+
+@router.get("/focus-areas", response_model=List[FocusArea])
+def list_focus_areas(session=Depends(get_neo4j_session)):
+    """
+    Get all focus areas.
+    Focus areas represent current learning themes that bias answers.
+    """
+    return get_focus_areas(session)
+
+
+@router.post("/focus-areas", response_model=FocusArea)
+def create_or_update_focus_area(fa: FocusArea, session=Depends(get_neo4j_session)):
+    """
+    Create or update a focus area.
+    """
+    return upsert_focus_area(session, fa)
+
+
+@router.post("/focus-areas/{focus_id}/active", response_model=FocusArea)
+def toggle_focus_area(focus_id: str, active: bool, session=Depends(get_neo4j_session)):
+    """
+    Toggle the active status of a focus area.
+    Only active focus areas bias answers.
+    """
+    return set_focus_area_active(session, focus_id, active)
+
+
+@router.get("/user-profile", response_model=UserProfile)
+def get_profile(session=Depends(get_neo4j_session)):
+    """
+    Get the user profile.
+    The profile encodes background, interests, weak spots, and learning preferences.
+    """
+    return get_user_profile(session)
+
+
+@router.post("/user-profile", response_model=UserProfile)
+def set_profile(profile: UserProfile, session=Depends(get_neo4j_session)):
+    """
+    Update the user profile.
+    """
+    return update_user_profile(session, profile)

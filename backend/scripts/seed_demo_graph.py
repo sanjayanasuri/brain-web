@@ -1,0 +1,133 @@
+"""
+Operator-only script (NOT an API endpoint):
+Seed/refresh the curated demo dataset into Neo4j Aura (or any Neo4j).
+
+Design goals:
+- Safe by default (requires explicit confirmation)
+- Repeatable (idempotent-ish via demo tenant namespace)
+- Fast hot-swap (point to a new dataset version and run again)
+
+Expected dataset inputs:
+- nodes CSV: node_id,name,description,domain (extend as needed)
+- edges CSV: source_id,target_id,type
+
+This script intentionally does not touch Notion/OpenAI.
+"""
+
+import argparse
+import csv
+import os
+import sys
+from pathlib import Path
+from typing import Dict, Iterable, Tuple
+
+from neo4j import GraphDatabase  # type: ignore
+
+
+def _require_confirm() -> None:
+    if os.getenv("DEMO_SEED_CONFIRM", "") != "YES":
+        raise SystemExit(
+            "Refusing to run. Set DEMO_SEED_CONFIRM=YES to confirm you want to modify the target Neo4j database."
+        )
+
+
+def _read_csv(path: Path) -> Iterable[Dict[str, str]]:
+    with path.open("r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        yield from reader
+
+
+def _seed_nodes(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
+    for r in rows:
+        node_id = (r.get("node_id") or "").strip()
+        if not node_id:
+            continue
+        tx.run(
+            """
+            MERGE (c:Concept {tenant_id:$tenant_id, node_id:$node_id})
+            SET c.name = $name,
+                c.description = $description,
+                c.domain = $domain
+            """,
+            tenant_id=tenant_id,
+            node_id=node_id,
+            name=(r.get("name") or "").strip(),
+            description=(r.get("description") or "").strip(),
+            domain=(r.get("domain") or "").strip(),
+        )
+
+
+def _seed_edges(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
+    for r in rows:
+        s = (r.get("source_id") or "").strip()
+        t = (r.get("target_id") or "").strip()
+        rel_type = (r.get("type") or "RELATED_TO").strip().upper()
+        if not s or not t:
+            continue
+        # Relationship type cannot be parameterized in Cypher; validate + interpolate safely.
+        if not rel_type.replace("_", "").isalnum():
+            raise ValueError(f"Invalid relationship type: {rel_type}")
+        tx.run(
+            f"""
+            MATCH (a:Concept {{tenant_id:$tenant_id, node_id:$s}})
+            MATCH (b:Concept {{tenant_id:$tenant_id, node_id:$t}})
+            MERGE (a)-[r:{rel_type} {{tenant_id:$tenant_id}}]->(b)
+            """,
+            tenant_id=tenant_id,
+            s=s,
+            t=t,
+        )
+
+
+def _delete_demo_tenant(tx, tenant_id: str) -> None:
+    tx.run(
+        """
+        MATCH (n {tenant_id:$tenant_id})
+        DETACH DELETE n
+        """,
+        tenant_id=tenant_id,
+    )
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
+    parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
+    parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", ""))
+    parser.add_argument("--tenant-id", default=os.getenv("DEMO_TENANT_ID", "demo"))
+    parser.add_argument("--nodes", default=str(Path("graph") / "nodes_semantic.csv"))
+    parser.add_argument("--edges", default=str(Path("graph") / "edges_semantic.csv"))
+    parser.add_argument("--reset", action="store_true", help="Delete all existing nodes with this tenant_id first.")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if not args.neo4j_password:
+        print("NEO4J_PASSWORD is required", file=sys.stderr)
+        return 2
+
+    _require_confirm()
+
+    nodes_path = Path(args.nodes)
+    edges_path = Path(args.edges)
+    if not nodes_path.exists():
+        print(f"Nodes CSV not found: {nodes_path}", file=sys.stderr)
+        return 2
+    if not edges_path.exists():
+        print(f"Edges CSV not found: {edges_path}", file=sys.stderr)
+        return 2
+
+    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
+    with driver:
+        with driver.session() as session:
+            if args.reset:
+                session.execute_write(_delete_demo_tenant, args.tenant_id)
+            session.execute_write(_seed_nodes, args.tenant_id, _read_csv(nodes_path))
+            session.execute_write(_seed_edges, args.tenant_id, _read_csv(edges_path))
+
+    print(f"Seed complete for tenant_id={args.tenant_id}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+

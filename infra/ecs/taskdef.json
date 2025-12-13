@@ -1,0 +1,45 @@
+{
+  "family": "brain-web-demo-api",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "${TASK_EXEC_ROLE_ARN}",
+  "taskRoleArn": "${TASK_ROLE_ARN}",
+  "containerDefinitions": [
+    {
+      "name": "api",
+      "image": "${IMAGE}",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8000, "hostPort": 8000, "protocol": "tcp" }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "DEMO_MODE", "value": "true" },
+        { "name": "DEMO_ALLOW_WRITES", "value": "false" },
+        { "name": "DEMO_TENANT_ID", "value": "demo" },
+        { "name": "DEMO_SAFE_WRITE_PATHS", "value": "/ai/chat,/ai/semantic-search,/events" },
+        { "name": "DEMO_RATE_LIMIT_PER_IP_PER_MIN", "value": "120" },
+        { "name": "DEMO_RATE_LIMIT_PER_SESSION_PER_MIN", "value": "60" },
+        { "name": "EVENTS_DDB_TABLE", "value": "${EVENTS_DDB_TABLE}" },
+        { "name": "AWS_REGION", "value": "${AWS_REGION}" }
+      ],
+      "secrets": [
+        { "name": "NEO4J_URI", "valueFrom": "${NEO4J_SECRET_ARN}:uri::" },
+        { "name": "NEO4J_USER", "valueFrom": "${NEO4J_SECRET_ARN}:user::" },
+        { "name": "NEO4J_PASSWORD", "valueFrom": "${NEO4J_SECRET_ARN}:password::" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "${LOG_GROUP}",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "api"
+        }
+      }
+    }
+  ]
+}
+
+

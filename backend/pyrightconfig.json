@@ -1,0 +1,17 @@
+{
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "**/node_modules"
+  ],
+  "venvPath": "/Users/sanjayanasuri/brain-web/backend",
+  "venv": ".venv",
+  "reportMissingImports": "none",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "pythonPlatform": "Darwin"
+}
+
