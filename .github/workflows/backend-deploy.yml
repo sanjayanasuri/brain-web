@@ -69,13 +69,21 @@ jobs:
                   c["image"] = img
 
           # Remove fields not allowed in RegisterTaskDefinition input
+          # BUT preserve executionRoleArn and taskRoleArn (required for PassRole)
           for k in [
               "taskDefinitionArn","revision","status","requiresAttributes",
-              "compatibilities","registeredAt","registeredBy"
+              "compatibilities","registeredAt","registeredBy","registeredAt",
+              "deregisteredAt","placementConstraints"
           ]:
               td.pop(k, None)
 
-          open("/tmp/td-new.json","w").write(json.dumps(td))
+          # Ensure executionRoleArn and taskRoleArn are preserved
+          if "executionRoleArn" not in td:
+              raise ValueError("executionRoleArn missing from task definition")
+          if "taskRoleArn" not in td:
+              raise ValueError("taskRoleArn missing from task definition")
+
+          open("/tmp/td-new.json","w").write(json.dumps(td, indent=2))
           PY
 
           NEW_TD_ARN=$(aws ecs register-task-definition \
