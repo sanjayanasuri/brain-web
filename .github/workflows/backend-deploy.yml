@@ -48,11 +48,19 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Getting current task definition..."
           CURRENT_TD_ARN=$(aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE" \
             --query "services[0].taskDefinition" \
             --output text)
+          
+          if [ -z "$CURRENT_TD_ARN" ]; then
+            echo "Error: Could not get current task definition ARN"
+            exit 1
+          fi
+          
+          echo "Current task definition: $CURRENT_TD_ARN"
 
           aws ecs describe-task-definition \
             --task-definition "$CURRENT_TD_ARN" \
@@ -86,10 +94,20 @@ jobs:
           open("/tmp/td-new.json","w").write(json.dumps(td, indent=2))
           PY
 
+          echo "Registering new task definition..."
           NEW_TD_ARN=$(aws ecs register-task-definition \
             --cli-input-json file:///tmp/td-new.json \
             --query "taskDefinition.taskDefinitionArn" \
             --output text)
+          
+          if [ -z "$NEW_TD_ARN" ]; then
+            echo "Error: Failed to register new task definition"
+            cat /tmp/td-new.json
+            exit 1
+          fi
+          
+          echo "New task definition: $NEW_TD_ARN"
+          echo "Updating ECS service..."
 
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
