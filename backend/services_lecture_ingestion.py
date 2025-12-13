@@ -43,12 +43,13 @@ if OPENAI_API_KEY:
     if cleaned_key and cleaned_key.startswith('sk-'):
         try:
             client = OpenAI(api_key=cleaned_key)
+            # Never print key material (even partials) to logs.
             print(f"✓ OpenAI client initialized for lecture ingestion (key length: {len(cleaned_key)})")
         except Exception as e:
             print(f"ERROR: Failed to initialize OpenAI client for lecture ingestion: {e}")
             client = None
     else:
-        print(f"WARNING: OPENAI_API_KEY format invalid (should start with 'sk-'): {cleaned_key[:10] if cleaned_key else 'empty'}...")
+        print("WARNING: OPENAI_API_KEY format invalid (should start with 'sk-')")
         client = None
 else:
     print("WARNING: OPENAI_API_KEY not found - lecture ingestion will not work")

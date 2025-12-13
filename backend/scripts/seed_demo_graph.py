@@ -8,8 +8,8 @@ Design goals:
 - Fast hot-swap (point to a new dataset version and run again)
 
 Expected dataset inputs:
-- nodes CSV: node_id,name,description,domain (extend as needed)
-- edges CSV: source_id,target_id,type
+- nodes CSV: node_id,name,domain[,type][,description] (extra columns ignored)
+- edges CSV: source_id,target_id,(predicate|type) (extra columns ignored)
 
 This script intentionally does not touch Notion/OpenAI.
 """
@@ -47,13 +47,15 @@ def _seed_nodes(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
             MERGE (c:Concept {tenant_id:$tenant_id, node_id:$node_id})
             SET c.name = $name,
                 c.description = $description,
-                c.domain = $domain
+                c.domain = $domain,
+                c.type = $type
             """,
             tenant_id=tenant_id,
             node_id=node_id,
             name=(r.get("name") or "").strip(),
             description=(r.get("description") or "").strip(),
             domain=(r.get("domain") or "").strip(),
+            type=(r.get("type") or "").strip(),
         )
 
 
@@ -61,7 +63,7 @@ def _seed_edges(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
     for r in rows:
         s = (r.get("source_id") or "").strip()
         t = (r.get("target_id") or "").strip()
-        rel_type = (r.get("type") or "RELATED_TO").strip().upper()
+        rel_type = (r.get("predicate") or r.get("type") or "RELATED_TO").strip().upper()
         if not s or not t:
             continue
         # Relationship type cannot be parameterized in Cypher; validate + interpolate safely.
@@ -95,8 +97,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", ""))
     parser.add_argument("--tenant-id", default=os.getenv("DEMO_TENANT_ID", "demo"))
-    parser.add_argument("--nodes", default=str(Path("graph") / "nodes_semantic.csv"))
-    parser.add_argument("--edges", default=str(Path("graph") / "edges_semantic.csv"))
+    # Defaults point to curated demo dataset outputs (safe). You can override explicitly.
+    parser.add_argument("--nodes", default=str(Path("graph") / "demo_nodes.csv"))
+    parser.add_argument("--edges", default=str(Path("graph") / "demo_edges.csv"))
     parser.add_argument("--reset", action="store_true", help="Delete all existing nodes with this tenant_id first.")
     args = parser.parse_args(list(argv) if argv is not None else None)
 

@@ -155,8 +155,14 @@ resource "aws_dynamodb_table" "events" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "pk"
   range_key    = "sk"
-  attribute { name = "pk", type = "S" }
-  attribute { name = "sk", type = "S" }
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+  attribute {
+    name = "sk"
+    type = "S"
+  }
   point_in_time_recovery { enabled = true }
 }
 
@@ -265,9 +271,9 @@ resource "aws_acm_certificate" "api" {
 resource "aws_route53_record" "api_cert_validation" {
   count   = var.api_domain_name != "" && var.route53_zone_id != "" ? 1 : 0
   zone_id = var.route53_zone_id
-  name    = aws_acm_certificate.api[0].domain_validation_options[0].resource_record_name
-  type    = aws_acm_certificate.api[0].domain_validation_options[0].resource_record_type
-  records = [aws_acm_certificate.api[0].domain_validation_options[0].resource_record_value]
+  name    = tolist(aws_acm_certificate.api[0].domain_validation_options)[0].resource_record_name
+  type    = tolist(aws_acm_certificate.api[0].domain_validation_options)[0].resource_record_type
+  records = [tolist(aws_acm_certificate.api[0].domain_validation_options)[0].resource_record_value]
   ttl     = 60
 }
 
@@ -309,12 +315,16 @@ resource "aws_wafv2_web_acl" "api" {
   name  = "${local.name}-waf"
   scope = "REGIONAL"
 
-  default_action { allow {} }
+  default_action {
+    allow {}
+  }
 
   rule {
     name     = "AWSManagedRulesCommonRuleSet"
     priority = 1
-    override_action { none {} }
+    override_action {
+      none {}
+    }
     statement {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
@@ -331,7 +341,9 @@ resource "aws_wafv2_web_acl" "api" {
   rule {
     name     = "RateLimit"
     priority = 2
-    action { block {} }
+    action {
+      block {}
+    }
     statement {
       rate_based_statement {
         limit              = var.waf_rate_limit_per_5m

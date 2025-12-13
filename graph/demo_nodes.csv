@@ -1,0 +1,26 @@
+node_id,name,domain,type
+N001,Software Architecture,Software Architecture,domain
+N002,Web Development,Software Architecture,concept
+N003,Front End,Software Architecture,concept
+N004,Back End,Software Architecture,concept
+N005,Frameworks,Software Architecture,concept
+N006,Java,Software Architecture,concept
+N007,Object-Oriented Programming,Software Architecture,concept
+N008,Concurrency,Software Architecture,concept
+N009,HTML,Software Architecture,concept
+N010,CSS,Software Architecture,concept
+N011,React,Software Architecture,concept
+N012,TypeScript,Software Architecture,concept
+N013,REST API,Software Architecture,concept
+N014,APIs,Software Architecture,concept
+N015,API Economy,Software Architecture,concept
+N016,SaaS,Software Architecture,concept
+N017,Product,Software Architecture,concept
+N018,User Research,Software Architecture,concept
+N020,Authentication,Software Architecture,concept
+N021,Microservices,Software Architecture,concept
+N022,Docker,Software Architecture,concept
+N023,Containers,Software Architecture,concept
+N024,Containerization,Software Architecture,concept
+N025,Kubernetes,Software Architecture,concept
+N026,Observability,Software Architecture,concept

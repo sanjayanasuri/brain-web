@@ -77,9 +77,10 @@ else:
     if len(api_key) < 20:
         print(f"WARNING: API key seems too short (length: {len(api_key)})")
     if not api_key.startswith('sk-'):
-        print(f"WARNING: API key doesn't start with 'sk-' (starts with: {api_key[:5]})")
+        print("WARNING: API key doesn't start with 'sk-'")
     
-    print(f"✓ OpenAI API key loaded (length: {len(api_key)}, starts with: {api_key[:10]}...)")
+    # Never print key material (even partials) to logs.
+    print(f"✓ OpenAI API key loaded (length: {len(api_key)})")
     try:
         client = OpenAI(api_key=api_key)
         print("✓ OpenAI client initialized successfully")
