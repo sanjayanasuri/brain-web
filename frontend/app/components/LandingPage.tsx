@@ -8,7 +8,7 @@ interface LandingPageProps {
   userName?: string;
 }
 
-export default function LandingPage({ onEnter, userName = 'Sanjay' }: LandingPageProps) {
+export default function LandingPage({ onEnter, userName = 'User' }: LandingPageProps) {
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedFocusAreas, setSelectedFocusAreas] = useState<Set<string>>(new Set());
@@ -205,7 +205,7 @@ export default function LandingPage({ onEnter, userName = 'Sanjay' }: LandingPag
           marginBottom: '8px',
           color: '#1a1a1a',
         }}>
-          Welcome Back, {userName}
+          Welcome, {userName}
         </h1>
         
         <p style={{
