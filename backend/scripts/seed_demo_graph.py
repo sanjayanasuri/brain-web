@@ -135,8 +135,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", ""))
     parser.add_argument("--graph-id", default=os.getenv("DEMO_GRAPH_ID", "demo"))
     # Defaults point to curated demo dataset outputs (safe). You can override explicitly.
-    parser.add_argument("--nodes", default=str(Path("graph") / "demo_nodes.csv"))
-    parser.add_argument("--edges", default=str(Path("graph") / "demo_edges.csv"))
+    # graph/ folder is at repo root, so go up from backend/scripts/ to find it
+    script_dir = Path(__file__).parent
+    repo_root = script_dir.parent.parent.parent  # backend/scripts -> backend -> repo root
+    graph_dir = repo_root / "graph"
+    parser.add_argument("--nodes", default=str(graph_dir / "demo_nodes.csv"))
+    parser.add_argument("--edges", default=str(graph_dir / "demo_edges.csv"))
     parser.add_argument("--reset", action="store_true", help="Delete all existing nodes in this graph_id first.")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
