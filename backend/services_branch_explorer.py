@@ -203,6 +203,12 @@ def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: 
 
 def ensure_default_context(session: Session) -> Tuple[str, str]:
     ensure_schema_constraints(session)
+    # In demo mode, ensure demo graph exists instead of default
+    if DEMO_MODE:
+        graph_id = DEMO_GRAPH_ID
+        ensure_graphspace_exists(session, graph_id, name="Demo")
+        ensure_branch_exists(session, graph_id, DEFAULT_BRANCH_ID, name="Main")
+        return graph_id, DEFAULT_BRANCH_ID
     ensure_graphspace_exists(session, DEFAULT_GRAPH_ID, name="Default")
     ensure_branch_exists(session, DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID, name="Main")
     return DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID
