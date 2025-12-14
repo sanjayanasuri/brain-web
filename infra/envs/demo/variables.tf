@@ -30,6 +30,13 @@ variable "neo4j_password" {
   default   = ""
 }
 
+variable "openai_api_key" {
+  type        = string
+  sensitive   = true
+  description = "OpenAI API key for AI features (stored in Secrets Manager)."
+  default     = ""
+}
+
 variable "desired_count" {
   type    = number
   default = 1

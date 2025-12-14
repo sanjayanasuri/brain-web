@@ -139,6 +139,15 @@ resource "aws_secretsmanager_secret_version" "neo4j" {
   secret_string = jsonencode({ uri = var.neo4j_uri, user = var.neo4j_user, password = var.neo4j_password })
 }
 
+resource "aws_secretsmanager_secret" "openai" {
+  name = "${local.name}/openai"
+}
+
+resource "aws_secretsmanager_secret_version" "openai" {
+  secret_id     = aws_secretsmanager_secret.openai.id
+  secret_string = jsonencode({ api_key = var.openai_api_key })
+}
+
 # -----------------------------------------------------------------------------
 # CloudWatch Logs
 # -----------------------------------------------------------------------------
@@ -406,7 +415,10 @@ resource "aws_iam_role_policy_attachment" "task_exec" {
 data "aws_iam_policy_document" "task_exec_secrets" {
   statement {
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.neo4j.arn]
+    resources = [
+      aws_secretsmanager_secret.neo4j.arn,
+      aws_secretsmanager_secret.openai.arn
+    ]
   }
 }
 
@@ -475,6 +487,7 @@ resource "aws_ecs_task_definition" "api" {
         { name = "NEO4J_URI", valueFrom = "${aws_secretsmanager_secret.neo4j.arn}:uri::" },
         { name = "NEO4J_USER", valueFrom = "${aws_secretsmanager_secret.neo4j.arn}:user::" },
         { name = "NEO4J_PASSWORD", valueFrom = "${aws_secretsmanager_secret.neo4j.arn}:password::" },
+        { name = "OPENAI_API_KEY", valueFrom = "${aws_secretsmanager_secret.openai.arn}:api_key::" },
       ]
       logConfiguration = {
         logDriver = "awslogs"
