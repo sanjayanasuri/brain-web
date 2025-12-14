@@ -175,7 +175,11 @@ def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: 
         }
     
     query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MERGE (g:GraphSpace {graph_id: $graph_id})
+    ON CREATE SET g.name = COALESCE($name, $graph_id),
+                  g.created_at = $now,
+                  g.updated_at = $now
+    WITH g
     MERGE (b:Branch {branch_id: $branch_id, graph_id: $graph_id})
     ON CREATE SET b.name = COALESCE($name, $branch_id),
                   b.created_at = $now,
