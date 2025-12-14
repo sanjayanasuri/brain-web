@@ -152,8 +152,8 @@ export default function ExplorerToolbar(props: Props) {
 
           {demoMode ? (
             <div className="explorer-toolbar__buttons">
-              <span className="pill pill--ghost" title="Read-only demo">
-                Read-only demo
+              <span className="pill pill--ghost" title="Demo mode - Full functionality enabled">
+                Demo Mode
               </span>
             </div>
           ) : (
