@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import Session
+from config import DEMO_MODE, DEMO_ALLOW_WRITES
 
 
 DEFAULT_GRAPH_ID = "default"
@@ -104,6 +105,29 @@ def _now_iso() -> str:
 
 def ensure_graphspace_exists(session: Session, graph_id: str, name: Optional[str] = None) -> Dict[str, Any]:
     """Ensure a GraphSpace exists; returns its properties."""
+    # In read-only demo mode, just check if it exists
+    if DEMO_MODE and not DEMO_ALLOW_WRITES:
+        query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        RETURN g
+        """
+        rec = session.run(query, graph_id=graph_id).single()
+        if rec:
+            g = rec["g"]
+            return {
+                "graph_id": g.get("graph_id"),
+                "name": g.get("name"),
+                "created_at": g.get("created_at"),
+                "updated_at": g.get("updated_at"),
+            }
+        # If it doesn't exist in read-only mode, return defaults
+        return {
+            "graph_id": graph_id,
+            "name": name or graph_id,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+    
     query = """
     MERGE (g:GraphSpace {graph_id: $graph_id})
     ON CREATE SET g.name = COALESCE($name, $graph_id),
@@ -124,6 +148,32 @@ def ensure_graphspace_exists(session: Session, graph_id: str, name: Optional[str
 
 def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: Optional[str] = None) -> Dict[str, Any]:
     """Ensure a Branch exists for a GraphSpace."""
+    # In read-only demo mode, just check if it exists
+    if DEMO_MODE and not DEMO_ALLOW_WRITES:
+        query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        MATCH (b:Branch {branch_id: $branch_id, graph_id: $graph_id})
+        RETURN b
+        """
+        rec = session.run(query, graph_id=graph_id, branch_id=branch_id).single()
+        if rec:
+            b = rec["b"]
+            return {
+                "branch_id": b.get("branch_id"),
+                "graph_id": b.get("graph_id"),
+                "name": b.get("name"),
+                "created_at": b.get("created_at"),
+                "updated_at": b.get("updated_at"),
+            }
+        # If it doesn't exist in read-only mode, return defaults
+        return {
+            "branch_id": branch_id,
+            "graph_id": graph_id,
+            "name": name or branch_id,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+    
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
     MERGE (b:Branch {branch_id: $branch_id, graph_id: $graph_id})
@@ -159,6 +209,24 @@ def ensure_default_context(session: Session) -> Tuple[str, str]:
 
 
 def _get_user_learning_prefs(session: Session) -> Dict[str, Any]:
+    # In read-only demo mode, just read if it exists
+    if DEMO_MODE and not DEMO_ALLOW_WRITES:
+        query = """
+        MATCH (u:UserProfile {id: 'default'})
+        RETURN u.learning_preferences AS learning_preferences
+        """
+        rec = session.run(query).single()
+        if rec:
+            lp = rec["learning_preferences"]
+            if isinstance(lp, str):
+                try:
+                    return json.loads(lp)
+                except Exception:
+                    return {}
+            if isinstance(lp, dict):
+                return lp
+        return {}
+    
     query = """
     MERGE (u:UserProfile {id: 'default'})
     ON CREATE SET u.name = 'Sanjay',
@@ -309,6 +377,16 @@ def ensure_graph_scoping_initialized(session: Session) -> None:
     - Only touches Concepts that do not already belong to a GraphSpace
     - Only touches relationships that do not already have graph_id/on_branches
     """
+    # Skip write operations in read-only demo mode
+    if DEMO_MODE and not DEMO_ALLOW_WRITES:
+        # Just ensure default context exists (read-only check)
+        try:
+            ensure_default_context(session)
+        except Exception:
+            # If it doesn't exist, that's okay in read-only mode
+            pass
+        return
+    
     ensure_schema_constraints(session)
     ensure_default_context(session)
 

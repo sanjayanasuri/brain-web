@@ -144,6 +144,10 @@ origins = [
     "http://127.0.0.1:3000",
     "https://sanjayanasuri.com",
     "https://demo.sanjayanasuri.com",
+    "https://www.demo.sanjayanasuri.com",
+    "https://brain-web-delta.vercel.app",
+    "https://brain-web-git-main-sanjayanasuris-projects.vercel.app",
+    "https://brain-htt06gwfr-sanjayanasuris-projects.vercel.app",
 ]
 
 app.add_middleware(
