@@ -111,13 +111,20 @@ def _seed_edges(tx, graph_id: str, rows: Iterable[Dict[str, str]]) -> None:
         )
 
 
-def _delete_demo_tenant(tx, tenant_id: str) -> None:
+def _delete_demo_graph(tx, graph_id: str) -> None:
+    # Delete all concepts in the demo graph
     tx.run(
         """
-        MATCH (n {tenant_id:$tenant_id})
-        DETACH DELETE n
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
+        DETACH DELETE c
+        WITH g
+        OPTIONAL MATCH (b:Branch {graph_id: $graph_id})
+        DETACH DELETE b
+        WITH g
+        DETACH DELETE g
         """,
-        tenant_id=tenant_id,
+        graph_id=graph_id,
     )
 
 
@@ -126,11 +133,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", ""))
-    parser.add_argument("--tenant-id", default=os.getenv("DEMO_TENANT_ID", "demo"))
+    parser.add_argument("--graph-id", default=os.getenv("DEMO_GRAPH_ID", "demo"))
     # Defaults point to curated demo dataset outputs (safe). You can override explicitly.
     parser.add_argument("--nodes", default=str(Path("graph") / "demo_nodes.csv"))
     parser.add_argument("--edges", default=str(Path("graph") / "demo_edges.csv"))
-    parser.add_argument("--reset", action="store_true", help="Delete all existing nodes with this tenant_id first.")
+    parser.add_argument("--reset", action="store_true", help="Delete all existing nodes in this graph_id first.")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if not args.neo4j_password:
@@ -152,11 +159,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     with driver:
         with driver.session() as session:
             if args.reset:
-                session.execute_write(_delete_demo_tenant, args.tenant_id)
-            session.execute_write(_seed_nodes, args.tenant_id, _read_csv(nodes_path))
-            session.execute_write(_seed_edges, args.tenant_id, _read_csv(edges_path))
+                session.execute_write(_delete_demo_graph, args.graph_id)
+            session.execute_write(_seed_nodes, args.graph_id, _read_csv(nodes_path))
+            session.execute_write(_seed_edges, args.graph_id, _read_csv(edges_path))
 
-    print(f"Seed complete for tenant_id={args.tenant_id}")
+    print(f"Seed complete for graph_id={args.graph_id}")
     return 0
 
 
