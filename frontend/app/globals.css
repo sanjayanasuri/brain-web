@@ -83,7 +83,7 @@ a {
 }
 
 .subtitle {
-  color: #4b5563;
+  color: var(--muted);
   font-size: 12px; /* Reduced from 13px */
   line-height: 1.4;
   margin-bottom: 0;
@@ -225,7 +225,7 @@ a {
 .pill--ghost {
   background: rgba(17, 138, 178, 0.08);
   border-color: rgba(17, 138, 178, 0.12);
-  color: #0f172a;
+  color: var(--ink);
 }
 
 /* Explorer toolbar */
@@ -299,7 +299,7 @@ a {
 .explorer-btn--primary {
   background: linear-gradient(120deg, var(--accent), #00b4d8);
   border: 1px solid rgba(17, 138, 178, 0.25);
-  color: #ffffff;
+  color: var(--surface);
   box-shadow: 0 10px 20px rgba(17, 138, 178, 0.22);
 }
 
@@ -433,7 +433,7 @@ a {
 
 .node-card__id {
   font-family: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
-  color: #334155;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -446,8 +446,8 @@ a {
 }
 
 .badge--soft {
-  background: #eef2ff;
-  color: #4338ca;
+  background: rgba(17, 138, 178, 0.08);
+  color: var(--accent);
 }
 
 .node-tag {
@@ -533,8 +533,8 @@ a {
   border-radius: 999px;
   border: 1px solid var(--border);
   padding: 9px 12px;
-  background: #f7f8ff;
-  color: #111827;
+  background: rgba(17, 138, 178, 0.04);
+  color: var(--ink);
   cursor: pointer;
   font-weight: 600;
   transition: all 0.2s ease;
@@ -546,7 +546,7 @@ a {
 }
 
 .chip--warning {
-  background: #fff4e6;
+  background: rgba(255, 183, 3, 0.1);
   border-color: #ffb703;
   color: #92400e;
 }
@@ -574,16 +574,16 @@ a {
 
 .chat-error {
   padding: 10px 12px;
-  background: #fef2f2;
-  border: 1px solid #fecdd3;
-  color: #b91c1c;
+  background: rgba(239, 71, 111, 0.1);
+  border: 1px solid rgba(239, 71, 111, 0.3);
+  color: var(--accent-2);
   border-radius: 10px;
   font-weight: 600;
 }
 
 .chat-bubble {
-  background: #f8fafc;
-  border: 1px solid #e5e7eb;
+  background: rgba(15, 23, 42, 0.02);
+  border: 1px solid var(--border);
   padding: 10px 12px;
   border-radius: 14px;
   max-width: 70%;
@@ -592,8 +592,8 @@ a {
 
 .chat-bubble--user {
   align-self: flex-end;
-  background: #eef2ff;
-  border-color: #d0d7ff;
+  background: rgba(17, 138, 178, 0.08);
+  border-color: rgba(17, 138, 178, 0.2);
 }
 
 .chat-role {
@@ -660,7 +660,7 @@ a {
 
 .send-btn {
   background: linear-gradient(120deg, var(--accent), #00b4d8);
-  color: white;
+  color: var(--surface);
   border: none;
   border-radius: 14px;
   padding: 10px 16px; /* Reduced from 12px 18px */
@@ -765,7 +765,7 @@ button {
 
 .node-card__error {
   font-size: 12px;
-  color: #b91c1c;
+  color: var(--accent-2);
 }
 
 .resource-list {
@@ -794,7 +794,7 @@ button {
 .resource-item__title {
   font-size: 13px;
   font-weight: 500;
-  color: #0f172a;
+  color: var(--ink);
 }
 
 .resource-item__preview img {
@@ -805,7 +805,7 @@ button {
 
 .resource-item__link {
   font-size: 12px;
-  color: #2563eb;
+  color: var(--accent);
   text-decoration: underline;
 }
 

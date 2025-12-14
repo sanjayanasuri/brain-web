@@ -173,7 +173,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        background: 'linear-gradient(135deg, #118ab2 0%, #ef476f 50%, #f4a261 100%)',
       }}>
         <div style={{ color: 'white', fontSize: '18px' }}>Loading...</div>
       </div>
@@ -183,7 +183,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      background: 'linear-gradient(135deg, #118ab2 0%, #ef476f 50%, #f4a261 100%)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -203,23 +203,24 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
           fontSize: '36px',
           fontWeight: '700',
           marginBottom: '8px',
-          color: '#1a1a1a',
+          color: '#0f172a',
         }}>
           Welcome, {userName}
         </h1>
         
         <p style={{
           fontSize: '20px',
-          color: '#666',
+          color: '#6b7280',
           marginBottom: '8px',
         }}>
           What would you like to focus on today?
         </p>
         <p style={{
           fontSize: '13px',
-          color: '#999',
+          color: '#6b7280',
           marginBottom: '24px',
           fontStyle: 'italic',
+          opacity: 0.8,
         }}>
           Your focus areas help Brain Web connect your questions and learning back to these themes
         </p>
@@ -237,22 +238,22 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 width: '100%',
                 minHeight: '120px',
                 padding: '16px',
-                border: '2px solid #e0e0e0',
+                border: '2px solid #d8e2f1',
                 borderRadius: '8px',
                 fontSize: '16px',
                 fontFamily: 'inherit',
-                color: '#1a1a1a',
+                color: '#0f172a',
                 background: 'white',
                 resize: 'vertical',
                 transition: 'border-color 0.2s',
                 lineHeight: '1.6',
               }}
               onFocus={(e) => {
-                e.currentTarget.style.borderColor = '#667eea';
+                e.currentTarget.style.borderColor = '#118ab2';
                 e.currentTarget.style.outline = 'none';
               }}
               onBlur={(e) => {
-                e.currentTarget.style.borderColor = '#e0e0e0';
+                e.currentTarget.style.borderColor = '#d8e2f1';
               }}
             />
             {lastSaved && (
@@ -261,7 +262,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 bottom: '8px',
                 right: '12px',
                 fontSize: '12px',
-                color: '#667eea',
+                color: '#118ab2',
                 background: 'rgba(255, 255, 255, 0.9)',
                 padding: '4px 8px',
                 borderRadius: '4px',
@@ -279,21 +280,22 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 padding: '10px 20px',
                 fontSize: '14px',
                 fontWeight: '600',
-                background: saving ? '#ccc' : '#667eea',
+                background: saving ? '#ccc' : 'linear-gradient(120deg, #118ab2, #00b4d8)',
                 color: 'white',
                 border: 'none',
                 borderRadius: '6px',
                 cursor: saving ? 'not-allowed' : 'pointer',
                 transition: 'all 0.2s',
+                boxShadow: saving ? 'none' : '0 10px 20px rgba(17, 138, 178, 0.22)',
               }}
               onMouseEnter={(e) => {
                 if (!saving) {
-                  e.currentTarget.style.background = '#5568d3';
+                  e.currentTarget.style.transform = 'translateY(-1px)';
                 }
               }}
               onMouseLeave={(e) => {
                 if (!saving) {
-                  e.currentTarget.style.background = '#667eea';
+                  e.currentTarget.style.transform = 'translateY(0)';
                 }
               }}
             >
@@ -301,7 +303,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
             </button>
             <span style={{
               fontSize: '12px',
-              color: '#999',
+              color: '#6b7280',
             }}>
               This syncs with Profile Customization
             </span>
@@ -311,11 +313,11 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
             <div style={{
               marginTop: '20px',
               paddingTop: '20px',
-              borderTop: '1px solid #e0e0e0',
+              borderTop: '1px solid #d8e2f1',
             }}>
               <p style={{
                 fontSize: '13px',
-                color: '#666',
+                color: '#6b7280',
                 marginBottom: '12px',
                 fontWeight: '500',
               }}>
@@ -333,27 +335,27 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                     style={{
                       padding: '8px 14px',
                       border: area.active 
-                        ? '2px solid #667eea' 
-                        : '2px solid #e0e0e0',
+                        ? '2px solid #118ab2' 
+                        : '2px solid #d8e2f1',
                       borderRadius: '6px',
                       background: area.active
-                        ? '#f0f4ff'
+                        ? 'rgba(17, 138, 178, 0.08)'
                         : 'white',
                       cursor: 'pointer',
                       transition: 'all 0.2s',
                       fontSize: '13px',
                       fontWeight: '500',
-                      color: '#1a1a1a',
+                      color: '#0f172a',
                     }}
                     onMouseEnter={(e) => {
                       if (!area.active) {
-                        e.currentTarget.style.borderColor = '#667eea';
-                        e.currentTarget.style.background = '#f9faff';
+                        e.currentTarget.style.borderColor = '#118ab2';
+                        e.currentTarget.style.background = 'rgba(17, 138, 178, 0.04)';
                       }
                     }}
                     onMouseLeave={(e) => {
                       if (!area.active) {
-                        e.currentTarget.style.borderColor = '#e0e0e0';
+                        e.currentTarget.style.borderColor = '#d8e2f1';
                         e.currentTarget.style.background = 'white';
                       }
                     }}
@@ -374,19 +376,18 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
               padding: '14px 32px',
               fontSize: '16px',
               fontWeight: '600',
-              background: '#667eea',
+              background: 'linear-gradient(120deg, #118ab2, #00b4d8)',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
               cursor: 'pointer',
               transition: 'all 0.2s',
+              boxShadow: '0 10px 20px rgba(17, 138, 178, 0.22)',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = '#5568d3';
               e.currentTarget.style.transform = 'translateY(-1px)';
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = '#667eea';
               e.currentTarget.style.transform = 'translateY(0)';
             }}
           >
