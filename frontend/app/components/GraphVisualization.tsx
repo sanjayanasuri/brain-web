@@ -2046,7 +2046,7 @@ export default function GraphVisualization() {
         setChatMessages(prev => [...prev, { role: 'system', text: `⚠️ ${message}` }]);
       }
     },
-    [reloadGraph, resolveConceptByName, ensureConcept, graphData.links, graphData, tempNodes, serializeGraph, requestFocus, maybeAutoSnapshot, generateCuriousQuestions, hardCenterOnNodeId, selectAndCenterConcept, selectedNode, activeFocusNames, setSelectedNode],
+    [reloadGraph, resolveConceptByName, ensureConcept, graphData, tempNodes, serializeGraph, requestFocus, maybeAutoSnapshot, generateCuriousQuestions, hardCenterOnNodeId, selectAndCenterConcept, selectedNode, activeFocusNames, setSelectedNode],
   );
 
   const quickCommands = useMemo(() => {

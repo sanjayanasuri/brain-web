@@ -51,3 +51,9 @@ backend/embeddings_cache.json
 # Notion state files (user-specific configuration)
 backend/notion_index_state.json
 backend/notion_page_index.json
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
