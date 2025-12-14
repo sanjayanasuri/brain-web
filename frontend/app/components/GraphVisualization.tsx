@@ -2046,7 +2046,7 @@ export default function GraphVisualization() {
         setChatMessages(prev => [...prev, { role: 'system', text: `⚠️ ${message}` }]);
       }
     },
-    [reloadGraph, resolveConceptByName, ensureConcept, graphData.links, graphData, tempNodes, serializeGraph, requestFocus, maybeAutoSnapshot],
+    [reloadGraph, resolveConceptByName, ensureConcept, graphData.links, graphData, tempNodes, serializeGraph, requestFocus, maybeAutoSnapshot, generateCuriousQuestions, hardCenterOnNodeId, selectAndCenterConcept, selectedNode, activeFocusNames, setSelectedNode],
   );
 
   const quickCommands = useMemo(() => {
@@ -2992,6 +2992,7 @@ export default function GraphVisualization() {
                           <>
                             {res.kind === 'image' && (
                               <div className="resource-item__preview">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img src={resourceUrl} alt={res.title || res.caption || 'resource image'} />
                               </div>
                             )}

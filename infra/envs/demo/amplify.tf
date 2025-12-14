@@ -1,5 +1,85 @@
 locals {
   enable_amplify = var.frontend_domain_name != "" && var.route53_zone_id != "" && var.frontend_repo_url != "" && var.github_oauth_token != ""
+  # Amplify domain role name format: AWSAmplifyDomainRole-{Route53ZoneID}
+  amplify_domain_role_name = var.route53_zone_id != "" ? "AWSAmplifyDomainRole-${var.route53_zone_id}" : ""
+}
+
+# IAM role for Amplify to manage Route53 DNS records and ACM certificates
+# This role is required when adding custom domains to Amplify apps
+resource "aws_iam_role" "amplify_domain" {
+  count = var.route53_zone_id != "" ? 1 : 0
+  name  = local.amplify_domain_role_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "amplify.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  description = "IAM role for AWS Amplify to manage Route53 DNS records and ACM certificates for custom domains"
+}
+
+# Policy for Amplify to manage Route53 records in the specific hosted zone
+resource "aws_iam_role_policy" "amplify_domain_route53" {
+  count = var.route53_zone_id != "" ? 1 : 0
+  name  = "AmplifyDomainRoute53Policy"
+  role  = aws_iam_role.amplify_domain[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "route53:GetHostedZone",
+          "route53:ListHostedZones",
+          "route53:ChangeResourceRecordSets",
+          "route53:GetChange"
+        ]
+        Resource = [
+          "arn:aws:route53:::hostedzone/${var.route53_zone_id}",
+          "arn:aws:route53:::change/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "route53:ListResourceRecordSets"
+        ]
+        Resource = "arn:aws:route53:::hostedzone/${var.route53_zone_id}"
+      }
+    ]
+  })
+}
+
+# Policy for Amplify to manage ACM certificates
+resource "aws_iam_role_policy" "amplify_domain_acm" {
+  count = var.route53_zone_id != "" ? 1 : 0
+  name  = "AmplifyDomainACMPolicy"
+  role  = aws_iam_role.amplify_domain[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "acm:RequestCertificate",
+          "acm:DescribeCertificate",
+          "acm:ListCertificates",
+          "acm:DeleteCertificate"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 # Optional: manage Amplify app via Terraform (requires a GitHub OAuth token).
@@ -37,6 +117,11 @@ resource "aws_amplify_domain_association" "frontend" {
     branch_name = aws_amplify_branch.frontend[0].branch_name
     prefix      = "" # apex for demo.sanjayanasuri.com
   }
+
+  sub_domain {
+    branch_name = aws_amplify_branch.frontend[0].branch_name
+    prefix      = "www" # www.demo.sanjayanasuri.com
+  }
 }
 
 # DNS validation record for Amplify-managed cert (Route53)
@@ -52,6 +137,23 @@ resource "aws_route53_record" "amplify_cert_validation" {
   ttl  = 300
   records = [
     trimsuffix(element(split(" ", aws_amplify_domain_association.frontend[0].certificate_verification_dns_record), 2), ".")
+  ]
+}
+
+# Route53 CNAME record for www subdomain
+# Note: After applying, you may need to update this with the exact DNS record from Amplify console
+# The pattern is typically: {branch}.{app-id}.amplifyapp.com
+resource "aws_route53_record" "amplify_www" {
+  count   = local.enable_amplify ? 1 : 0
+  zone_id = var.route53_zone_id
+  name    = "www.${var.frontend_domain_name}"
+  type    = "CNAME"
+  ttl     = 300
+
+  # Use the Amplify app's default domain pattern
+  # Format: {branch-name}.{app-id}.amplifyapp.com
+  records = [
+    "${aws_amplify_branch.frontend[0].branch_name}.${aws_amplify_app.frontend[0].id}.amplifyapp.com"
   ]
 }
 

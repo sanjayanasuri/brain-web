@@ -77,7 +77,7 @@ export default function ConceptBoardPage() {
       setEditedDescription(concept.description || '');
       setIsEditingDescription(false);
     }
-  }, [concept?.node_id]);
+  }, [concept]);
 
   const handleNeighborClick = (neighborId: string) => {
     router.push(`/concepts/${neighborId}`);
