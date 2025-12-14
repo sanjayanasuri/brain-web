@@ -17,7 +17,7 @@ applications:
         paths:
           - node_modules/**/*
       rewritesAndRedirects:
-        - source: '/<*>'
+        - source: '/*'
           target: '/index.html'
           status: '200'
           type: 'rewrite'
