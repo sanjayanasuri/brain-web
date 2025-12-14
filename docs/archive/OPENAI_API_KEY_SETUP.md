@@ -15,7 +15,7 @@ Both the **backend** and **frontend** need the OpenAI API key to function proper
 
 **Format**:
 ```
-OPENAI_API_KEY=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
+OPENAI_API_KEY=sk-proj-...your-key-here...
 ```
 
 **Important**:
@@ -32,7 +32,7 @@ OPENAI_API_KEY=sk-proj-2H6wQpgSH0fddUOmV5Yd1U2BEeFVjCzBAwWgva6o8oU-EdcCY1SAqFvTu
 ```
 # OpenAI API Key for Brain Web chat functionality
 # Get your API key from: https://platform.openai.com/api-keys
-OPENAI_API_KEY=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
+OPENAI_API_KEY=sk-proj-...your-key-here...
 ```
 
 **Important**:
