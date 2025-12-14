@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from neo4j import Session
 
-from db_neo4j import driver
+from db_neo4j import get_driver
 
 # --------- CONFIG ---------
 
@@ -25,6 +25,7 @@ def run_in_session(fn):
     Helper: open a session, run fn(session, ...), close session.
     """
     def wrapper(*args, **kwargs):
+        driver = get_driver()
         with driver.session() as session:
             return fn(session, *args, **kwargs)
     return wrapper

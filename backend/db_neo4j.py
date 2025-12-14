@@ -42,3 +42,16 @@ def get_neo4j_session() -> Generator:
         yield session
     finally:
         session.close()
+
+
+# Export driver for scripts that need direct access
+# This maintains backward compatibility with import_csv_to_neo4j.py and other scripts
+def get_driver():
+    """Get the Neo4j driver (for scripts that need direct access)."""
+    return _get_driver()
+
+
+# For backward compatibility, expose driver as a property-like access
+# Scripts can use: from db_neo4j import get_driver; driver = get_driver()
+driver = property(lambda self: _get_driver()) if False else None  # Type hint workaround
+# Actually, let's just make it a simple function call for scripts

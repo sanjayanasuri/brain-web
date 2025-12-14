@@ -131,20 +131,60 @@ def enforce_demo_mode_request(
         return
 
     path = request.url.path
+    method = request.method
+    
+    # Log demo mode enforcement for debugging
+    import logging
+    logger = logging.getLogger("brain_web")
+    
     if path_is_blocked_in_demo(path):
+        logger.warning(structured_log_line({
+            "event": "demo_blocked",
+            "path": path,
+            "method": method,
+            "reason": "blocked_path"
+        }))
         raise HTTPException(status_code=403, detail="Disabled in demo mode")
 
-    if is_write_method(request.method):
+    if is_write_method(method):
         if not settings.allow_writes and not path_is_safe_write(path, settings.safe_write_paths):
+            logger.warning(structured_log_line({
+                "event": "demo_write_blocked",
+                "path": path,
+                "method": method,
+                "allow_writes": settings.allow_writes,
+                "safe_paths": list(settings.safe_write_paths),
+                "reason": "read_only_demo"
+            }))
             raise HTTPException(status_code=405, detail="Read-only demo")
+        else:
+            logger.info(structured_log_line({
+                "event": "demo_write_allowed",
+                "path": path,
+                "method": method,
+                "allow_writes": settings.allow_writes,
+                "is_safe_path": path_is_safe_write(path, settings.safe_write_paths)
+            }))
 
     # Rate limits (per IP + per session)
     ip = get_client_ip(request)
     sid = get_or_create_session_id(request)
 
     if not limiter.allow(f"ip:{ip}", settings.rate_ip_per_min):
+        logger.warning(structured_log_line({
+            "event": "rate_limit_exceeded",
+            "type": "ip",
+            "ip": ip,
+            "limit": settings.rate_ip_per_min
+        }))
         raise HTTPException(status_code=429, detail="Rate limited")
     if not limiter.allow(f"sid:{sid}", settings.rate_session_per_min):
+        logger.warning(structured_log_line({
+            "event": "rate_limit_exceeded",
+            "type": "session",
+            "session_id": sid,
+            "limit": settings.rate_session_per_min
+        }))
         raise HTTPException(status_code=429, detail="Rate limited")
 
 

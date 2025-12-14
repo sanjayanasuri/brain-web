@@ -216,6 +216,8 @@ async def demo_gate_and_observability(request: Request, call_next):
                     "status": status_code,
                     "latency_ms": latency_ms,
                     "tenant_id": request.state.tenant_id if hasattr(request.state, "tenant_id") else None,
+                    "demo_mode": demo_settings.demo_mode,
+                    "allow_writes": demo_settings.allow_writes,
                 }
             )
         )
