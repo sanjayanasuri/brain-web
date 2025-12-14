@@ -136,11 +136,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--graph-id", default=os.getenv("DEMO_GRAPH_ID", "demo"))
     # Defaults point to curated demo dataset outputs (safe). You can override explicitly.
     # graph/ folder is at repo root, so go up from backend/scripts/ to find it
-    script_dir = Path(__file__).parent
-    repo_root = script_dir.parent.parent.parent  # backend/scripts -> backend -> repo root
+    # __file__ is: backend/scripts/seed_demo_graph.py
+    # parent is: backend/scripts
+    # parent.parent is: backend
+    # parent.parent.parent is: repo root (brain-web)
+    script_file = Path(__file__).resolve()
+    repo_root = script_file.parent.parent.parent
     graph_dir = repo_root / "graph"
-    parser.add_argument("--nodes", default=str(graph_dir / "demo_nodes.csv"))
-    parser.add_argument("--edges", default=str(graph_dir / "demo_edges.csv"))
+    default_nodes = str(graph_dir / "demo_nodes.csv")
+    default_edges = str(graph_dir / "demo_edges.csv")
+    parser.add_argument("--nodes", default=default_nodes)
+    parser.add_argument("--edges", default=default_edges)
     parser.add_argument("--reset", action="store_true", help="Delete all existing nodes in this graph_id first.")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
