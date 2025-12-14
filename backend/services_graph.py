@@ -466,13 +466,17 @@ def delete_test_concepts(session: Session) -> int:
     Deletes all test concepts (those with "Test" or "Isolated Concept" in name).
     Returns the number of deleted nodes.
     """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
     query = """
-    MATCH (c:Concept)
-    WHERE c.name CONTAINS 'Test' OR c.name CONTAINS 'Isolated Concept' OR c.domain = 'Testing'
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    WHERE ($branch_id IN COALESCE(c.on_branches, []))
+      AND (c.name CONTAINS 'Test' OR c.name CONTAINS 'Isolated Concept' OR c.domain = 'Testing')
     DETACH DELETE c
     RETURN count(c) as deleted
     """
-    result = session.run(query)
+    result = session.run(query, graph_id=graph_id, branch_id=branch_id)
     record = result.single()
     return record["deleted"] if record else 0
 
@@ -481,9 +485,13 @@ def get_nodes_missing_description(session: Session, limit: int = 3) -> List[Conc
     """
     Returns concepts that are missing descriptions.
     """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
     query = """
-    MATCH (c:Concept)
-    WHERE c.description IS NULL OR c.description = ""
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    WHERE ($branch_id IN COALESCE(c.on_branches, []))
+      AND (c.description IS NULL OR c.description = "")
     RETURN c.node_id AS node_id,
            c.name AS name,
            c.domain AS domain,
@@ -498,7 +506,7 @@ def get_nodes_missing_description(session: Session, limit: int = 3) -> List[Conc
            c.last_updated_by AS last_updated_by
     LIMIT $limit
     """
-    result = session.run(query, limit=limit)
+    result = session.run(query, graph_id=graph_id, branch_id=branch_id, limit=limit)
     return [_normalize_concept_from_db(record.data()) for record in result]
 
 
@@ -1010,9 +1018,13 @@ def find_concept_gaps(session: Session, limit: int = 5) -> List[str]:
     
     Returns a list of concept names that represent gaps.
     """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
     query = """
-    MATCH (c:Concept)
-    OPTIONAL MATCH (c)-[r]-()
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    WHERE $branch_id IN COALESCE(c.on_branches, [])
+    OPTIONAL MATCH (c)-[r]-(:Concept)-[:BELONGS_TO]->(g)
     WITH c, count(r) AS degree
     WHERE (c.description IS NULL OR size(c.description) < 60) OR degree < 2
     RETURN c.name AS name

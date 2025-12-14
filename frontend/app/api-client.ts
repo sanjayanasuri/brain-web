@@ -58,9 +58,21 @@ export interface GraphSelectResponse {
 }
 
 export async function listGraphs(): Promise<GraphListResponse> {
-  const res = await fetch(`${API_BASE_URL}/graphs/`);
-  if (!res.ok) throw new Error(`Failed to list graphs: ${res.statusText}`);
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE_URL}/graphs/`);
+    if (!res.ok) {
+      // In demo mode, return default graph if endpoint is blocked
+      if (res.status === 403 || res.status === 404) {
+        return { active_graph_id: 'demo', active_branch_id: 'main', graphs: [{ graph_id: 'demo', name: 'Demo' }] };
+      }
+      throw new Error(`Failed to list graphs: ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    console.error('Error fetching graphs:', error);
+    // Return demo graph as fallback
+    return { active_graph_id: 'demo', active_branch_id: 'main', graphs: [{ graph_id: 'demo', name: 'Demo' }] };
+  }
 }
 
 export async function createGraph(name: string): Promise<GraphSelectResponse> {
@@ -99,9 +111,21 @@ export interface BranchListResponse {
 }
 
 export async function listBranches(): Promise<BranchListResponse> {
-  const res = await fetch(`${API_BASE_URL}/branches/`);
-  if (!res.ok) throw new Error(`Failed to list branches: ${res.statusText}`);
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE_URL}/branches/`);
+    if (!res.ok) {
+      // In demo mode, return default branch if endpoint is blocked
+      if (res.status === 403 || res.status === 404) {
+        return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', name: 'Main' }] };
+      }
+      throw new Error(`Failed to list branches: ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    console.error('Error fetching branches:', error);
+    // Return default branch as fallback
+    return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', name: 'Main' }] };
+  }
 }
 
 export async function createBranch(name: string): Promise<BranchSummary> {
@@ -360,19 +384,25 @@ export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): 
  * Fetch all graph data (nodes and relationships)
  */
 export async function getAllGraphData(): Promise<GraphData> {
-  const response = await fetch(`${API_BASE_URL}/concepts/all/graph`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch graph data: ${response.statusText}`);
+  try {
+    const response = await fetch(`${API_BASE_URL}/concepts/all/graph`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch graph data: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return {
+      nodes: data.nodes || [],
+      links: (data.links || []).map((link: any) => ({
+        source: link.source_id,
+        target: link.target_id,
+        predicate: link.predicate,
+      })),
+    };
+  } catch (error) {
+    console.error('Error fetching graph data:', error);
+    // Return empty graph data instead of throwing to prevent UI crashes
+    return { nodes: [], links: [] };
   }
-  const data = await response.json();
-  return {
-    nodes: data.nodes,
-    links: data.links.map((link: any) => ({
-      source: link.source_id,
-      target: link.target_id,
-      predicate: link.predicate,
-    })),
-  };
 }
 
 /**

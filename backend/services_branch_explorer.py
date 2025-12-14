@@ -281,6 +281,7 @@ def get_active_graph_context(session: Session) -> Tuple[str, str]:
         graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
         branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
 
+
     ensure_graphspace_exists(session, graph_id)
     ensure_branch_exists(session, graph_id, branch_id)
 
