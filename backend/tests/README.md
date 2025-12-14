@@ -6,7 +6,7 @@ Automated tests for all Brain Web Backend API endpoints.
 
 ### Run all tests:
 ```bash
-cd /Users/sanjayanasuri/brain-web/backend
+cd backend
 source .venv/bin/activate
 pytest
 ```

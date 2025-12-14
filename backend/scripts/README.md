@@ -9,7 +9,7 @@ These scripts calculate paths relative to their own location and automatically a
 ### Option 1: From the `backend` directory (Recommended)
 
 ```bash
-cd /Users/sanjayanasuri/brain-web/backend
+cd backend
 source .venv/bin/activate
 python scripts/import_csv_to_neo4j.py
 python scripts/export_csv_from_neo4j.py
@@ -18,7 +18,7 @@ python scripts/export_csv_from_neo4j.py
 ### Option 2: As a Python module
 
 ```bash
-cd /Users/sanjayanasuri/brain-web
+cd <project-root>
 source backend/.venv/bin/activate
 python -m backend.scripts.import_csv_to_neo4j
 python -m backend.scripts.export_csv_from_neo4j
@@ -28,9 +28,9 @@ python -m backend.scripts.export_csv_from_neo4j
 
 ```bash
 # From any directory
-cd /Users/sanjayanasuri/brain-web
+cd <project-root>
 source backend/.venv/bin/activate
-export PYTHONPATH=/Users/sanjayanasuri/brain-web/backend:$PYTHONPATH
+export PYTHONPATH=<project-root>/backend:$PYTHONPATH
 python backend/scripts/import_csv_to_neo4j.py
 ```
 
