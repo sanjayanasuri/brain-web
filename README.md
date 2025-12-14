@@ -441,14 +441,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Contact & Links
 
 - **Live Demo**: [demo.sanjayanasuri.com](https://demo.sanjayanasuri.com)
-- **GitHub**: [github.com/sanjayanasuri/brain-web](https://github.com/sanjayanasuri/brain-web)
-- **Issues**: [GitHub Issues](https://github.com/sanjayanasuri/brain-web/issues)
+- **GitHub Repository**: [View on GitHub](https://github.com/sanjayanasuri/brain-web)
+- **Report Issues**: [GitHub Issues](https://github.com/sanjayanasuri/brain-web/issues)
 
 ---
 
 <div align="center">
-
-**Built with ❤️ by [Sanjay Anasuri](https://sanjayanasuri.com)**
 
 **Status**: 🟢 Active Development  
 **Last Updated**: December 2024
