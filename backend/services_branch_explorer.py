@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import Session
-from config import DEMO_MODE, DEMO_ALLOW_WRITES
+from config import DEMO_MODE, DEMO_ALLOW_WRITES, DEMO_GRAPH_ID
 
 
 DEFAULT_GRAPH_ID = "default"
@@ -262,9 +262,14 @@ def get_active_graph_context(session: Session) -> Tuple[str, str]:
     """Returns (graph_id, branch_id). Ensures defaults exist."""
     ensure_default_context(session)
 
-    prefs = _get_user_learning_prefs(session)
-    graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
-    branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
+    # In demo mode, force demo graph_id to isolate from personal data
+    if DEMO_MODE:
+        graph_id = DEMO_GRAPH_ID
+        branch_id = DEFAULT_BRANCH_ID
+    else:
+        prefs = _get_user_learning_prefs(session)
+        graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
+        branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
 
     ensure_graphspace_exists(session, graph_id)
     ensure_branch_exists(session, graph_id, branch_id)

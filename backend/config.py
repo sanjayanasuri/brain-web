@@ -50,6 +50,8 @@ DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")
 DEMO_ALLOW_WRITES = os.getenv("DEMO_ALLOW_WRITES", "false").lower() in ("true", "1", "yes")
 # Force demo tenant (client-supplied tenant is ignored in demo mode)
 DEMO_TENANT_ID = os.getenv("DEMO_TENANT_ID", "demo")
+# Force demo graph_id to isolate demo data from personal data
+DEMO_GRAPH_ID = os.getenv("DEMO_GRAPH_ID", "demo")
 # Optional allow-list for POST/PUT/PATCH/DELETE routes in demo mode
 # Example: "/ai/chat,/ai/semantic-search,/feedback"
 DEMO_SAFE_WRITE_PATHS = [p.strip() for p in os.getenv("DEMO_SAFE_WRITE_PATHS", "/ai/chat,/ai/semantic-search,/events").split(",") if p.strip()]
