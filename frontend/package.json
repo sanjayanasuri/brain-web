@@ -1,7 +1,23 @@
 {
   "name": "brain-web-frontend",
   "version": "0.1.0",
+  "description": "Frontend for Brain Web - An AI-powered knowledge graph system",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sanjayanasuri/brain-web.git"
+  },
+  "keywords": [
+    "knowledge-graph",
+    "ai",
+    "nextjs",
+    "react",
+    "visualization",
+    "learning",
+    "education"
+  ],
+  "author": "Sanjay Anasuri",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

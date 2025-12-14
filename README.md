@@ -1,38 +1,238 @@
-# Brain Web
+# 🧠 Brain Web
 
-> An AI-powered knowledge graph system for visualizing, exploring, and expanding your understanding of interconnected concepts.
+<div align="center">
 
-[![Status](https://img.shields.io/badge/status-active%20development-green)]()
+**An AI-powered knowledge graph system for visualizing, exploring, and expanding your understanding of interconnected concepts.**
+
+[![Status](https://img.shields.io/badge/status-active%20development-brightgreen)]()
 [![Version](https://img.shields.io/badge/version-0.1.0-blue)]()
+[![License](https://img.shields.io/badge/license-MIT-green)]()
+[![Demo](https://img.shields.io/badge/demo-live-orange)](https://demo.sanjayanasuri.com)
 
-## 🎯 Overview
+[Live Demo](https://demo.sanjayanasuri.com) • [Documentation](#-documentation) • [Quick Start](#-quick-start) • [Features](#-features)
 
-Brain Web is a personal knowledge management tool that learns from your lectures, documents, and interactions to create a living, breathing map of your understanding. Inspired by Notion's "Everything is a block" philosophy, Brain Web treats knowledge as interconnected blocks that can be explored, connected, and visualized in multiple ways.
+</div>
 
-### Key Features
+---
 
-- 🕸️ **Interactive Knowledge Graph**: Visualize concepts and their relationships in an interactive 2D graph
-- 🤖 **AI-Powered Chat**: Ask questions and get context-aware answers powered by GPT-4o-mini
-- 📚 **Lecture Ingestion**: Automatically extract concepts and relationships from lecture text using LLM
-- 🔗 **Notion Integration**: Sync your Notion pages into the knowledge graph automatically
-- 🎨 **Personalization**: Customize response style, teaching style, and learning preferences
-- 📊 **Gap Detection**: Identify knowledge gaps and areas needing more coverage
-- 🎓 **Teaching Style Analysis**: Learn from your own teaching patterns
+## 📖 Overview
+
+Brain Web is a **standalone, production-ready** knowledge management system that transforms how you organize, visualize, and interact with information. Inspired by Notion's "Everything is a block" philosophy, it treats knowledge as interconnected blocks that can be explored, connected, and visualized in multiple ways.
+
+### What Makes Brain Web Unique?
+
+- 🕸️ **Interactive Knowledge Graph**: Real-time 2D force-directed graph visualization
+- 🤖 **AI-Powered Intelligence**: GPT-4o-mini powered chat with semantic search
+- 📚 **Automatic Concept Extraction**: LLM-powered extraction from lectures and documents
+- 🔗 **Notion Integration**: Seamless sync with your Notion workspace
+- 🎨 **Personalized Learning**: Customizable teaching styles and learning preferences
+- 📊 **Gap Detection**: AI identifies knowledge gaps and suggests improvements
+- 🚀 **Production Ready**: Fully deployed with CI/CD, infrastructure as code, and monitoring
+
+---
+
+## 🛠️ How It Was Built
+
+### Architecture
+
+Brain Web follows a **modern, scalable architecture** with clear separation of concerns:
+
+```
+┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
+│   Frontend      │         │    Backend      │         │   Database      │
+│   (Next.js)     │◄───────►│   (FastAPI)     │◄───────►│   (Neo4j)       │
+│   Vercel        │   REST  │   AWS ECS       │  Bolt   │   Neo4j Aura    │
+└─────────────────┘         └─────────────────┘         └─────────────────┘
+        │                           │                           │
+        │                           │                           │
+        └───────────────────────────┴───────────────────────────┘
+                              │
+                    ┌─────────▼─────────┐
+                    │   OpenAI API      │
+                    │   (GPT-4o-mini)  │
+                    └──────────────────┘
+```
+
+### Tech Stack
+
+#### **Frontend**
+- **Framework**: [Next.js 14](https://nextjs.org/) (React 18) with App Router
+- **Visualization**: [react-force-graph-2d](https://github.com/vasturiano/react-force-graph) for interactive graph rendering
+- **Styling**: CSS Modules with CSS Variables for theming
+- **Type Safety**: TypeScript for type-safe development
+- **Deployment**: [Vercel](https://vercel.com/) for edge-optimized hosting
+
+#### **Backend**
+- **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Python 3.11) for high-performance API
+- **Database**: [Neo4j](https://neo4j.com/) graph database for relationship modeling
+- **AI Integration**: [OpenAI API](https://openai.com/) (GPT-4o-mini, text-embedding-3-small)
+- **API Design**: RESTful API with 58+ endpoints
+- **Testing**: pytest with 47+ comprehensive tests
+- **Deployment**: AWS ECS (Fargate) with Docker containerization
+
+#### **Infrastructure & DevOps**
+- **Infrastructure as Code**: [Terraform](https://www.terraform.io/) for AWS resource management
+- **Container Registry**: AWS ECR (Elastic Container Registry)
+- **Orchestration**: AWS ECS (Elastic Container Service) with Fargate
+- **CI/CD**: GitHub Actions with OIDC authentication
+- **Monitoring**: AWS CloudWatch Logs
+- **Load Balancing**: AWS Application Load Balancer
+- **DNS**: AWS Route53
+- **CDN**: Vercel Edge Network (frontend)
+
+#### **Integrations**
+- **Notion API**: Real-time synchronization with Notion databases
+- **OpenAI API**: GPT-4o-mini for chat, embeddings for semantic search
+- **DynamoDB**: Event tracking and analytics (optional)
+
+---
+
+## 🚀 How It Was Deployed
+
+### Production Deployment Architecture
+
+The system is deployed across **multiple cloud services** for optimal performance and reliability:
+
+#### **Frontend Deployment (Vercel)**
+- **Platform**: Vercel Edge Network
+- **Build**: Automatic builds on git push to `main`
+- **Domain**: Custom domain with SSL (demo.sanjayanasuri.com)
+- **Features**: 
+  - Automatic HTTPS
+  - Edge caching
+  - Global CDN distribution
+  - Zero-downtime deployments
+
+#### **Backend Deployment (AWS)**
+- **Compute**: AWS ECS Fargate (serverless containers)
+- **Container**: Docker images stored in AWS ECR
+- **Networking**: AWS VPC with public/private subnets
+- **Load Balancing**: Application Load Balancer (ALB) with health checks
+- **Auto-scaling**: ECS service auto-scaling based on CPU/memory
+- **Secrets Management**: AWS Systems Manager Parameter Store
+- **Logging**: CloudWatch Logs with structured logging
+
+#### **Database (Neo4j)**
+- **Provider**: Neo4j Aura (managed Neo4j cloud)
+- **Connection**: Bolt protocol over TLS
+- **Backup**: Automated daily backups
+- **High Availability**: Multi-region replication
+
+### CI/CD Pipeline
+
+**Automated Deployment Workflow:**
+
+1. **Code Push** → GitHub repository
+2. **GitHub Actions Trigger** → Detects changes in `backend/` or `frontend/`
+3. **Backend Pipeline**:
+   - Build Docker image
+   - Push to AWS ECR
+   - Update ECS task definition
+   - Deploy to ECS Fargate
+   - Health check verification
+4. **Frontend Pipeline**:
+   - Build Next.js application
+   - Deploy to Vercel
+   - Run production optimizations
+   - Update DNS records
+
+**Infrastructure Management:**
+- Terraform manages all AWS resources
+- Infrastructure changes tracked in version control
+- Environment-specific configurations (dev, demo, prod)
+- Automated DNS and SSL certificate management
+
+### Security & Best Practices
+
+- ✅ **OIDC Authentication**: GitHub Actions uses AWS IAM roles (no long-lived credentials)
+- ✅ **Secrets Management**: All secrets stored in AWS Parameter Store
+- ✅ **HTTPS Everywhere**: SSL/TLS encryption for all traffic
+- ✅ **Rate Limiting**: Built-in rate limiting for API protection
+- ✅ **CORS Configuration**: Strict CORS policies
+- ✅ **Environment Isolation**: Separate environments for dev/demo/prod
+- ✅ **Container Security**: Regular base image updates
+- ✅ **Logging & Monitoring**: Comprehensive logging for debugging and analytics
+
+---
+
+## ✨ Features
+
+### Core Features
+
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Knowledge Graph** | Interactive 2D visualization of concepts and relationships | ✅ Complete |
+| **Concept Management** | Create, read, update, delete concepts with rich metadata | ✅ Complete |
+| **Relationship Mapping** | Typed relationships between concepts (DEPENDS_ON, PREREQUISITE, etc.) | ✅ Complete |
+| **AI Chat** | Context-aware Q&A powered by GPT-4o-mini with graph context | ✅ Complete |
+| **Semantic Search** | OpenAI embeddings-based concept search | ✅ Complete |
+| **Lecture Ingestion** | LLM-powered extraction of concepts from lecture text | ✅ Complete |
+| **Notion Sync** | Automatic synchronization with Notion databases | ✅ Complete |
+| **Gap Detection** | AI identifies knowledge gaps and suggests improvements | ✅ Complete |
+| **Personalization** | Customizable teaching styles and learning preferences | ✅ Complete |
+| **Resource Management** | Upload and attach files (PDFs, images) to concepts | ✅ Complete |
+
+### Advanced Features
+
+- **Teaching Style Analysis**: Learn from your own teaching patterns
+- **Lecture Segmentation**: Automatic breakdown of lectures into logical segments
+- **Analogy Extraction**: Identifies teaching analogies from content
+- **Answer Rewriting**: Learn from user feedback to improve responses
+- **Graph Export/Import**: CSV-based backup and portability
+- **Multi-Source Tracking**: Track which sources contributed to each concept
+- **Domain Organization**: Color-coded visualization by domain
+- **Focus Areas**: Bias answers toward current learning themes
+
+---
+
+## 🎯 Use Cases
+
+### Current Use Cases
+
+1. **Personal Knowledge Management**
+   - Organize and visualize your understanding of complex topics
+   - Build a living knowledge graph that grows with your learning
+   - Track relationships between concepts across domains
+
+2. **Lecture Organization & Analysis**
+   - Ingest lecture content and automatically extract concepts
+   - Analyze teaching patterns and styles
+   - Identify gaps in coverage
+
+3. **Research & Writing**
+   - Map out research topics and their connections
+   - Track sources and citations
+   - Visualize argument structures
+
+4. **Educational Content Creation**
+   - Plan curriculum by visualizing concept dependencies
+   - Identify prerequisite knowledge
+   - Generate teaching materials based on your style
+
+### Future Use Cases
+
+- **Multi-User Collaboration**: Shared knowledge graphs for teams
+- **Domain-Specific Applications**: Specialized versions for education, research, business
+- **3D Graph Visualization**: Immersive exploration of knowledge spaces
+- **Export Formats**: Integration with Obsidian, Roam, Markdown
+- **Mobile Applications**: Native mobile apps for on-the-go learning
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.9+
-- Node.js 18+
-- Neo4j Database (see [Neo4j Setup Guide](docs/NEO4J_SETUP.md))
-- OpenAI API Key (optional, for AI features)
+- **Python 3.9+**
+- **Node.js 18+**
+- **Neo4j Database** (local or Neo4j Aura cloud)
+- **OpenAI API Key** (optional, for AI features)
 
 ### Installation
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/brain-web.git
+   git clone https://github.com/sanjayanasuri/brain-web.git
    cd brain-web
    ```
 
@@ -57,7 +257,8 @@ Brain Web is a personal knowledge management tool that learns from your lectures
    ```
 
 5. **Start Neo4j database**
-   - Follow [Neo4j Setup Guide](docs/NEO4J_SETUP.md)
+   - Local: Follow [Neo4j Setup Guide](docs/NEO4J_SETUP.md)
+   - Cloud: Use [Neo4j Aura](https://neo4j.com/cloud/aura/) (recommended)
 
 6. **Start backend**
    ```bash
@@ -77,84 +278,72 @@ Brain Web is a personal knowledge management tool that learns from your lectures
 
 For detailed setup instructions, see [Quick Start Guide](docs/QUICKSTART.md).
 
-## 📖 Documentation
+---
 
-- **[Project Status](PROJECT_STATUS.md)** - Current status, features, and roadmap
-- **[Features List](docs/FEATURES.md)** - Complete feature documentation
-- **[Codebase Overview](docs/CODEBASE_OVERVIEW.md)** - Architecture and code structure
-- **[Quick Start Guide](docs/QUICKSTART.md)** - Getting started guide
-- **[Neo4j Setup](docs/NEO4J_SETUP.md)** - Neo4j database setup instructions
-- **[Demo Setup](docs/DEMO_SETUP.md)** - Setting up demo/trial mode
+## 📚 Documentation
+
+### Getting Started
+- **[Quick Start Guide](docs/QUICKSTART.md)** - Step-by-step setup instructions
+- **[Neo4j Setup](docs/NEO4J_SETUP.md)** - Database configuration guide
+- **[Architecture Overview](docs/ARCHITECTURE.md)** - System architecture details
+
+### Development
+- **[Codebase Overview](docs/CODEBASE_OVERVIEW.md)** - Code structure and organization
+- **[API Documentation](docs/FEATURES.md)** - Complete API reference
 - **[Developer Guide](README-dev.md)** - Developer quick reference
 
-## 🏗️ Architecture
+### Deployment
+- **[Demo Setup](docs/DEMO_SETUP.md)** - Setting up demo/trial mode
+- **[Infrastructure Guide](infra/)** - Terraform infrastructure documentation
 
-### Backend
-- **Framework**: FastAPI (Python)
-- **Database**: Neo4j (Graph Database)
-- **AI**: OpenAI API (GPT-4o-mini, text-embedding-3-small, GPT-4 Vision)
-- **API**: RESTful API with 58+ endpoints
+### Project Status
+- **[Project Status](PROJECT_STATUS.md)** - Current features and roadmap
+- **[Roadmap](docs/ROADMAP.md)** - Future development plans
 
-### Frontend
-- **Framework**: Next.js 14 (React)
-- **Visualization**: react-force-graph-2d
-- **Styling**: CSS Modules with CSS Variables
+---
 
-### Key Components
+## 🔮 What's Next: Active Development
 
-```
-brain-web/
-├── backend/              # FastAPI backend
-│   ├── api_*.py         # API routers
-│   ├── services_*.py    # Business logic
-│   ├── models.py        # Pydantic schemas
-│   └── tests/           # Test suite
-├── frontend/            # Next.js frontend
-│   └── app/             # Next.js app directory
-│       ├── components/  # React components
-│       └── [routes]/    # Pages
-└── docs/                # Documentation
-```
+Brain Web is an **actively developed project** with continuous improvements and new features. Here's what's being worked on:
 
-## 🎨 Features in Detail
+### 🚧 In Progress (v0.2.0)
 
-### Knowledge Graph
-- Create, read, update, delete concepts (nodes)
-- Manage typed relationships between concepts
-- Interactive 2D force-directed graph visualization
-- Domain-based organization and filtering
-- Semantic search using OpenAI embeddings
+- **Pathway Creator**: Visual learning journey builder
+- **Enhanced Graph Exploration**: DFS/BFS traversal modes
+- **Mobile Responsiveness**: Full mobile support for graph visualization
+- **Performance Optimizations**: Graph rendering improvements for large datasets
 
-### Lecture Management
-- LLM-powered concept and relationship extraction
-- Automatic lecture segmentation
-- Analogy extraction and teaching style tagging
-- Lecture Studio for comprehensive analysis
-- Draft next lecture generation
+### 📅 Planned Features
 
-### AI Chat System
-- Context-aware Q&A with graph context
-- Semantic search for finding relevant concepts
-- Structured responses with suggested actions
-- Answer rewriting and style learning
-- Feedback system for continuous improvement
+- **Multi-User Support**: Collaboration features for shared knowledge graphs
+- **Advanced AI Features**: 
+  - Multi-modal understanding (images, audio)
+  - Automated concept linking
+  - Intelligent relationship suggestions
+- **Export/Import Formats**: 
+  - Obsidian integration
+  - Roam Research compatibility
+  - Markdown export
+- **3D Graph Visualization**: Immersive 3D exploration
+- **Integration Ecosystem**: 
+  - Anki flashcards generation
+  - Calendar integration for learning schedules
+  - Browser extension for web content capture
 
-### Notion Integration
-- Sync Notion pages into knowledge graph
-- Automatic background synchronization
-- Page indexing with allowlist/blocklist modes
-- Source tracking and visualization
+### 🎯 Long-Term Vision
 
-### Personalization
-- Response style customization (tone, teaching style, structure)
-- Focus areas for current learning themes
-- User profile (background, interests, weak spots)
-- Teaching style profile extracted from lectures
-- Personalized explanations based on profile
+- **Domain-Specific Versions**: Specialized editions for education, research, business
+- **API Marketplace**: Third-party integrations and plugins
+- **Community Features**: Public knowledge graphs, sharing, collaboration
+- **Enterprise Features**: Team workspaces, advanced analytics, SSO
+
+**Want to contribute?** See [Contributing](#-contributing) below!
+
+---
 
 ## 🧪 Testing
 
-Run the test suite:
+Run the comprehensive test suite:
 
 ```bash
 cd backend
@@ -162,18 +351,20 @@ source .venv/bin/activate
 pytest
 ```
 
+**Test Coverage:**
+- ✅ 47+ tests across 8 feature areas
+- ✅ Graph & Concepts (14 tests)
+- ✅ Lecture Ingestion (7 tests)
+- ✅ Teaching Style (4 tests)
+- ✅ Preferences (6 tests)
+- ✅ Notion Sync (4 tests)
+- ✅ Admin & Utilities (6 tests)
+- ✅ AI & Chat (2 tests)
+- ✅ Core & Internal (4 tests)
+
 Access the web-based test UI at `/tests` in the frontend.
 
-**Test Coverage:**
-- 47+ tests across 8 feature areas
-- Graph & Concepts (14 tests)
-- Lecture Ingestion (7 tests)
-- Teaching Style (4 tests)
-- Preferences (6 tests)
-- Notion Sync (4 tests)
-- Admin & Utilities (6 tests)
-- AI & Chat (2 tests)
-- Core & Internal (4 tests)
+---
 
 ## 🔐 Environment Variables
 
@@ -192,85 +383,76 @@ OPENAI_API_KEY=sk-...
 NOTION_API_KEY=secret_...
 NOTION_DATABASE_IDS=database_id_1,database_id_2
 
-# Notion Auto-Sync (optional)
-ENABLE_NOTION_AUTO_SYNC=false
+# Demo Mode (optional)
+DEMO_MODE=false
+DEMO_ALLOW_WRITES=false
 ```
 
 ### Frontend (.env.local)
 
 ```bash
 NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_DEMO_MODE=false
 ```
 
 **⚠️ Important**: Never commit `.env` or `.env.local` files. They are already in `.gitignore`.
 
-## 🚧 Roadmap
-
-### Current Version (0.1.0)
-- ✅ Core knowledge graph infrastructure
-- ✅ Lecture ingestion and management
-- ✅ AI-powered chat and semantic search
-- ✅ Notion integration
-- ✅ Personalization and teaching style
-- ✅ Resource management
-- ✅ Frontend UI components
-
-### Upcoming (v0.2.0)
-- 🚧 Demo/trial mode for portfolio website
-- 🚧 Pathway creator for learning journeys
-- 🚧 Enhanced graph exploration (DFS/BFS modes)
-- 🚧 Mobile responsiveness
-
-### Future Vision
-- Multi-user support and collaboration
-- Advanced AI features (multi-modal understanding)
-- Export/import formats (Markdown, Obsidian, Roam)
-- Domain-specific applications (education, writing, research)
-- 3D graph visualization
-- Integration ecosystem
-
-See [Project Status](PROJECT_STATUS.md) for detailed roadmap.
-
-## 💡 Use Cases
-
-### Current Use Cases
-1. **Personal Knowledge Management**: Organize and visualize your understanding
-2. **Lecture Organization**: Ingest and analyze lecture content
-3. **Teaching Style Analysis**: Learn from your own teaching patterns
-4. **Knowledge Gap Detection**: Find areas needing more coverage
-
-### Future Use Cases
-1. **Education**: Curriculum planning, student progress tracking
-2. **Writing**: Character maps, plot development, world-building
-3. **Research**: Literature review, hypothesis exploration
-4. **Business**: Knowledge management, decision trees
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! This is an active project, and we'd love your help.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+### How to Contribute
 
-## 📝 License
+1. **Fork the repository**
+2. **Create a feature branch** (`git checkout -b feature/AmazingFeature`)
+3. **Make your changes**
+4. **Add tests** for new features
+5. **Run the test suite** (`pytest`)
+6. **Commit your changes** (`git commit -m 'Add some AmazingFeature'`)
+7. **Push to the branch** (`git push origin feature/AmazingFeature`)
+8. **Open a Pull Request**
 
-[To be determined]
+### Development Guidelines
 
-## 🙏 Acknowledgments
-
-- Inspired by Notion's "Everything is a block" philosophy
-- Built with FastAPI, Next.js, Neo4j, and OpenAI
-
-## 📞 Contact
-
-[Your contact information]
+- Follow existing code style and patterns
+- Write tests for new features
+- Update documentation as needed
+- Keep commits atomic and well-described
 
 ---
 
-**Status**: Active Development  
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- Inspired by **Notion's "Everything is a block"** philosophy
+- Built with modern, open-source technologies
+- Powered by **OpenAI** for AI capabilities
+- Graph visualization powered by **react-force-graph**
+
+---
+
+## 📞 Contact & Links
+
+- **Live Demo**: [demo.sanjayanasuri.com](https://demo.sanjayanasuri.com)
+- **GitHub**: [github.com/sanjayanasuri/brain-web](https://github.com/sanjayanasuri/brain-web)
+- **Issues**: [GitHub Issues](https://github.com/sanjayanasuri/brain-web/issues)
+
+---
+
+<div align="center">
+
+**Built with ❤️ by [Sanjay Anasuri](https://sanjayanasuri.com)**
+
+**Status**: 🟢 Active Development  
 **Last Updated**: December 2024
 
-For detailed project status, see [PROJECT_STATUS.md](PROJECT_STATUS.md).
+[⬆ Back to Top](#-brain-web)
+
+</div>
