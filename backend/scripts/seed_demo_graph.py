@@ -37,20 +37,48 @@ def _read_csv(path: Path) -> Iterable[Dict[str, str]]:
         yield from reader
 
 
-def _seed_nodes(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
+def _seed_nodes(tx, graph_id: str, rows: Iterable[Dict[str, str]]) -> None:
+    # Ensure GraphSpace exists
+    tx.run(
+        """
+        MERGE (g:GraphSpace {graph_id: $graph_id})
+        ON CREATE SET g.name = $graph_id,
+                      g.created_at = datetime(),
+                      g.updated_at = datetime()
+        """,
+        graph_id=graph_id,
+    )
+    
+    # Ensure Main branch exists
+    tx.run(
+        """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        MERGE (b:Branch {graph_id: $graph_id, branch_id: 'main'})
+        ON CREATE SET b.name = 'Main',
+                      b.created_at = datetime(),
+                      b.updated_at = datetime()
+        """,
+        graph_id=graph_id,
+    )
+    
     for r in rows:
         node_id = (r.get("node_id") or "").strip()
         if not node_id:
             continue
+        # Create concept and link to GraphSpace
         tx.run(
             """
-            MERGE (c:Concept {tenant_id:$tenant_id, node_id:$node_id})
+            MATCH (g:GraphSpace {graph_id: $graph_id})
+            MERGE (c:Concept {node_id: $node_id})
             SET c.name = $name,
                 c.description = $description,
                 c.domain = $domain,
-                c.type = $type
+                c.type = $type,
+                c.graph_id = $graph_id,
+                c.on_branches = ['main']
+            MERGE (c)-[:BELONGS_TO]->(g)
             """,
-            tenant_id=tenant_id,
+            graph_id=graph_id,
             node_id=node_id,
             name=(r.get("name") or "").strip(),
             description=(r.get("description") or "").strip(),
@@ -59,7 +87,7 @@ def _seed_nodes(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
         )
 
 
-def _seed_edges(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
+def _seed_edges(tx, graph_id: str, rows: Iterable[Dict[str, str]]) -> None:
     for r in rows:
         s = (r.get("source_id") or "").strip()
         t = (r.get("target_id") or "").strip()
@@ -71,11 +99,13 @@ def _seed_edges(tx, tenant_id: str, rows: Iterable[Dict[str, str]]) -> None:
             raise ValueError(f"Invalid relationship type: {rel_type}")
         tx.run(
             f"""
-            MATCH (a:Concept {{tenant_id:$tenant_id, node_id:$s}})
-            MATCH (b:Concept {{tenant_id:$tenant_id, node_id:$t}})
-            MERGE (a)-[r:{rel_type} {{tenant_id:$tenant_id}}]->(b)
+            MATCH (a:Concept {{node_id:$s, graph_id:$graph_id}})
+            MATCH (b:Concept {{node_id:$t, graph_id:$graph_id}})
+            MERGE (a)-[r:{rel_type}]->(b)
+            SET r.graph_id = $graph_id,
+                r.on_branches = ['main']
             """,
-            tenant_id=tenant_id,
+            graph_id=graph_id,
             s=s,
             t=t,
         )

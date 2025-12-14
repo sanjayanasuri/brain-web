@@ -478,6 +478,7 @@ resource "aws_ecs_task_definition" "api" {
         { name = "DEMO_MODE", value = "true" },
         { name = "DEMO_ALLOW_WRITES", value = "true" },
         { name = "DEMO_TENANT_ID", value = "demo" },
+        { name = "DEMO_GRAPH_ID", value = "demo" },
         { name = "DEMO_SAFE_WRITE_PATHS", value = "/ai/chat,/ai/semantic-search,/events" },
         { name = "DEMO_RATE_LIMIT_PER_IP_PER_MIN", value = "120" },
         { name = "DEMO_RATE_LIMIT_PER_SESSION_PER_MIN", value = "60" },
