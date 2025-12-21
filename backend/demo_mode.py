@@ -104,12 +104,14 @@ def is_write_method(method: str) -> bool:
 
 
 def path_is_blocked_in_demo(path: str) -> bool:
-    # Always blocked in demo (no private integrations / no admin surface)
+    # Always blocked in demo (no private integrations / no admin surface / no ingestion)
     blocked_prefixes = (
         "/admin",
         "/notion",
         "/debug",
         "/tests",
+        "/connectors",  # Block connector ingestion endpoints (SEC, News, Prices sync)
+        "/finance",     # Block finance ingestion endpoint
     )
     return any(path.startswith(p) for p in blocked_prefixes)
 

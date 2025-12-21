@@ -8,6 +8,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 function getOpenAIApiKey(): string | undefined {
   // Try to read directly from .env.local file as a fallback
+  // Priority: 1) process.env, 2) repo root .env.local (matches backend), 3) frontend/.env.local
   let key = process.env.OPENAI_API_KEY;
   
   // If key is too short or missing, try reading from file directly
@@ -15,13 +16,28 @@ function getOpenAIApiKey(): string | undefined {
     try {
       const fs = require('fs');
       const path = require('path');
-      const envPath = path.join(process.cwd(), '.env.local');
-      if (fs.existsSync(envPath)) {
-        const content = fs.readFileSync(envPath, 'utf8');
+      
+      // First try repo root .env.local (same as backend uses)
+      const repoRootEnvPath = path.join(process.cwd(), '..', '.env.local');
+      if (fs.existsSync(repoRootEnvPath)) {
+        const content = fs.readFileSync(repoRootEnvPath, 'utf8');
         const match = content.match(/^OPENAI_API_KEY=(.+)$/m);
         if (match && match[1]) {
           key = match[1].trim();
-          console.log('[Chat API] Read API key directly from .env.local file');
+          console.log('[Chat API] Read API key from repo root .env.local (matches backend)');
+        }
+      }
+      
+      // Fallback to frontend/.env.local if repo root doesn't have it
+      if (!key || key.length < 20) {
+        const frontendEnvPath = path.join(process.cwd(), '.env.local');
+        if (fs.existsSync(frontendEnvPath)) {
+          const content = fs.readFileSync(frontendEnvPath, 'utf8');
+          const match = content.match(/^OPENAI_API_KEY=(.+)$/m);
+          if (match && match[1]) {
+            key = match[1].trim();
+            console.log('[Chat API] Read API key from frontend/.env.local');
+          }
         }
       }
     } catch (err) {
@@ -31,7 +47,9 @@ function getOpenAIApiKey(): string | undefined {
   
   if (!key) {
     console.error('[Chat API] OPENAI_API_KEY not found in environment variables');
-    console.error('[Chat API] Make sure you have OPENAI_API_KEY in frontend/.env.local');
+    console.error('[Chat API] Make sure you have OPENAI_API_KEY in one of:');
+    console.error('[Chat API]   1. Repo root .env.local (recommended - matches backend)');
+    console.error('[Chat API]   2. frontend/.env.local');
     console.error('[Chat API] Format: OPENAI_API_KEY=sk-proj-... (no quotes, no spaces around =)');
     console.error('[Chat API] Note: Next.js requires server-side env vars to NOT have NEXT_PUBLIC_ prefix');
     console.error('[Chat API] IMPORTANT: Restart the Next.js dev server after changing .env.local');
@@ -71,8 +89,25 @@ interface SemanticSearchResponse {
   scores: number[];
 }
 
+interface ResponsePreferences {
+  mode?: 'compact' | 'hint' | 'normal' | 'deep';
+  max_output_tokens?: number;
+  ask_question_policy?: 'never' | 'at_most_one' | 'ok';
+  end_with_next_step?: boolean;
+}
+
 interface ChatRequest {
   message: string;
+  mode?: 'classic' | 'graphrag';
+  graph_id?: string;
+  branch_id?: string;
+  vertical?: 'general' | 'finance';
+  lens?: string;
+  recency_days?: number;
+  evidence_strictness?: 'high' | 'medium' | 'low';
+  include_proposed_edges?: boolean;
+  response_prefs?: ResponsePreferences;
+  voice_id?: string;
 }
 
 interface SuggestedAction {
@@ -84,12 +119,40 @@ interface SuggestedAction {
   label: string;
 }
 
+interface EvidenceItem {
+  title: string;
+  url?: string | null;
+  source: string;
+  as_of?: string | number | null;
+  snippet?: string | null;
+  resource_id?: string | null;
+  concept_id?: string | null;
+}
+
+interface AnswerSection {
+  id: string;
+  heading?: string;
+  text: string;
+  supporting_evidence_ids: string[];
+}
+
 interface ChatResponse {
   answer: string;
   usedNodes: Concept[];
   suggestedQuestions: string[];
   suggestedActions?: SuggestedAction[];
   answerId?: string;
+  retrievalMeta?: {
+    communities: number;
+    claims: number;
+    concepts: number;
+    edges: number;
+    sourceBreakdown?: Record<string, number>;
+    claimIds?: string[];
+    communityIds?: string[];
+  };
+  evidenceUsed?: EvidenceItem[];
+  answer_sections?: AnswerSection[];
   meta?: {
     draftAnswer?: string;
     rewriteApplied: boolean;
@@ -97,7 +160,156 @@ interface ChatResponse {
       question: string;
       snippet: string;
     }>;
+    mode?: string;
+    duration_ms?: number;
+    intent?: any;
+    traceSteps?: any;
   };
+}
+
+/**
+ * PromptBuilder: Composes system prompts with stable contract + voice + mode
+ */
+function buildPrompt(
+  basePrompt: string,
+  responsePrefs: ResponsePreferences,
+  voiceId: string = 'neutral',
+  additionalLayers?: string[]
+): { systemPrompt: string; maxTokens: number } {
+  const prefs = {
+    mode: responsePrefs.mode || 'compact',
+    max_output_tokens: responsePrefs.max_output_tokens,
+    ask_question_policy: responsePrefs.ask_question_policy || 'at_most_one',
+    end_with_next_step: responsePrefs.end_with_next_step !== false,
+  };
+
+  // Stable system contract (behavior rules)
+  const contract = `
+RESPONSE CONTRACT (MUST FOLLOW):
+- Default mode: ${prefs.mode === 'compact' ? 'succinct, conversational, one step at a time' : prefs.mode === 'hint' ? 'brief nudge only' : prefs.mode === 'deep' ? 'structured with clear sections' : 'balanced explanation'}
+- Ask at most ${prefs.ask_question_policy === 'never' ? 'zero' : prefs.ask_question_policy === 'at_most_one' ? 'one' : 'questions as needed'} question${prefs.ask_question_policy === 'at_most_one' ? '' : 's'} unless blocked
+- ${prefs.end_with_next_step ? 'Always end with a micro-next-step or fork ("Want the hint or the full solution?")' : 'End naturally'}
+`;
+
+  // Voice card (tone/pacing only, not behavior)
+  const voiceCards: Record<string, string> = {
+    neutral: 'Tone: Professional and clear. Pacing: Steady.',
+    friendly: 'Tone: Warm and approachable. Pacing: Conversational.',
+    direct: 'Tone: Straightforward and no-nonsense. Pacing: Quick.',
+    playful: 'Tone: Light and engaging. Pacing: Varied with energy.',
+  };
+  const voiceCard = voiceCards[voiceId] || voiceCards.neutral;
+
+  // Mode adapter instructions
+  const modeInstructions: Record<string, string> = {
+    compact: `OUTPUT FORMAT: 1-2 lines maximum. Be extremely concise. No multi-step plans unless explicitly requested.`,
+    hint: `OUTPUT FORMAT: One brief nudge (1-2 sentences). No explanations, no plans, just a hint.`,
+    normal: `OUTPUT FORMAT: Balanced explanation (2-4 paragraphs). Can include structure if helpful.`,
+    deep: `OUTPUT FORMAT: Structured response with clear sections. Can include action plans (3-5 bullets) and detailed explanations.`,
+  };
+  const modeInstruction = modeInstructions[prefs.mode] || modeInstructions.normal;
+
+  // User Preferred Style Guide (high priority - based on detailed feedback)
+  const userStyleGuide = `
+USER PREFERRED STYLE (CRITICAL - FOLLOW STRICTLY):
+- Be direct and conversational. Just state things, don't introduce them formally.
+- NO unnecessary transitions: Avoid "Now, zooming out,", "Let's take a step back", "At a broader level,", "At its core," unless truly necessary.
+- NO formal section headers: Never use **Big Picture:**, **Core Concept Definition:**, or stars/bold for sections.
+- Integrate analogies naturally: Weave them into the flow, don't break paragraphs unnecessarily.
+- One expanded example > multiple examples: Pick one concrete example and expand it, don't list many.
+- Explain technical terms simply or avoid: If you use a term, explain what it means. Avoid ambiguous terms like "handle their own state" or "virtual DOM" without context.
+- Keep it concise: Cut unnecessary words and qualifiers like "known as", "falls under the category of", "in the same arena as".
+- Don't introduce unrelated concepts: Only mention other tools/concepts if truly required in the conversation.
+- Flow naturally: No formal transitions needed, just move to the next idea.
+- Use concrete, visualizable terms: "toolkit", "building blocks" - make concepts tangible.
+
+Examples of good style:
+- "Think of React as a toolkit for building user interfaces" (good opening)
+- "React is a JavaScript library that helps you build user interfaces" (direct)
+- "Backend is code. Frontend is view. Use React to build your UI." (clear, simple)
+
+Examples of bad style:
+- "Let's take a step back and look at React from a broader perspective" (unnecessary transition)
+- "**Big Picture:** React is..." (formal header)
+- "Now, zooming out, React is part of..." (unnecessary transition)
+- "At its core, React emphasizes the 'view'" (unclear, ambiguous)
+`;
+
+  // Compose final prompt
+  let systemPrompt = basePrompt + '\n\n' + contract + '\n' + voiceCard + '\n' + modeInstruction + '\n' + userStyleGuide;
+  
+  // Add additional layers if provided
+  if (additionalLayers) {
+    additionalLayers.forEach(layer => {
+      systemPrompt += '\n' + layer;
+    });
+  }
+  
+  // Add style feedback examples if provided (for learning)
+  if (additionalLayers && additionalLayers.some(l => l.includes('STYLE FEEDBACK'))) {
+    // Style feedback already included in additionalLayers
+  }
+
+  // Determine max tokens based on mode
+  const maxTokens = prefs.max_output_tokens || (
+    prefs.mode === 'compact' ? 150 :
+    prefs.mode === 'hint' ? 100 :
+    prefs.mode === 'deep' ? 1200 :
+    800 // normal
+  );
+
+  return { systemPrompt, maxTokens };
+}
+
+/**
+ * Post-processing guardrails to enforce response preferences
+ */
+function enforceGuardrails(
+  answer: string,
+  responsePrefs: ResponsePreferences
+): string {
+  const prefs = {
+    mode: responsePrefs.mode || 'compact',
+    ask_question_policy: responsePrefs.ask_question_policy || 'at_most_one',
+  };
+
+  let processed = answer;
+
+  // Enforce hint mode: max 2 lines, no multi-step plans
+  if (prefs.mode === 'hint') {
+    const lines = processed.split('\n').filter(l => l.trim().length > 0);
+    if (lines.length > 2) {
+      processed = lines.slice(0, 2).join('\n');
+    }
+    // Remove bullet points and numbered lists (multi-step plans)
+    processed = processed.replace(/^[\s]*[-•*]\s+/gm, '');
+    processed = processed.replace(/^\d+\.\s+/gm, '');
+  }
+
+  // Enforce compact mode: limit length
+  if (prefs.mode === 'compact') {
+    const lines = processed.split('\n');
+    if (lines.length > 3) {
+      processed = lines.slice(0, 3).join('\n');
+    }
+  }
+
+  // Enforce question policy
+  if (prefs.ask_question_policy === 'never') {
+    // Remove all questions
+    processed = processed.replace(/\?[^?]*\?/g, '');
+    processed = processed.replace(/[^?]*\?/g, (match) => match.replace(/\?$/, '.'));
+  } else if (prefs.ask_question_policy === 'at_most_one') {
+    // Count question marks
+    const questionCount = (processed.match(/\?/g) || []).length;
+    if (questionCount > 1) {
+      // Keep only the first question
+      const parts = processed.split('?');
+      processed = parts.slice(0, 2).join('?') + (parts.length > 2 ? parts.slice(2).join('.').replace(/\?/g, '.') : '');
+    }
+  }
+
+  return processed.trim();
 }
 
 export async function POST(request: NextRequest) {
@@ -106,7 +318,31 @@ export async function POST(request: NextRequest) {
     const apiKey = getOpenAIApiKey();
     
     const body: ChatRequest = await request.json();
-    const { message } = body;
+    // Default to GraphRAG for better evidence and structured context
+    // Frontend can override with 'classic' for simple queries
+    let { message, mode = 'graphrag', graph_id, branch_id, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id } = body;
+    
+    // Default ResponsePreferences if not provided
+    const defaultResponsePrefs: ResponsePreferences = {
+      mode: 'compact',
+      ask_question_policy: 'at_most_one',
+      end_with_next_step: true,
+    };
+    const finalResponsePrefs: ResponsePreferences = { ...defaultResponsePrefs, ...(response_prefs || {}) };
+    const finalVoiceId = voice_id || 'neutral';
+    
+    // Handle finance: prefix
+    if (message.toLowerCase().startsWith('finance:')) {
+      vertical = 'finance';
+      message = message.substring(8).trim(); // Remove "finance:" prefix
+      
+      // Parse lens from message if present (e.g., "finance: NVIDIA lens=competition")
+      const lensMatch = message.match(/lens=(\w+)/i);
+      if (lensMatch) {
+        lens = lensMatch[1];
+        message = message.replace(/lens=\w+/i, '').trim(); // Remove lens= part
+      }
+    }
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
@@ -133,8 +369,18 @@ export async function POST(request: NextRequest) {
     // Use the runtime-loaded key
     const OPENAI_API_KEY = apiKey;
 
-    console.log(`[Chat API] Processing question: "${message.substring(0, 50)}..."`);
+    const startTime = Date.now();
+    console.log(`[Chat API] Processing question: "${message.substring(0, 50)}..." (mode: ${mode})`);
 
+    // Handle GraphRAG mode
+    if (mode === 'graphrag') {
+      const result = await handleGraphRAGMode(message, graph_id, branch_id, apiKey, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, finalResponsePrefs, finalVoiceId);
+      const totalDuration = Date.now() - startTime;
+      console.log(`[Chat API] GraphRAG mode completed in ${totalDuration}ms`);
+      return result; // handleGraphRAGMode already includes metrics
+    }
+
+    // Classic mode (existing flow)
     // Step 1: Call semantic search
     console.log(`[Chat API] Step 1: Calling semantic search at ${API_BASE_URL}/ai/semantic-search`);
     const searchResponse = await fetch(`${API_BASE_URL}/ai/semantic-search`, {
@@ -369,10 +615,41 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.warn('[Chat API] Failed to fetch example answers:', err);
     }
+    
+    // Step 3.7: Fetch style feedback examples (for style learning)
+    console.log('[Chat API] Step 3.7: Fetching style feedback examples...');
+    let styleFeedbackExamples: string = '';
+    try {
+      const styleFeedbackResponse = await fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`);
+      if (styleFeedbackResponse.ok) {
+        const styleFeedbacks = await styleFeedbackResponse.json();
+        if (styleFeedbacks && styleFeedbacks.length > 0) {
+          styleFeedbackExamples = styleFeedbacks.map((fb: any, idx: number) => {
+            const original = (fb.original_response || '').substring(0, 200);
+            const feedback = (fb.feedback_notes || '').substring(0, 200);
+            const rewritten = fb.user_rewritten_version ? (fb.user_rewritten_version || '').substring(0, 200) : null;
+            const testLabel = fb.test_label ? `${fb.test_label}: ` : '';
+            let example = `${idx + 1}. ${testLabel}ORIGINAL: ${original}...\n   ${testLabel}FEEDBACK: ${feedback}...`;
+            if (rewritten) {
+              example += `\n   ${testLabel}REWRITTEN: ${rewritten}...`;
+            }
+            return example;
+          }).join('\n\n');
+          console.log(`[Chat API] ✓ Found ${styleFeedbacks.length} style feedback example(s) - will be included in prompt`);
+        } else {
+          console.log('[Chat API] No style feedback examples found yet');
+        }
+      } else {
+        console.warn(`[Chat API] Style feedback endpoint returned ${styleFeedbackResponse.status}`);
+      }
+    } catch (err) {
+      console.warn('[Chat API] Failed to fetch style feedback examples:', err);
+      console.warn('[Chat API] This is OK if no feedback has been submitted yet');
+    }
 
     // Step 4: Call OpenAI Chat Completions (DRAFT ANSWER)
     console.log('[Chat API] Step 4: Calling OpenAI API for draft answer...');
-    const startTime = Date.now();
+    const openaiStartTime = Date.now();
     
     // Build base system prompt (simpler for draft)
     let baseSystemPrompt = isGapQuestion
@@ -450,6 +727,10 @@ The user explains things in a grounded, intuitive way:
 - They avoid dramatic or exaggerated language.
 - They favor clear, direct sentences over academic jargon.
 - They sometimes use analogies but keep them simple and practical.
+- They are direct and conversational - no unnecessary transitions or formal introductions.
+- They integrate analogies naturally into the flow, not as separate paragraphs.
+- They use one expanded example rather than lists of examples.
+- They avoid ambiguous technical terms or explain them simply.
 
 You are given (1) a question, and (2) a set of concepts and relationships from the user's knowledge graph.
 
@@ -458,11 +739,13 @@ Your job:
 1. Use the graph context FIRST. Prefer the user's existing concepts and descriptions over generic textbook definitions.
 
 2. Answer in the user's style:
-   - Start from what the concept is.
-   - Then show how it connects to related concepts in the graph.
+   - Start directly with what the concept is. No formal introductions.
+   - Show how it connects to related concepts in the graph.
    - Point out prerequisites when helpful.
    - Use simple examples drawn from software engineering, web dev, data science, or everyday workflows.
-   - Keep explanations focused and coherent. It's okay to be conversational, but do not be fluffy.
+   - Keep explanations focused and coherent. Be conversational, not fluffy.
+   - Integrate analogies naturally - weave them in, don't break paragraphs.
+   - Use one concrete example and expand it, don't list many.
 
 3. If something is not in the graph, you may use your own knowledge, but still explain it in this same style and, when possible, connect it to nearby concepts.
 
@@ -484,7 +767,7 @@ SUGGESTED_ACTIONS: [
 FOLLOW_UP_QUESTIONS: ['question1', 'question2', 'question3']`;
     
     // Build personalized system prompt by layering personalization features
-    let systemPrompt = baseSystemPrompt;
+    const additionalLayers: string[] = [];
     
     // Layer 0: Teaching Style Profile (highest priority - learned from lectures)
     if (teachingStyleProfile) {
@@ -507,7 +790,7 @@ Key rules:
 
 This style was learned from the user's actual lectures and represents how they explain concepts.
 `;
-      systemPrompt = systemPrompt + teachingStyleInstructions;
+      additionalLayers.push(teachingStyleInstructions);
     }
     
     // Layer 1: Response Style Profile
@@ -523,7 +806,7 @@ Sentence structure: ${style.sentence_structure}
 Explain concepts in this order: ${style.explanation_order.join(', ')}.
 Never use the following styles: ${style.forbidden_styles.join(', ')}.
 `;
-      systemPrompt = systemPrompt + styleInstructions;
+      additionalLayers.push(styleInstructions);
     }
     
     // Layer 2: Feedback Summary
@@ -539,7 +822,7 @@ Common negative reasons (avoid these): ${JSON.stringify(feedbackSummary.common_r
 
 Avoid patterns that produced negative feedback, especially ones marked as "too generic" or "not connected to the graph".
 `;
-      systemPrompt = systemPrompt + feedbackInstructions;
+      additionalLayers.push(feedbackInstructions);
     }
     
     // Layer 3: Focus Areas
@@ -552,7 +835,7 @@ The user is currently focusing on these themes: ${focusText}.
 Whenever possible, connect explanations back to these focus areas.
 If a question is broad, use these as anchoring contexts.
 `;
-      systemPrompt = systemPrompt + focusInstructions;
+      additionalLayers.push(focusInstructions);
     }
     
     // Layer 4: User Profile
@@ -571,8 +854,28 @@ When explaining:
 - Pay extra attention to weak spots; build bridges from known background.
 - Use analogies and layered explanations if preferred.
 `;
-      systemPrompt = systemPrompt + profileInstructions;
+      additionalLayers.push(profileInstructions);
     }
+    
+    // Layer 5: Style Feedback Examples (for learning from user's own feedback)
+    if (styleFeedbackExamples) {
+      const styleFeedbackLayer = `
+
+RECENT STYLE FEEDBACK EXAMPLES (learn from these patterns):
+${styleFeedbackExamples}
+
+Use these examples to refine your responses. Pay attention to what the user liked and disliked. Match the style of responses they approved of.
+`;
+      additionalLayers.push(styleFeedbackLayer);
+    }
+    
+    // Use PromptBuilder to compose system prompt with response preferences
+    const { systemPrompt, maxTokens } = buildPrompt(
+      baseSystemPrompt,
+      finalResponsePrefs,
+      finalVoiceId,
+      additionalLayers
+    );
     
     const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -596,10 +899,10 @@ ${contextString}`,
           },
         ],
         temperature: 0.7,
-        max_tokens: 800, // Increased for better formatted responses
+        max_tokens: maxTokens,
       }),
     });
-    const openaiTime = Date.now() - startTime;
+    const openaiTime = Date.now() - openaiStartTime;
     console.log(`[Chat API] OpenAI API call took ${openaiTime}ms`);
 
     if (!openaiResponse.ok) {
@@ -762,6 +1065,9 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       }
     }
     
+    // Apply post-processing guardrails
+    answer = enforceGuardrails(answer, finalResponsePrefs);
+    
     // Format final answer
     answer = answer
       .replace(/\n\n+/g, '\n\n')
@@ -783,7 +1089,23 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
           used_node_ids: usedNodes.map(n => n.node_id),
         }),
       });
-      if (!storeResponse.ok) {
+      if (storeResponse.ok) {
+        // Log answer created event
+        try {
+          await fetch(`${API_BASE_URL}/events/activity`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'ANSWER_CREATED',
+              answer_id: answerId,
+              graph_id: graph_id || undefined,
+              payload: { conceptIdsUsed: usedNodes.map(n => n.node_id) },
+            }),
+          }).catch(() => {}); // Swallow errors
+        } catch (err) {
+          // Ignore event logging errors
+        }
+      } else {
         console.warn('[Chat API] Failed to store answer:', await storeResponse.text());
       }
     } catch (err) {
@@ -826,13 +1148,28 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       }),
     };
 
+    const duration = Date.now() - startTime;
+    console.log(`[Chat API] Classic mode completed in ${duration}ms`);
+
+    // Generate answer sections for inline claim alignment
+    const sections = splitAnswerIntoSections(answer);
+    // Classic mode doesn't have evidence, so sections will have empty supporting_evidence_ids
+    const answer_sections = mapEvidenceToSections(sections, []);
+
     const response: ChatResponse = {
       answer,
       usedNodes,
       suggestedQuestions: suggestedQuestions.slice(0, 3), // Limit to 3
       suggestedActions: suggestedActions.slice(0, 5), // Limit to 5 actions
       answerId,
-      ...(isDev && { meta }),
+      answer_sections,
+      ...(isDev && { 
+        meta: {
+          ...meta,
+          mode: 'classic',
+          duration_ms: duration,
+        }
+      }),
     };
 
     return NextResponse.json(response);
@@ -848,5 +1185,552 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       { status: 500 }
     );
   }
+}
+
+async function handleGraphRAGMode(
+  message: string,
+  graph_id: string | undefined,
+  branch_id: string | undefined,
+  apiKey: string,
+  vertical?: 'general' | 'finance',
+  lens?: string,
+  recency_days?: number,
+  evidence_strictness?: 'high' | 'medium' | 'low',
+  include_proposed_edges?: boolean,
+  responsePrefs?: ResponsePreferences,
+  voiceId?: string
+): Promise<NextResponse> {
+  const startTime = Date.now();
+  try {
+    // Default graph_id and branch_id if not provided
+    const defaultGraphId = graph_id || 'default';
+    const defaultBranchId = branch_id || 'main';
+
+    console.log(`[Chat API] GraphRAG mode: fetching context for graph_id=${defaultGraphId}, branch_id=${defaultBranchId}, vertical=${vertical || 'general'}`);
+
+    // Build request body for intent-based retrieval
+    const requestBody: any = {
+      message,
+      mode: 'graphrag',
+      limit: 5,
+      graph_id: defaultGraphId,
+      branch_id: defaultBranchId,
+      detail_level: 'summary', // Request summary mode for progressive disclosure
+    };
+    
+    // Note: For now, we use intent-based retrieval. Vertical-specific params can be added later if needed.
+    // The intent router will automatically classify the query.
+
+    // Call intent-based retrieval endpoint
+    let retrievalResponse;
+    try {
+      retrievalResponse = await fetch(`${API_BASE_URL}/ai/retrieve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+    } catch (fetchError: any) {
+      console.error(`[Chat API] Fetch error connecting to backend: ${fetchError.message}`);
+      console.error(`[Chat API] Backend URL: ${API_BASE_URL}/ai/retrieve`);
+      console.error(`[Chat API] Make sure backend is running on ${API_BASE_URL}`);
+      throw new Error(`Backend connection failed: ${fetchError.message}. Is the backend running on ${API_BASE_URL}?`);
+    }
+
+    if (!retrievalResponse.ok) {
+      const errorText = await retrievalResponse.text();
+      console.error(`[Chat API] Retrieval failed: ${retrievalResponse.status} ${errorText}`);
+      throw new Error(`Retrieval failed: ${retrievalResponse.status} ${errorText}`);
+    }
+
+    const retrievalData = await retrievalResponse.json();
+    const intent = retrievalData.intent;
+    const trace = retrievalData.trace || [];
+    const context = retrievalData.context || {};
+    
+    console.log(`[Chat API] Intent: ${intent}, Trace steps: ${trace.length}`);
+    
+    // Build context text from structured context
+    const contextText = buildContextTextFromStructured(context, intent);
+    
+    console.log(`[Chat API] Context retrieved (${contextText.length} chars)`);
+
+    // Build base system prompt for GraphRAG
+    const baseSystemPrompt = `You are Brain Web, a teaching assistant that answers questions using GraphRAG context.
+
+The context provided includes:
+- Relevant communities of related concepts
+- Supporting claims with evidence
+- Relevant concepts and their relationships
+
+Your task:
+1. Use the GraphRAG context to answer the question
+2. Cite specific claims and sources when relevant
+3. Reference communities when discussing related concepts
+4. Be specific and traceable to the provided evidence
+
+FORMATTING REQUIREMENTS:
+- Use clear paragraphs separated by blank lines
+- Use bullet points (- or •) for lists
+- Break up long paragraphs into shorter, readable chunks
+- Use line breaks to separate major sections
+
+Format your response as:
+ANSWER: <your well-formatted answer>
+
+SUGGESTED_ACTIONS: [
+  {"type": "link", "source": "Concept A", "target": "Concept B", "label": "link Concept A to Concept B"}
+]
+
+FOLLOW_UP_QUESTIONS: ['question1', 'question2', 'question3']`;
+
+    // Default ResponsePreferences if not provided
+    const defaultResponsePrefs: ResponsePreferences = {
+      mode: 'compact',
+      ask_question_policy: 'at_most_one',
+      end_with_next_step: true,
+    };
+    const finalResponsePrefs: ResponsePreferences = { ...defaultResponsePrefs, ...(responsePrefs || {}) };
+    const finalVoiceId = voiceId || 'neutral';
+
+    // Use PromptBuilder to compose system prompt with response preferences
+    const { systemPrompt, maxTokens } = buildPrompt(
+      baseSystemPrompt,
+      finalResponsePrefs,
+      finalVoiceId
+    );
+
+    // Call OpenAI with GraphRAG context
+    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt,
+          },
+          {
+            role: 'user',
+            content: `Question: ${message}
+
+GRAPH CONTEXT:
+${contextText}`,
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: maxTokens,
+      }),
+    });
+
+    if (!openaiResponse.ok) {
+      const errorData = await openaiResponse.json().catch(() => ({}));
+      console.error(`[Chat API] OpenAI API error: ${openaiResponse.status}`, errorData);
+      throw new Error(`OpenAI API error: ${openaiResponse.statusText}`);
+    }
+
+    const openaiData = await openaiResponse.json();
+    const responseText = openaiData.choices[0]?.message?.content || '';
+
+    // Parse response (similar to classic mode)
+    let answer = responseText;
+    let suggestedQuestions: string[] = [];
+    let suggestedActions: SuggestedAction[] = [];
+
+    // Extract SUGGESTED_ACTIONS
+    const actionsMatch = responseText.match(/SUGGESTED_ACTIONS:\s*\[([\s\S]*?)\]/);
+    if (actionsMatch) {
+      try {
+        const actionsStr = actionsMatch[1];
+        const jsonArrayMatch = actionsStr.match(/\[([\s\S]*?)\]/);
+        if (jsonArrayMatch) {
+          const actionsJson = '[' + jsonArrayMatch[1] + ']';
+          suggestedActions = JSON.parse(actionsJson);
+        }
+        answer = answer.split('SUGGESTED_ACTIONS:')[0].trim();
+      } catch (err) {
+        console.warn('[Chat API] Failed to parse suggested actions:', err);
+      }
+    }
+
+    // Extract FOLLOW_UP_QUESTIONS
+    const followUpMatch = answer.match(/FOLLOW_UP_QUESTIONS:\s*\[([\s\S]*?)\]/);
+    if (followUpMatch) {
+      try {
+        const questionsStr = followUpMatch[1];
+        const questionMatches = (questionsStr.match(/'([^']+)'/g) || questionsStr.match(/"([^"]+)"/g)) as string[] | null;
+        if (questionMatches) {
+          suggestedQuestions = questionMatches.map((q: string) => q.slice(1, -1));
+        }
+        answer = answer.split('FOLLOW_UP_QUESTIONS:')[0].trim();
+      } catch (err) {
+        console.warn('[Chat API] Failed to parse follow-up questions:', err);
+      }
+    }
+
+    // Remove ANSWER: prefix if present
+    if (answer.startsWith('ANSWER:')) {
+      answer = answer.substring(7).trim();
+    }
+
+    // Apply post-processing guardrails
+    answer = enforceGuardrails(answer, finalResponsePrefs);
+    
+    // Format answer
+    answer = answer
+      .replace(/\n\n+/g, '\n\n')
+      .replace(/^[-•]\s+/gm, '• ')
+      .trim();
+
+    // Generate answerId
+    const answerId = `answer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+    // Store answer (optional - could extract used concepts from GraphRAG debug info)
+    try {
+      const storeResponse = await fetch(`${API_BASE_URL}/answers/store`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            answer_id: answerId,
+            question: message,
+            raw_answer: answer,
+            used_node_ids: context.focus_entities?.map((e: any) => e.node_id) || [],
+          }),
+      });
+      if (storeResponse.ok) {
+        // Log answer created event
+        try {
+          await fetch(`${API_BASE_URL}/events/activity`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'ANSWER_CREATED',
+              answer_id: answerId,
+              graph_id: graph_id || undefined,
+              payload: { conceptIdsUsed: context.focus_entities?.map((e: any) => e.node_id) || [] },
+            }),
+          }).catch(() => {}); // Swallow errors
+        } catch (err) {
+          // Ignore event logging errors
+        }
+      } else {
+        console.warn('[Chat API] Failed to store answer:', await storeResponse.text());
+      }
+    } catch (err) {
+      console.warn('[Chat API] Error storing answer:', err);
+    }
+
+    // Extract retrieval metadata for display
+    // Use retrieval_meta from backend if available (summary mode), otherwise compute
+    const backendMeta = context.retrieval_meta;
+    const retrievalMeta = backendMeta ? {
+      communities: backendMeta.communities || 0,
+      claims: backendMeta.claims || 0,
+      concepts: backendMeta.concepts || 0,
+      edges: backendMeta.edges || 0,
+      sourceBreakdown: backendMeta.sourceBreakdown || {},
+      claimIds: backendMeta.claimIds || [],
+      communityIds: backendMeta.communityIds || [],
+      topClaims: backendMeta.topClaims || [], // Include claim previews
+      intent: intent,
+      traceSteps: trace.length,
+    } : {
+      communities: context.focus_communities?.length || 0,
+      claims: context.claims?.length || 0,
+      concepts: context.focus_entities?.length || 0,
+      edges: context.subgraph?.edges?.length || 0,
+      sourceBreakdown: {},
+      claimIds: context.claims?.map((c: any) => c.claim_id) || [],
+      communityIds: context.focus_communities?.map((c: any) => c.community_id) || [],
+      topClaims: context.top_claims || context.claims?.slice(0, 5) || [], // Fallback to claims if available
+      intent: intent,
+      traceSteps: trace.length,
+    };
+
+    // Convert focus_entities to Concept format for usedNodes
+    const usedNodes: Concept[] = (context.focus_entities || []).map((e: any) => ({
+      node_id: e.node_id,
+      name: e.name,
+      domain: e.domain || '',
+      type: e.type || 'concept',
+      description: e.description,
+      tags: e.tags,
+    }));
+
+    // Extract suggestions from context if available
+    const contextSuggestions = context.suggestions || [];
+    const suggestedQuestionsFromContext = contextSuggestions.map((s: any) => s.query || s.label).slice(0, 3);
+    
+    const duration = Date.now() - startTime;
+    const isDev = process.env.NODE_ENV !== 'production';
+    
+    // Extract evidence_used from context
+    const evidenceUsed: EvidenceItem[] = context.evidence_used || [];
+
+    // Generate answer sections for inline claim alignment
+    const sections = splitAnswerIntoSections(answer);
+    const answer_sections = mapEvidenceToSections(sections, evidenceUsed);
+
+    const response: ChatResponse = {
+      answer,
+      usedNodes: usedNodes,
+      suggestedQuestions: suggestedQuestionsFromContext.length > 0 ? suggestedQuestionsFromContext : suggestedQuestions.slice(0, 3),
+      suggestedActions: suggestedActions.slice(0, 5),
+      answerId,
+      retrievalMeta, // Add retrieval metadata
+      evidenceUsed: evidenceUsed.length > 0 ? evidenceUsed : undefined,
+      answer_sections,
+      ...(isDev && {
+        meta: {
+          mode: 'graphrag',
+          duration_ms: duration,
+          intent: intent,
+          traceSteps: trace.length,
+        },
+      }),
+    };
+
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error('GraphRAG Chat API error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Internal server error';
+    return NextResponse.json(
+      {
+        error: errorMessage,
+        answer: `I encountered an error while processing your question in GraphRAG mode: ${errorMessage}. ${errorMessage.includes('Backend connection') ? 'Please make sure the backend server is running on port 8000.' : 'Please try again.'}`,
+        usedNodes: [],
+        suggestedQuestions: [],
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Split answer text into 3-7 sections for inline claim alignment.
+ * Uses paragraph breaks as natural section boundaries.
+ */
+function splitAnswerIntoSections(answer: string): Array<{ id: string; heading?: string; text: string }> {
+  // Split by double newlines (paragraph breaks)
+  const paragraphs = answer.split(/\n\n+/).filter(p => p.trim().length > 0);
+  
+  if (paragraphs.length === 0) {
+    return [{ id: 'section-0', text: answer }];
+  }
+  
+  // Target 3-7 sections
+  const targetSections = Math.min(Math.max(3, Math.ceil(paragraphs.length / 2)), 7);
+  
+  // If we have fewer paragraphs than target, use one paragraph per section
+  if (paragraphs.length <= targetSections) {
+    return paragraphs.map((p, idx) => ({
+      id: `section-${idx}`,
+      text: p.trim(),
+    }));
+  }
+  
+  // Otherwise, merge paragraphs to reach target count
+  const sections: Array<{ id: string; heading?: string; text: string }> = [];
+  const paragraphsPerSection = Math.ceil(paragraphs.length / targetSections);
+  
+  for (let i = 0; i < paragraphs.length; i += paragraphsPerSection) {
+    const sectionParagraphs = paragraphs.slice(i, i + paragraphsPerSection);
+    const sectionText = sectionParagraphs.join('\n\n').trim();
+    
+    // Try to extract a heading from first line if it looks like one (short, ends with colon, or is a question)
+    let heading: string | undefined;
+    const firstLine = sectionText.split('\n')[0];
+    if (firstLine.length < 60 && (firstLine.endsWith(':') || firstLine.endsWith('?'))) {
+      heading = firstLine;
+    }
+    
+    sections.push({
+      id: `section-${sections.length}`,
+      heading,
+      text: sectionText,
+    });
+  }
+  
+  return sections;
+}
+
+/**
+ * Map evidence items to answer sections using heuristic keyword matching.
+ * Returns sections with supporting_evidence_ids populated.
+ */
+function mapEvidenceToSections(
+  sections: Array<{ id: string; heading?: string; text: string }>,
+  evidenceItems: EvidenceItem[]
+): AnswerSection[] {
+  if (evidenceItems.length === 0) {
+    return sections.map(s => ({
+      ...s,
+      supporting_evidence_ids: [],
+    }));
+  }
+  
+  // Build keyword index from evidence titles and snippets
+  const evidenceKeywords: Map<number, Set<string>> = new Map();
+  evidenceItems.forEach((item, idx) => {
+    const keywords = new Set<string>();
+    if (item.title) {
+      item.title.toLowerCase().split(/\s+/).forEach(w => {
+        if (w.length > 3) keywords.add(w);
+      });
+    }
+    if (item.snippet) {
+      item.snippet.toLowerCase().split(/\s+/).forEach(w => {
+        if (w.length > 3) keywords.add(w);
+      });
+    }
+    evidenceKeywords.set(idx, keywords);
+  });
+  
+  // Map sections to evidence
+  return sections.map(section => {
+    const sectionTextLower = section.text.toLowerCase();
+    const sectionWords = new Set(sectionTextLower.split(/\s+/).filter(w => w.length > 3));
+    
+    // Score each evidence item by keyword overlap
+    const scores: Array<{ idx: number; score: number }> = [];
+    evidenceItems.forEach((item, idx) => {
+      const keywords = evidenceKeywords.get(idx) || new Set();
+      let score = 0;
+      sectionWords.forEach(word => {
+        if (keywords.has(word)) score += 1;
+      });
+      // Bonus if evidence title appears in section text
+      if (item.title && sectionTextLower.includes(item.title.toLowerCase())) {
+        score += 5;
+      }
+      if (score > 0) {
+        scores.push({ idx, score });
+      }
+    });
+    
+    // Sort by score and take top 2-3
+    scores.sort((a, b) => b.score - a.score);
+    const topEvidenceIndices = scores.slice(0, 3).map(s => s.idx);
+    
+    // If no keyword match, fallback: distribute evidence evenly across sections
+    if (topEvidenceIndices.length === 0 && evidenceItems.length > 0) {
+      const sectionIdx = sections.indexOf(section);
+      const evidencePerSection = Math.ceil(evidenceItems.length / sections.length);
+      const startIdx = sectionIdx * evidencePerSection;
+      const endIdx = Math.min(startIdx + evidencePerSection, evidenceItems.length);
+      for (let i = startIdx; i < endIdx && i < startIdx + 3; i++) {
+        topEvidenceIndices.push(i);
+      }
+    }
+    
+    // Get evidence IDs (prefer resource_id, fallback to id or index-based)
+    const supporting_evidence_ids = topEvidenceIndices
+      .map(idx => {
+        const item = evidenceItems[idx];
+        return item.resource_id || item.id || `evidence-${idx}`;
+      })
+      .filter((id, idx, arr) => arr.indexOf(id) === idx); // dedupe
+    
+    return {
+      ...section,
+      supporting_evidence_ids,
+    };
+  });
+}
+
+/**
+ * Build context text from structured context payload.
+ */
+function buildContextTextFromStructured(context: any, intent: string): string {
+  const parts: string[] = [];
+  
+  // Add communities section (summary mode: names only, max 3, no summaries)
+  if (context.focus_communities && context.focus_communities.length > 0) {
+    parts.push("## Community Summaries (Global Memory)");
+    for (const comm of context.focus_communities.slice(0, 3)) {
+      parts.push(`\n### ${comm.name || comm.community_id}`);
+      // Summary mode: no long summary text, just names
+    }
+    parts.push("");
+  }
+  
+  // Add claims section (summary mode: max 5, already trimmed)
+  if (context.claims && context.claims.length > 0) {
+    parts.push("## Supporting Claims");
+    for (const claim of context.claims.slice(0, 5)) {
+      parts.push(`\n- ${claim.text} (confidence: ${(claim.confidence || 0.5).toFixed(2)})`);
+      if (claim.source_id) {
+        parts.push(`  Source: ${claim.source_id}`);
+      }
+    }
+    parts.push("");
+  }
+  
+  // Add concepts section (summary mode: max 5, no descriptions)
+  if (context.focus_entities && context.focus_entities.length > 0) {
+    parts.push("## Relevant Concepts");
+    for (const concept of context.focus_entities.slice(0, 5)) {
+      parts.push(`\n### ${concept.name}`);
+      // Summary mode: no descriptions, just names
+      if (concept.domain) {
+        parts.push(`Domain: ${concept.domain}`);
+      }
+      if (concept.type) {
+        parts.push(`Type: ${concept.type}`);
+      }
+    }
+    parts.push("");
+  }
+  
+  // Intent-specific sections
+  if (intent === 'TIMELINE' && context.timeline_items) {
+    parts.push("## Timeline");
+    for (const item of context.timeline_items.slice(0, 15)) {
+      parts.push(`\n[${item.date || 'unknown'}] ${item.text}`);
+    }
+    parts.push("");
+  }
+  
+  if (intent === 'CAUSAL_CHAIN' && context.causal_paths) {
+    parts.push("## Causal Paths");
+    for (const path of context.causal_paths.slice(0, 3)) {
+      parts.push(`\nPath with ${path.nodes?.length || 0} nodes, ${path.edges?.length || 0} edges`);
+      if (path.supporting_claim_ids) {
+        parts.push(`Supported by ${path.supporting_claim_ids.length} claims`);
+      }
+    }
+    parts.push("");
+  }
+  
+  if (intent === 'COMPARE' && context.compare) {
+    parts.push("## Comparison");
+    parts.push(`\nComparing: ${context.compare.A?.name || 'A'} vs ${context.compare.B?.name || 'B'}`);
+    if (context.compare.overlaps?.shared_concepts) {
+      parts.push(`\nShared concepts: ${context.compare.overlaps.shared_concepts.length}`);
+    }
+    parts.push("");
+  }
+  
+  if (intent === 'EVIDENCE_CHECK' && context.evidence) {
+    parts.push("## Evidence");
+    if (context.evidence.supporting) {
+      parts.push(`\nSupporting claims: ${context.evidence.supporting.length}`);
+    }
+    if (context.evidence.conflicting) {
+      parts.push(`Conflicting claims: ${context.evidence.conflicting.length}`);
+    }
+    if (context.evidence.sources) {
+      parts.push(`Unique sources: ${context.evidence.sources.length}`);
+    }
+    parts.push("");
+  }
+  
+  // Summary mode: no chunks by default
+  // Chunks are omitted in summary mode to reduce payload size
+  
+  return parts.join("\n");
 }
 

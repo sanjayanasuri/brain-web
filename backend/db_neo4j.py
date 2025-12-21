@@ -50,46 +50,46 @@ def _get_driver():
 def get_neo4j_session() -> Generator:
     """
     FastAPI dependency that yields a Neo4j session.
-    Handles connection errors gracefully by retrying with a fresh session.
+    Handles connection errors gracefully by ensuring proper cleanup.
     """
     driver = _get_driver()
     session = None
-    max_retries = 2
-    for attempt in range(max_retries):
+    try:
+        # In demo mode, default to READ sessions unless explicitly allowed.
+        if DEMO_MODE and not DEMO_ALLOW_WRITES:
+            try:
+                # neo4j python driver exports READ_ACCESS in many versions
+                from neo4j import READ_ACCESS  # type: ignore
+                session = driver.session(default_access_mode=READ_ACCESS)
+            except Exception:
+                # Fall back to string mode (works in some driver versions)
+                session = driver.session(default_access_mode="READ")
+        else:
+            session = driver.session()
+        
+        # Yield the session - exceptions during usage will propagate but be handled by finally
+        yield session
+        
+    except Exception:
+        # If any exception occurs (session creation or usage), ensure driver is reset
+        # This helps recover from connection failures
+        global _driver
         try:
-            # In demo mode, default to READ sessions unless explicitly allowed.
-            if DEMO_MODE and not DEMO_ALLOW_WRITES:
-                try:
-                    # neo4j python driver exports READ_ACCESS in many versions
-                    from neo4j import READ_ACCESS  # type: ignore
-                    session = driver.session(default_access_mode=READ_ACCESS)
-                except Exception:
-                    # Fall back to string mode (works in some driver versions)
-                    session = driver.session(default_access_mode="READ")
-            else:
-                session = driver.session()
-            yield session
-            return
-        except Exception as e:
-            # If session creation fails, try to get a fresh driver
-            if attempt < max_retries - 1:
-                global _driver
-                try:
-                    if _driver:
-                        _driver.close()
-                except Exception:
-                    pass
-                _driver = None
-                driver = _get_driver()
-            else:
-                # Last attempt failed, raise the error
-                raise
-        finally:
-            if session:
-                try:
-                    session.close()
-                except Exception:
-                    pass
+            if _driver:
+                _driver.close()
+        except Exception:
+            pass
+        _driver = None
+        # Re-raise the exception so FastAPI can handle it
+        raise
+    finally:
+        # Always close the session, even if there was an exception
+        if session:
+            try:
+                session.close()
+            except Exception:
+                # Ignore errors during cleanup to prevent masking the original error
+                pass
 
 
 # Export driver for scripts that need direct access

@@ -33,6 +33,12 @@ export interface GraphData {
     source: string;
     target: string;
     predicate: string;
+    relationship_status?: string;
+    relationship_confidence?: number;
+    relationship_method?: string;
+    rationale?: string;
+    relationship_source_id?: string;
+    relationship_chunk_id?: string;
   }>;
 }
 
@@ -41,8 +47,11 @@ export interface GraphData {
 export interface GraphSummary {
   graph_id: string;
   name?: string | null;
+  description?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  node_count?: number;
+  edge_count?: number;
 }
 
 export interface GraphListResponse {
@@ -116,7 +125,7 @@ export async function listBranches(): Promise<BranchListResponse> {
     if (!res.ok) {
       // In demo mode, return default branch if endpoint is blocked
       if (res.status === 403 || res.status === 404) {
-        return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', name: 'Main' }] };
+        return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', graph_id: 'demo', name: 'Main' }] };
       }
       throw new Error(`Failed to list branches: ${res.statusText}`);
     }
@@ -124,7 +133,7 @@ export async function listBranches(): Promise<BranchListResponse> {
   } catch (error) {
     console.error('Error fetching branches:', error);
     // Return default branch as fallback
-    return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', name: 'Main' }] };
+    return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', graph_id: 'demo', name: 'Main' }] };
   }
 }
 
@@ -313,6 +322,12 @@ export async function getNeighborsWithRelationships(nodeId: string): Promise<Arr
   concept: Concept;
   predicate: string;
   is_outgoing: boolean;
+  relationship_status?: string;
+  relationship_confidence?: number;
+  relationship_method?: string;
+  relationship_rationale?: string;
+  relationship_source_id?: string;
+  relationship_chunk_id?: string;
 }>> {
   const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/neighbors-with-relationships`);
   if (!response.ok) {
@@ -345,7 +360,7 @@ export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): 
       // Fetch neighbors with relationships
       const neighborsWithRels = await getNeighborsWithRelationships(nodeId);
       
-      for (const { concept, predicate, is_outgoing } of neighborsWithRels) {
+      for (const { concept, predicate, is_outgoing, relationship_status, relationship_confidence, relationship_method, relationship_rationale, relationship_source_id, relationship_chunk_id } of neighborsWithRels) {
         nodes.set(concept.node_id, concept);
         
         // Create link with proper direction and predicate
@@ -359,6 +374,12 @@ export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): 
             source: is_outgoing ? nodeId : concept.node_id,
             target: is_outgoing ? concept.node_id : nodeId,
             predicate,
+            relationship_status,
+            relationship_confidence,
+            relationship_method,
+            rationale: relationship_rationale,
+            relationship_source_id,
+            relationship_chunk_id,
           });
         }
 
@@ -382,6 +403,7 @@ export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): 
 
 /**
  * Fetch all graph data (nodes and relationships)
+ * NOTE: For large graphs, consider using getGraphOverview instead.
  */
 export async function getAllGraphData(): Promise<GraphData> {
   try {
@@ -396,12 +418,141 @@ export async function getAllGraphData(): Promise<GraphData> {
         source: link.source_id,
         target: link.target_id,
         predicate: link.predicate,
+        relationship_status: link.status,
+        relationship_confidence: link.confidence,
+        relationship_method: link.method,
+        rationale: link.rationale,
+        relationship_source_id: link.relationship_source_id,
+        relationship_chunk_id: link.chunk_id,
       })),
     };
   } catch (error) {
     console.error('Error fetching graph data:', error);
     // Return empty graph data instead of throwing to prevent UI crashes
     return { nodes: [], links: [] };
+  }
+}
+
+/**
+ * Fetch graph overview (lightweight subset for fast loading)
+ */
+export async function getGraphOverview(
+  graphId: string,
+  limitNodes: number = 300,
+  limitEdges: number = 600
+): Promise<GraphData & { meta?: { node_count?: number; edge_count?: number; sampled?: boolean } }> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/overview?limit_nodes=${limitNodes}&limit_edges=${limitEdges}`
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to fetch graph overview: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return {
+      nodes: data.nodes || [],
+      links: (data.edges || []).map((link: any) => ({
+        source: link.source_id,
+        target: link.target_id,
+        predicate: link.predicate,
+        relationship_status: link.status,
+        relationship_confidence: link.confidence,
+        relationship_method: link.method,
+        rationale: link.rationale,
+        relationship_source_id: link.relationship_source_id,
+        relationship_chunk_id: link.chunk_id,
+      })),
+      meta: data.meta,
+    };
+  } catch (error) {
+    console.error('Error fetching graph overview:', error);
+    return { nodes: [], links: [], meta: { sampled: false } };
+  }
+}
+
+/**
+ * Fetch neighbors of a concept within a specific graph
+ */
+export async function getGraphNeighbors(
+  graphId: string,
+  conceptId: string,
+  hops: number = 1,
+  limit: number = 80
+): Promise<{
+  center: Concept;
+  nodes: Concept[];
+  edges: Array<{
+    source_id: string;
+    target_id: string;
+    predicate: string;
+    status?: string;
+    confidence?: number;
+    method?: string;
+    rationale?: string;
+    relationship_source_id?: string;
+    chunk_id?: string;
+  }>;
+}> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/neighbors?concept_id=${encodeURIComponent(conceptId)}&hops=${hops}&limit=${limit}`
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to fetch neighbors: ${response.statusText}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching neighbors:', error);
+    throw error;
+  }
+}
+
+/**
+ * List concepts in a graph with filtering, sorting, and pagination
+ */
+export interface GraphConceptItem {
+  concept_id: string;
+  name: string;
+  domain: string;
+  type: string;
+  degree?: number;
+}
+
+export interface GraphConceptsResponse {
+  items: GraphConceptItem[];
+  total: number;
+}
+
+export async function listGraphConcepts(
+  graphId: string,
+  options?: {
+    query?: string;
+    domain?: string;
+    type?: string;
+    sort?: 'alphabetical' | 'degree' | 'recent';
+    limit?: number;
+    offset?: number;
+  }
+): Promise<GraphConceptsResponse> {
+  try {
+    const params = new URLSearchParams();
+    if (options?.query) params.set('query', options.query);
+    if (options?.domain) params.set('domain', options.domain);
+    if (options?.type) params.set('type', options.type);
+    if (options?.sort) params.set('sort', options.sort);
+    if (options?.limit) params.set('limit', options.limit.toString());
+    if (options?.offset) params.set('offset', options.offset.toString());
+    
+    const response = await fetch(
+      `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/concepts?${params.toString()}`
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to fetch concepts: ${response.statusText}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching graph concepts:', error);
+    throw error;
   }
 }
 
@@ -424,6 +575,54 @@ export async function createRelationshipByIds(
   if (!response.ok) {
     throw new Error(`Failed to create relationship: ${response.statusText}`);
   }
+}
+
+/**
+ * Propose a relationship between two concepts (creates PROPOSED status)
+ */
+export async function proposeRelationship(
+  sourceId: string,
+  targetId: string,
+  predicate: string,
+  rationale?: string
+): Promise<{ status: string; message: string; exists: boolean }> {
+  const params = new URLSearchParams({
+    source_id: sourceId,
+    target_id: targetId,
+    predicate: predicate,
+  });
+  if (rationale) {
+    params.append('rationale', rationale);
+  }
+  const response = await fetch(`${API_BASE_URL}/concepts/relationship/propose?${params}`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to propose relationship: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Check if a relationship exists between two concepts
+ */
+export async function checkRelationshipExists(
+  sourceId: string,
+  targetId: string,
+  predicate: string
+): Promise<boolean> {
+  const params = new URLSearchParams({
+    source_id: sourceId,
+    target_id: targetId,
+    predicate: predicate,
+  });
+  const response = await fetch(`${API_BASE_URL}/concepts/relationship/check?${params}`);
+  if (!response.ok) {
+    throw new Error(`Failed to check relationship: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.exists;
 }
 
 /**
@@ -482,6 +681,111 @@ export async function deleteRelationship(
 }
 
 /**
+ * Search for concepts by name (keyword search)
+ */
+export async function searchConcepts(
+  query: string,
+  graphId?: string,
+  limit: number = 20
+): Promise<{
+  query: string;
+  results: Concept[];
+  count: number;
+}> {
+  const params = new URLSearchParams();
+  params.set('q', query);
+  if (graphId) {
+    params.set('graph_id', graphId);
+  }
+  params.set('limit', limit.toString());
+  const response = await fetch(`${API_BASE_URL}/concepts/search?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Failed to search concepts: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Search for resources by title or caption
+ */
+export async function searchResources(
+  query: string,
+  graphId?: string,
+  limit: number = 20
+): Promise<Resource[]> {
+  const params = new URLSearchParams();
+  params.set('query', query);
+  if (graphId) {
+    params.set('graph_id', graphId);
+  }
+  params.set('limit', limit.toString());
+  const response = await fetch(`${API_BASE_URL}/resources/search?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(`Failed to search resources: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Claim type
+ */
+export interface Claim {
+  claim_id: string;
+  text: string;
+  confidence: number;
+  source_id?: string | null;
+  source_span?: string | null;
+  method?: string | null;
+  chunk_id?: string | null;
+  source_type?: string | null;
+  source_url?: string | null;
+  doc_type?: string | null;
+  company_ticker?: string | null;
+}
+
+/**
+ * Source type
+ */
+export interface Source {
+  doc_id: string;
+  source_type: string;
+  external_id?: string | null;
+  url?: string | null;
+  doc_type?: string | null;
+  company_ticker?: string | null;
+  published_at?: number | null;
+  metadata?: any;
+  chunks?: Array<{
+    chunk_id: string;
+    chunk_index: number;
+    text_preview: string;
+  }>;
+  claim_count: number;
+}
+
+/**
+ * Get all claims that mention a concept
+ */
+export async function getClaimsForConcept(nodeId: string, limit: number = 50): Promise<Claim[]> {
+  const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/claims?limit=${limit}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch claims: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Get all sources (documents/chunks) that mention a concept
+ */
+export async function getSourcesForConcept(nodeId: string, limit: number = 100): Promise<Source[]> {
+  const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/sources?limit=${limit}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch sources: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
  * Cleanup test data
  */
 export async function cleanupTestData(): Promise<{ message: string }> {
@@ -521,34 +825,6 @@ export interface LectureSegment {
   lecture_title?: string | null;  // Title of the lecture this segment belongs to
 }
 
-/**
- * Lecture ingestion response type
- */
-export interface NotionSyncHistory {
-  last_sync: string | null;
-  recent_pages: Array<{
-    page_id: string;
-    page_title: string;
-    last_ingested_at: string | null;
-    lecture_ids: string[];
-    status: 'synced' | 'not_synced';
-  }>;
-  total_pages?: number;
-}
-
-export async function getNotionSyncHistory(limit: number = 10): Promise<NotionSyncHistory> {
-  const res = await fetch(`${API_BASE_URL}/admin/notion/sync-history?limit=${limit}`);
-  if (!res.ok) throw new Error('Failed to load Notion sync history');
-  return res.json();
-}
-
-export async function triggerNotionSync(forceFull: boolean = false): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/admin/sync-notion?force_full=${forceFull}`, {
-    method: 'POST',
-  });
-  if (!res.ok) throw new Error('Failed to trigger Notion sync');
-}
-
 export interface LectureIngestResult {
   lecture_id: string;
   nodes_created: Concept[];
@@ -559,6 +835,10 @@ export interface LectureIngestResult {
     predicate: string;
   }>;
   segments: LectureSegment[];
+  created_concept_ids?: string[];
+  updated_concept_ids?: string[];
+  created_relationship_count?: number;
+  created_claim_ids?: string[];
 }
 
 /**
@@ -758,6 +1038,27 @@ export interface UserProfile {
   learning_preferences: Record<string, any>;
 }
 
+export interface ReminderPreferences {
+  weekly_digest: {
+    enabled: boolean;
+    day_of_week: number; // 1-7 (Monday=1, Sunday=7)
+    hour: number; // 0-23
+  };
+  review_queue: {
+    enabled: boolean;
+    cadence_days: number;
+  };
+  finance_stale: {
+    enabled: boolean;
+    cadence_days: number;
+  };
+}
+
+export interface UIPreferences {
+  active_lens: 'NONE' | 'LEARNING' | 'FINANCE';
+  reminders?: ReminderPreferences;
+}
+
 // Notion config – simple version
 export interface NotionConfig {
   database_ids: string[];      // which DBs to sync
@@ -834,6 +1135,24 @@ export async function updateUserProfile(
   return res.json();
 }
 
+export async function getUIPreferences(): Promise<UIPreferences> {
+  const res = await fetch(`${API_BASE_URL}/preferences/ui`);
+  if (!res.ok) throw new Error('Failed to load UI preferences');
+  return res.json();
+}
+
+export async function updateUIPreferences(
+  prefs: UIPreferences,
+): Promise<UIPreferences> {
+  const res = await fetch(`${API_BASE_URL}/preferences/ui`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) throw new Error('Failed to update UI preferences');
+  return res.json();
+}
+
 // --- Notion config (align this with whatever backend you actually add) ---
 
 export async function getNotionConfig(): Promise<NotionConfig> {
@@ -864,6 +1183,8 @@ export interface Resource {
   mime_type?: string | null;
   caption?: string | null;
   source?: string | null;
+  metadata?: Record<string, any> | null;
+  created_at?: string | null; // ISO format timestamp
 }
 
 /**
@@ -899,6 +1220,146 @@ export async function uploadResourceForConcept(
     throw new Error(`Failed to upload resource: ${res.statusText}`);
   }
   return res.json();
+}
+
+/**
+ * Fetch confusions and pitfalls for a concept using Browser Use skill
+ */
+export async function fetchConfusionsForConcept(
+  query: string,
+  conceptId?: string,
+  sources: string[] = ['stackoverflow', 'github', 'docs', 'blogs'],
+  limit: number = 8,
+): Promise<Resource> {
+  const res = await fetch(`${API_BASE_URL}/resources/fetch/confusions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      query,
+      concept_id: conceptId,
+      sources,
+      limit,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to fetch confusions: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+// --- Finance API helpers ---
+
+export interface FinanceTrackingConfig {
+  ticker: string;
+  enabled: boolean;
+  cadence: 'daily' | 'weekly' | 'monthly';
+}
+
+/**
+ * Fetch a finance snapshot for a ticker
+ */
+export async function fetchFinanceSnapshot(
+  ticker: string,
+  conceptId?: string,
+  newsWindowDays: number = 7,
+  maxNewsItems: number = 5,
+): Promise<Resource> {
+  const res = await fetch(`${API_BASE_URL}/finance/snapshot`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ticker,
+      concept_id: conceptId,
+      news_window_days: newsWindowDays,
+      max_news_items: maxNewsItems,
+    }),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to fetch finance snapshot: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Get tracking configuration for a ticker
+ */
+export async function getFinanceTracking(ticker: string): Promise<FinanceTrackingConfig | null> {
+  const res = await fetch(`${API_BASE_URL}/finance/tracking?ticker=${encodeURIComponent(ticker)}`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      return null; // No tracking config exists
+    }
+    throw new Error(`Failed to get finance tracking: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Set tracking configuration for a ticker
+ */
+export async function setFinanceTracking(config: FinanceTrackingConfig): Promise<FinanceTrackingConfig> {
+  const res = await fetch(`${API_BASE_URL}/finance/tracking`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(config),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to set finance tracking: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+/**
+ * List all tracked tickers
+ */
+export async function listFinanceTracking(): Promise<FinanceTrackingConfig[]> {
+  const res = await fetch(`${API_BASE_URL}/finance/tracking/list`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to list finance tracking: ${res.statusText} - ${errorText}`);
+  }
+  const data = await res.json();
+  return data.tickers || [];
+}
+
+/**
+ * Latest snapshot metadata for a ticker
+ */
+export interface LatestSnapshotMetadata {
+  ticker: string;
+  resource_id?: string;
+  snapshot_fetched_at?: string;
+  market_as_of?: string;
+  company_name?: string;
+}
+
+/**
+ * Get latest snapshot metadata for multiple tickers
+ */
+export async function getLatestFinanceSnapshots(tickers: string[]): Promise<LatestSnapshotMetadata[]> {
+  if (tickers.length === 0) {
+    return [];
+  }
+  const tickersParam = tickers.join(',');
+  const res = await fetch(`${API_BASE_URL}/finance/snapshots/latest?tickers=${encodeURIComponent(tickersParam)}`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to get latest snapshots: ${res.statusText} - ${errorText}`);
+  }
+  const data = await res.json();
+  return data.snapshots || [];
 }
 
 // --- Teaching Style API helpers ---
@@ -952,6 +1413,418 @@ export interface GapsOverview {
 export async function getGapsOverview(limit: number = 10): Promise<GapsOverview> {
   const res = await fetch(`${API_BASE_URL}/gaps/overview?limit=${limit}`);
   if (!res.ok) throw new Error('Failed to load gaps overview');
+  return res.json();
+}
+
+// --- Suggestions API helpers ---
+
+export type SuggestionType = 'GAP_DEFINE' | 'GAP_EVIDENCE' | 'REVIEW_RELATIONSHIPS' | 'STALE_EVIDENCE' | 'RECENT_LOW_COVERAGE' | 'COVERAGE_LOW' | 'EVIDENCE_STALE' | 'GRAPH_HEALTH_ISSUE' | 'REVIEW_BACKLOG';
+
+export type SuggestionActionKind = 'OPEN_CONCEPT' | 'OPEN_REVIEW' | 'FETCH_EVIDENCE' | 'OPEN_GAPS' | 'OPEN_DIGEST';
+
+export type SuggestionSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
+
+export interface SuggestionAction {
+  label?: string;
+  kind: SuggestionActionKind;
+  href?: string;
+  payload?: any;
+}
+
+export interface Suggestion {
+  id: string;
+  type: SuggestionType;
+  title: string;
+  rationale: string;
+  priority: number;
+  concept_id?: string;
+  concept_name?: string;
+  resource_id?: string;
+  graph_id?: string;
+  // Quality suggestion fields (optional for backward compatibility)
+  kind?: string;
+  explanation?: string;  // 1-sentence why (for quality suggestions)
+  severity?: SuggestionSeverity;  // LOW | MEDIUM (no HIGH in v1)
+  primary_action?: SuggestionAction;
+  secondary_action?: SuggestionAction;
+  action: SuggestionAction;
+}
+
+export async function getSuggestions(
+  limit: number = 20,
+  graphId?: string,
+  recentConcepts?: string[],
+  conceptId?: string
+): Promise<Suggestion[]> {
+  const params = new URLSearchParams();
+  params.set('limit', limit.toString());
+  if (graphId) {
+    params.set('graph_id', graphId);
+  }
+  if (recentConcepts && recentConcepts.length > 0) {
+    params.set('recent_concepts', recentConcepts.join(','));
+  }
+  if (conceptId) {
+    params.set('concept_id', conceptId);
+  }
+  const res = await fetch(`${API_BASE_URL}/suggestions?${params.toString()}`);
+  if (!res.ok) throw new Error('Failed to load suggestions');
+  return res.json();
+}
+
+// --- Review API helpers ---
+
+export interface RelationshipReviewItem {
+  src_node_id: string;
+  src_name: string;
+  dst_node_id: string;
+  dst_name: string;
+  rel_type: string;
+  confidence: number;
+  method: string;
+  rationale?: string | null;
+  source_id?: string | null;
+  chunk_id?: string | null;
+  claim_id?: string | null;
+  model_version?: string | null;
+  created_at?: number | null;
+  updated_at?: number | null;
+  reviewed_at?: number | null;
+  reviewed_by?: string | null;
+}
+
+export interface RelationshipReviewListResponse {
+  relationships: RelationshipReviewItem[];
+  total: number;
+  graph_id: string;
+  status: string;
+}
+
+export interface RelationshipReviewActionResponse {
+  status: string;
+  action: string;
+  count: number;
+  graph_id: string;
+}
+
+export async function listProposedRelationships(
+  graphId: string,
+  status: string = 'PROPOSED',
+  limit: number = 50,
+  offset: number = 0,
+  ingestionRunId?: string
+): Promise<RelationshipReviewListResponse> {
+  const params = new URLSearchParams({
+    graph_id: graphId,
+    status,
+    limit: limit.toString(),
+    offset: offset.toString(),
+  });
+  if (ingestionRunId) {
+    params.append('ingestion_run_id', ingestionRunId);
+  }
+  const res = await fetch(
+    `${API_BASE_URL}/review/relationships?${params.toString()}`
+  );
+  if (!res.ok) throw new Error('Failed to load relationships for review');
+  return res.json();
+}
+
+export async function acceptRelationships(
+  graphId: string | null,
+  edges: Array<{ src_node_id: string; dst_node_id: string; rel_type: string }>,
+  reviewedBy?: string
+): Promise<RelationshipReviewActionResponse> {
+  const res = await fetch(`${API_BASE_URL}/review/relationships/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graph_id: graphId,
+      edges,
+      reviewed_by: reviewedBy,
+    }),
+  });
+  if (!res.ok) throw new Error('Failed to accept relationships');
+  return res.json();
+}
+
+export async function rejectRelationships(
+  graphId: string | null,
+  edges: Array<{ src_node_id: string; dst_node_id: string; rel_type: string }>,
+  reviewedBy?: string
+): Promise<RelationshipReviewActionResponse> {
+  const res = await fetch(`${API_BASE_URL}/review/relationships/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graph_id: graphId,
+      edges,
+      reviewed_by: reviewedBy,
+    }),
+  });
+  if (!res.ok) throw new Error('Failed to reject relationships');
+  return res.json();
+}
+
+export async function editRelationship(
+  graphId: string | null,
+  srcNodeId: string,
+  dstNodeId: string,
+  oldRelType: string,
+  newRelType: string,
+  reviewedBy?: string
+): Promise<RelationshipReviewActionResponse> {
+  const res = await fetch(`${API_BASE_URL}/review/relationships/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graph_id: graphId,
+      src_node_id: srcNodeId,
+      dst_node_id: dstNodeId,
+      old_rel_type: oldRelType,
+      new_rel_type: newRelType,
+      reviewed_by: reviewedBy,
+    }),
+  });
+  if (!res.ok) throw new Error('Failed to edit relationship');
+  return res.json();
+}
+
+// ---------- Ingestion Run APIs ----------
+
+export interface IngestionRun {
+  run_id: string;
+  graph_id: string;
+  source_type: string;
+  source_label?: string | null;
+  status: string;
+  started_at: string;
+  completed_at?: string | null;
+  summary_counts?: {
+    concepts_created?: number;
+    concepts_updated?: number;
+    resources_created?: number;
+    relationships_proposed?: number;
+  } | null;
+  error_count?: number | null;
+  errors?: string[] | null;
+  undone_at?: string | null;
+  undo_mode?: string | null;
+  undo_summary?: {
+    archived?: {
+      relationships?: number;
+      concepts?: number;
+      resources?: number;
+    };
+    skipped?: {
+      concepts?: Array<{ concept_id: string; reason: string }>;
+      resources?: Array<{ resource_id: string; reason: string }>;
+      relationships?: Array<{ relationship_id: string; reason: string }>;
+    };
+  } | null;
+  restored_at?: string | null;
+}
+
+export interface IngestionRunChanges {
+  run: IngestionRun;
+  concepts_created: Array<{
+    concept_id: string;
+    name: string;
+    domain: string;
+    type: string;
+  }>;
+  concepts_updated: Array<{
+    concept_id: string;
+    name: string;
+    domain: string;
+    type: string;
+  }>;
+  resources_created: Array<{
+    resource_id: string;
+    title: string;
+    source_type: string;
+    concept_id?: string | null;
+  }>;
+  relationships_proposed: Array<{
+    relationship_id: string;
+    from_concept_id: string;
+    to_concept_id: string;
+    predicate: string;
+    status: string;
+  }>;
+}
+
+export async function listIngestionRuns(
+  limit: number = 20,
+  offset: number = 0
+): Promise<IngestionRun[]> {
+  const res = await fetch(
+    `${API_BASE_URL}/ingestion/runs?limit=${limit}&offset=${offset}`
+  );
+  if (!res.ok) throw new Error('Failed to load ingestion runs');
+  return res.json();
+}
+
+export async function getIngestionRun(runId: string): Promise<IngestionRun> {
+  const res = await fetch(`${API_BASE_URL}/ingestion/runs/${encodeURIComponent(runId)}`);
+  if (!res.ok) throw new Error('Failed to load ingestion run');
+  return res.json();
+}
+
+export async function getIngestionRunChanges(runId: string): Promise<IngestionRunChanges> {
+  const res = await fetch(`${API_BASE_URL}/ingestion/runs/${encodeURIComponent(runId)}/changes`);
+  if (!res.ok) throw new Error('Failed to load ingestion run changes');
+  return res.json();
+}
+
+export interface UndoRunRequest {
+  mode: 'SAFE' | 'RELATIONSHIPS_ONLY';
+}
+
+export interface UndoRunResponse {
+  run_id: string;
+  archived: {
+    relationships: number;
+    concepts: number;
+    resources: number;
+  };
+  skipped: {
+    concepts: Array<{ concept_id: string; reason: string }>;
+    resources: Array<{ resource_id: string; reason: string }>;
+    relationships: Array<{ relationship_id: string; reason: string }>;
+  };
+}
+
+export async function undoIngestionRun(
+  runId: string,
+  mode: 'SAFE' | 'RELATIONSHIPS_ONLY' = 'SAFE'
+): Promise<UndoRunResponse> {
+  const res = await fetch(`${API_BASE_URL}/ingestion/runs/${encodeURIComponent(runId)}/undo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to undo ingestion run: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+export interface RestoreRunResponse {
+  run_id: string;
+  restored: {
+    relationships: number;
+    concepts: number;
+    resources: number;
+  };
+  skipped: {
+    concepts: Array<{ concept_id: string; reason: string }>;
+    resources: Array<{ resource_id: string; reason: string }>;
+    relationships: Array<{ relationship_id: string; reason: string }>;
+  };
+}
+
+export async function restoreIngestionRun(runId: string): Promise<RestoreRunResponse> {
+  const res = await fetch(`${API_BASE_URL}/ingestion/runs/${encodeURIComponent(runId)}/restore`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to restore ingestion run: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+// ---- Suggested Paths ----
+
+export interface PathStep {
+  concept_id: string;
+  name: string;
+  domain?: string;
+  type?: string;
+}
+
+export interface SuggestedPath {
+  path_id: string;
+  title: string;
+  rationale: string;
+  steps: PathStep[];
+  start_concept_id: string;
+}
+
+export async function getSuggestedPaths(
+  graphId: string,
+  conceptId?: string,
+  limit: number = 10,
+  lens: 'NONE' | 'LEARNING' | 'FINANCE' = 'NONE'
+): Promise<SuggestedPath[]> {
+  const params = new URLSearchParams();
+  params.set('graph_id', graphId);
+  if (conceptId) {
+    params.set('concept_id', conceptId);
+  }
+  params.set('limit', limit.toString());
+  params.set('lens', lens);
+  
+  const res = await fetch(`${API_BASE_URL}/paths/suggested?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Failed to get suggested paths: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+// --- Quality API helpers ---
+
+export interface ConceptQuality {
+  concept_id: string;
+  coverage_score: number;
+  coverage_breakdown: {
+    has_description: boolean;
+    evidence_count: number;
+    degree: number;
+    reviewed_ratio?: number | null;
+  };
+  freshness: {
+    level: 'Fresh' | 'Aging' | 'Stale' | 'No evidence';
+    newest_evidence_at?: string | null;
+  };
+}
+
+export interface GraphQuality {
+  graph_id: string;
+  health: 'HEALTHY' | 'NEEDS_ATTENTION' | 'POOR';
+  stats: {
+    concepts_total: number;
+    missing_description_pct: number;
+    no_evidence_pct: number;
+    stale_evidence_pct: number;
+    proposed_relationships_count: number;
+  };
+}
+
+export async function getConceptQuality(
+  conceptId: string,
+  graphId?: string
+): Promise<ConceptQuality> {
+  const params = new URLSearchParams();
+  if (graphId) {
+    params.set('graph_id', graphId);
+  }
+  const res = await fetch(
+    `${API_BASE_URL}/quality/concepts/${encodeURIComponent(conceptId)}?${params.toString()}`
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to get concept quality: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getGraphQuality(graphId: string): Promise<GraphQuality> {
+  const res = await fetch(`${API_BASE_URL}/quality/graphs/${encodeURIComponent(graphId)}`);
+  if (!res.ok) {
+    throw new Error(`Failed to get graph quality: ${res.statusText}`);
+  }
   return res.json();
 }
 

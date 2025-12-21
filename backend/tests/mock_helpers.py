@@ -59,6 +59,14 @@ class MockNeo4jResult:
         """Return a single record (or None)."""
         return self._record
     
+    def consume(self):
+        """Consume the result (used for write operations). Returns self for chaining."""
+        return self
+    
+    def data(self) -> List[dict]:
+        """Return data as list of dictionaries (used by SHOW CONSTRAINTS and similar queries)."""
+        return [record.data() for record in self._records]
+    
     def __iter__(self):
         """Support iteration over records."""
         return iter(self._records)

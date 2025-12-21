@@ -12,10 +12,14 @@ import {
   updateUserProfile,
   getTeachingStyle,
   recomputeTeachingStyle,
+  getUIPreferences,
+  updateUIPreferences,
   ResponseStyleProfileWrapper,
   FocusArea,
   UserProfile,
   TeachingStyleProfile,
+  type UIPreferences,
+  type ReminderPreferences,
 } from '../api-client';
 
 export default function ControlPanelPage() {
@@ -32,6 +36,8 @@ export default function ControlPanelPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [addingFocus, setAddingFocus] = useState(false);
   const [recomputingStyle, setRecomputingStyle] = useState(false);
+  const [uiPreferences, setUIPreferences] = useState<UIPreferences | null>(null);
+  const [savingReminders, setSavingReminders] = useState(false);
 
   const [newFocusName, setNewFocusName] = useState('');
   const [newFocusDescription, setNewFocusDescription] = useState('');
@@ -47,11 +53,13 @@ export default function ControlPanelPage() {
           teachingStyleRes,
           focusRes,
           profileRes,
+          uiPrefsRes,
         ] = await Promise.allSettled([
           getResponseStyle(),
           getTeachingStyle(),
           getFocusAreas(),
           getUserProfile(),
+          getUIPreferences(),
         ]);
 
         if (styleRes.status === 'fulfilled') {
@@ -65,6 +73,9 @@ export default function ControlPanelPage() {
         }
         if (profileRes.status === 'fulfilled') {
           setUserProfile(profileRes.value);
+        }
+        if (uiPrefsRes.status === 'fulfilled') {
+          setUIPreferences(uiPrefsRes.value);
         }
       } catch (err) {
         setError(
@@ -605,6 +616,262 @@ export default function ControlPanelPage() {
                 {addingFocus ? 'Adding…' : 'Add focus area'}
               </button>
             </div>
+          </section>
+
+          {/* Reminder Preferences */}
+          <section className="control-card control-card--legend">
+            <div className="control-header" style={{ marginBottom: 8 }}>
+              <div>
+                <span>Reminders</span>
+                <p className="subtitle" style={{ marginTop: 4 }}>
+                  Optional in-app reminders for digest, review queue, and finance snapshots.
+                </p>
+              </div>
+            </div>
+
+            {uiPreferences && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* Weekly Digest */}
+                <div style={{
+                  padding: '12px',
+                  background: 'var(--background)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={uiPreferences.reminders?.weekly_digest?.enabled || false}
+                      onChange={(e) => {
+                        setUIPreferences(prev => prev ? {
+                          ...prev,
+                          reminders: {
+                            ...(prev.reminders || {
+                              weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                              review_queue: { enabled: false, cadence_days: 3 },
+                              finance_stale: { enabled: false, cadence_days: 7 },
+                            }),
+                            weekly_digest: {
+                              ...(prev.reminders?.weekly_digest || { enabled: false, day_of_week: 1, hour: 9 }),
+                              enabled: e.target.checked,
+                            },
+                          },
+                        } : null);
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span style={{ fontWeight: '600', fontSize: '14px' }}>Weekly digest reminder</span>
+                  </label>
+                  {uiPreferences.reminders?.weekly_digest?.enabled && (
+                    <div style={{ marginLeft: '24px', marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Day:
+                        <select
+                          value={uiPreferences.reminders.weekly_digest.day_of_week || 1}
+                          onChange={(e) => {
+                            setUIPreferences(prev => prev ? {
+                              ...prev,
+                              reminders: {
+                                ...(prev.reminders || {
+                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                                  review_queue: { enabled: false, cadence_days: 3 },
+                                  finance_stale: { enabled: false, cadence_days: 7 },
+                                }),
+                                weekly_digest: {
+                                  ...(prev.reminders?.weekly_digest || { enabled: true, day_of_week: 1, hour: 9 }),
+                                  day_of_week: parseInt(e.target.value),
+                                },
+                              },
+                            } : null);
+                          }}
+                          style={{ padding: '2px 4px', fontSize: '12px' }}
+                        >
+                          <option value={1}>Monday</option>
+                          <option value={2}>Tuesday</option>
+                          <option value={3}>Wednesday</option>
+                          <option value={4}>Thursday</option>
+                          <option value={5}>Friday</option>
+                          <option value={6}>Saturday</option>
+                          <option value={7}>Sunday</option>
+                        </select>
+                      </label>
+                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Hour:
+                        <input
+                          type="number"
+                          min="0"
+                          max="23"
+                          value={uiPreferences.reminders.weekly_digest.hour || 9}
+                          onChange={(e) => {
+                            setUIPreferences(prev => prev ? {
+                              ...prev,
+                              reminders: {
+                                ...(prev.reminders || {
+                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                                  review_queue: { enabled: false, cadence_days: 3 },
+                                  finance_stale: { enabled: false, cadence_days: 7 },
+                                }),
+                                weekly_digest: {
+                                  ...(prev.reminders?.weekly_digest || { enabled: true, day_of_week: 1, hour: 9 }),
+                                  hour: parseInt(e.target.value) || 9,
+                                },
+                              },
+                            } : null);
+                          }}
+                          style={{ width: '50px', padding: '2px 4px', fontSize: '12px' }}
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Review Queue */}
+                <div style={{
+                  padding: '12px',
+                  background: 'var(--background)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={uiPreferences.reminders?.review_queue?.enabled || false}
+                      onChange={(e) => {
+                        setUIPreferences(prev => prev ? {
+                          ...prev,
+                          reminders: {
+                            ...(prev.reminders || {
+                              weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                              review_queue: { enabled: false, cadence_days: 3 },
+                              finance_stale: { enabled: false, cadence_days: 7 },
+                            }),
+                            review_queue: {
+                              ...(prev.reminders?.review_queue || { enabled: false, cadence_days: 3 }),
+                              enabled: e.target.checked,
+                            },
+                          },
+                        } : null);
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span style={{ fontWeight: '600', fontSize: '14px' }}>Review queue reminder</span>
+                  </label>
+                  {uiPreferences.reminders?.review_queue?.enabled && (
+                    <div style={{ marginLeft: '24px', marginTop: '8px' }}>
+                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Remind every:
+                        <input
+                          type="number"
+                          min="1"
+                          value={uiPreferences.reminders.review_queue.cadence_days || 3}
+                          onChange={(e) => {
+                            setUIPreferences(prev => prev ? {
+                              ...prev,
+                              reminders: {
+                                ...(prev.reminders || {
+                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                                  review_queue: { enabled: false, cadence_days: 3 },
+                                  finance_stale: { enabled: false, cadence_days: 7 },
+                                }),
+                                review_queue: {
+                                  ...(prev.reminders?.review_queue || { enabled: true, cadence_days: 3 }),
+                                  cadence_days: parseInt(e.target.value) || 3,
+                                },
+                              },
+                            } : null);
+                          }}
+                          style={{ width: '50px', padding: '2px 4px', fontSize: '12px' }}
+                        />
+                        days
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                {/* Finance Stale */}
+                <div style={{
+                  padding: '12px',
+                  background: 'var(--background)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={uiPreferences.reminders?.finance_stale?.enabled || false}
+                      onChange={(e) => {
+                        setUIPreferences(prev => prev ? {
+                          ...prev,
+                          reminders: {
+                            ...(prev.reminders || {
+                              weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                              review_queue: { enabled: false, cadence_days: 3 },
+                              finance_stale: { enabled: false, cadence_days: 7 },
+                            }),
+                            finance_stale: {
+                              ...(prev.reminders?.finance_stale || { enabled: false, cadence_days: 7 }),
+                              enabled: e.target.checked,
+                            },
+                          },
+                        } : null);
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span style={{ fontWeight: '600', fontSize: '14px' }}>Finance stale snapshot reminder</span>
+                  </label>
+                  {uiPreferences.reminders?.finance_stale?.enabled && (
+                    <div style={{ marginLeft: '24px', marginTop: '8px' }}>
+                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Remind every:
+                        <input
+                          type="number"
+                          min="1"
+                          value={uiPreferences.reminders.finance_stale.cadence_days || 7}
+                          onChange={(e) => {
+                            setUIPreferences(prev => prev ? {
+                              ...prev,
+                              reminders: {
+                                ...(prev.reminders || {
+                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                                  review_queue: { enabled: false, cadence_days: 3 },
+                                  finance_stale: { enabled: false, cadence_days: 7 },
+                                }),
+                                finance_stale: {
+                                  ...(prev.reminders?.finance_stale || { enabled: true, cadence_days: 7 }),
+                                  cadence_days: parseInt(e.target.value) || 7,
+                                },
+                              },
+                            } : null);
+                          }}
+                          style={{ width: '50px', padding: '2px 4px', fontSize: '12px' }}
+                        />
+                        days
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  className="pill"
+                  style={{ alignSelf: 'flex-start', marginTop: '8px' }}
+                  onClick={async () => {
+                    if (!uiPreferences) return;
+                    try {
+                      setSavingReminders(true);
+                      setError(null);
+                      await updateUIPreferences(uiPreferences);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Failed to save reminders');
+                    } finally {
+                      setSavingReminders(false);
+                    }
+                  }}
+                  disabled={savingReminders}
+                >
+                  {savingReminders ? 'Saving…' : 'Save reminder preferences'}
+                </button>
+              </div>
+            )}
           </section>
 
         </div>

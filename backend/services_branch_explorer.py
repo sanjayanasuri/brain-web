@@ -91,6 +91,18 @@ def ensure_schema_constraints(session: Session) -> None:
                 "FOR (l:Lecture) REQUIRE l.lecture_id IS UNIQUE"
             ).consume()
 
+        if not _has("MergeCandidate", ["graph_id", "candidate_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT merge_candidate_graph_candidate_node_key IF NOT EXISTS "
+                "FOR (m:MergeCandidate) REQUIRE (m.graph_id, m.candidate_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Artifact", ["graph_id", "url", "content_hash"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT artifact_graph_url_hash_node_key IF NOT EXISTS "
+                "FOR (a:Artifact) REQUIRE (a.graph_id, a.url, a.content_hash) IS NODE KEY"
+            ).consume()
+
         _SCHEMA_INITIALIZED = True
     except Exception:
         # Best-effort only. If Neo4j is temporarily unavailable or the user
@@ -319,18 +331,45 @@ def list_graphs(session: Session) -> List[Dict[str, Any]]:
     ensure_default_context(session)
     query = """
     MATCH (g:GraphSpace)
-    RETURN g
+    OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    OPTIONAL MATCH (s:Concept)-[r]->(t:Concept)
+    WHERE r.graph_id = g.graph_id
+    WITH g, 
+         count(DISTINCT c) AS node_count,
+         count(DISTINCT r) AS edge_count
+    RETURN g, node_count, edge_count
     ORDER BY g.created_at ASC
     """
     out: List[Dict[str, Any]] = []
     for rec in session.run(query):
         g = rec["g"]
+        node_count = rec["node_count"] or 0
+        edge_count = rec["edge_count"] or 0
+        # Convert Neo4j DateTime objects to ISO format strings
+        created_at = g.get("created_at")
+        updated_at = g.get("updated_at")
+        # Neo4j DateTime objects can be converted using to_native() or str()
+        if created_at:
+            if hasattr(created_at, 'to_native'):
+                # Convert Neo4j DateTime to Python datetime, then to ISO string
+                created_at = created_at.to_native().isoformat()
+            else:
+                created_at = str(created_at)
+        if updated_at:
+            if hasattr(updated_at, 'to_native'):
+                # Convert Neo4j DateTime to Python datetime, then to ISO string
+                updated_at = updated_at.to_native().isoformat()
+            else:
+                updated_at = str(updated_at)
         out.append(
             {
                 "graph_id": g.get("graph_id"),
                 "name": g.get("name"),
-                "created_at": g.get("created_at"),
-                "updated_at": g.get("updated_at"),
+                "description": g.get("description"),
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "node_count": node_count,
+                "edge_count": edge_count,
             }
         )
     return out

@@ -18,8 +18,8 @@ It allows graph queries to be made. Finding Neighbors, searching for nodes, dete
 # Asynchrous nature allows one worker to serve many users at once without waiting around. 
 
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from typing import List
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from typing import List, Literal, Optional
 
 # Every time a client hits an API endpoint, FastAPI opens a fresh connection to Neo4j. It runs the query. Then, closes the connection.
 # This avoids sharing one long-lived session across requests. Futhermore, it prevents race conditions. 
@@ -64,10 +64,12 @@ from services_graph import (
     get_all_relationships,
     delete_concept,
     delete_relationship,
+    relationship_exists,
     delete_test_concepts,
     get_nodes_missing_description,
     find_concept_gaps,
 )
+from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 
 # Create FastAPI router - all endpoints will be under /concepts
 router = APIRouter(prefix="/concepts", tags=["concepts"])
@@ -139,7 +141,12 @@ def get_concept_gaps_endpoint(limit: int = 5, session=Depends(get_neo4j_session)
 
 
 @router.get("/search")
-def search_concepts(q: str, session=Depends(get_neo4j_session)):
+def search_concepts(
+    q: str,
+    graph_id: Optional[str] = None,
+    limit: int = 20,
+    session=Depends(get_neo4j_session)
+):
     """
     Search for concepts by name (simple keyword search).
     
@@ -150,15 +157,17 @@ def search_concepts(q: str, session=Depends(get_neo4j_session)):
     HOW IT WORKS:
     - Case-insensitive partial match
     - If you search "neural", it finds "Neural Networks", "Neural Architecture", etc.
+    - Optionally filters by graph_id to only return concepts in that graph
     
     HOW IT'S USED:
     - GraphVisualization component uses this for the search bar
     - Users can quickly find concepts they're looking for
     - Command system uses this for "search" commands
+    - Omnibox search uses this for concept search
     
     EXAMPLE:
-    GET /concepts/search?q=neural
-    Returns: All concepts with "neural" in the name
+    GET /concepts/search?q=neural&graph_id=my-graph&limit=8
+    Returns: Concepts with "neural" in the name, limited to 8 results
     
     NOTE:
     For more intelligent search (finding concepts by meaning, not just name),
@@ -167,10 +176,30 @@ def search_concepts(q: str, session=Depends(get_neo4j_session)):
     CONNECTS TO:
     - Frontend GraphVisualization - Search functionality
     - Command system - "search" command
+    - Omnibox - Concept search
     """
+    from services_branch_explorer import set_active_graph, ensure_graph_scoping_initialized, get_active_graph_context
+    
+    # Set active graph if provided
+    if graph_id:
+        set_active_graph(session, graph_id)
+        ensure_graph_scoping_initialized(session)
+        graph_id_ctx, branch_id = get_active_graph_context(session)
+        if graph_id_ctx != graph_id:
+            # Graph not found, return empty results
+            return {
+                "query": q,
+                "results": [],
+                "count": 0
+            }
+    
     all_concepts = get_all_concepts(session)
     query_lower = q.lower()
     matched = [c for c in all_concepts if query_lower in c.name.lower()]
+    
+    # Apply limit
+    matched = matched[:limit]
+    
     return {
         "query": q,
         "results": matched,
@@ -179,7 +208,10 @@ def search_concepts(q: str, session=Depends(get_neo4j_session)):
 
 
 @router.get("/all/graph")
-def get_all_graph_data(session=Depends(get_neo4j_session)):
+def get_all_graph_data(
+    include_proposed: Literal["auto", "all", "none"] = Query("auto", description="Visibility policy: 'auto' (default), 'all', or 'none'"),
+    session=Depends(get_neo4j_session)
+):
     """
     Get the complete graph - all nodes and relationships.
     
@@ -204,12 +236,24 @@ def get_all_graph_data(session=Depends(get_neo4j_session)):
     - Frontend GraphVisualization - Initial graph load
     - Graph rendering - Provides data for react-force-graph-2d
     """
-    nodes = get_all_concepts(session)
-    relationships = get_all_relationships(session)
-    return {
-        "nodes": nodes,
-        "links": relationships,
-    }
+    import logging
+    logger = logging.getLogger("brain_web")
+    
+    try:
+        nodes = get_all_concepts(session)
+        relationships = get_all_relationships(session, include_proposed=include_proposed)
+        logger.info(f"Fetched {len(nodes)} nodes and {len(relationships)} relationships")
+        return {
+            "nodes": nodes,
+            "links": relationships,
+        }
+    except Exception as e:
+        logger.error(f"Error fetching graph data: {e}", exc_info=True)
+        # Return empty graph instead of crashing
+        return {
+            "nodes": [],
+            "links": [],
+        }
 
 
 @router.get("/by-name/{name}", response_model=Concept)
@@ -423,7 +467,12 @@ def create_relationship_endpoint(
 
 
 @router.get("/{node_id}/neighbors", response_model=List[Concept])
-def read_neighbors(node_id: str, session=Depends(get_neo4j_session)):
+def read_neighbors(
+    node_id: str,
+    include_proposed: Literal["auto", "all", "none"] = Query("all", description="Visibility policy: 'all' (default, show all), 'auto' (threshold-based), or 'none' (ACCEPTED only)"),
+    status: Optional[str] = Query(None, description="Filter by relationship status: 'ACCEPTED', 'PROPOSED', or None (show all)"),
+    session=Depends(get_neo4j_session)
+):
     """
     Get all concepts connected to a given concept (neighbors).
     
@@ -454,11 +503,23 @@ def read_neighbors(node_id: str, session=Depends(get_neo4j_session)):
     - AI chat - Gets context around relevant concepts
     - Graph exploration - Discover related concepts
     """
-    return get_neighbors(session, node_id)
+    # If status is explicitly provided, map it to include_proposed
+    if status == "ACCEPTED":
+        include_proposed = "none"
+    elif status == "PROPOSED":
+        include_proposed = "all"  # Will need to filter to PROPOSED only in the query
+    # If status is None, use include_proposed as-is (defaults to "all" to show everything)
+    
+    return get_neighbors(session, node_id, include_proposed=include_proposed)
 
 
 @router.get("/{node_id}/neighbors-with-relationships")
-def read_neighbors_with_relationships(node_id: str, session=Depends(get_neo4j_session)):
+def read_neighbors_with_relationships(
+    node_id: str,
+    include_proposed: Literal["auto", "all", "none"] = Query("all", description="Visibility policy: 'all' (default, show all), 'auto' (threshold-based), or 'none' (ACCEPTED only)"),
+    status: Optional[str] = Query(None, description="Filter by relationship status: 'ACCEPTED', 'PROPOSED', or None (show all)"),
+    session=Depends(get_neo4j_session)
+):
     """
     Get neighbors with relationship metadata.
     
@@ -470,17 +531,20 @@ def read_neighbors_with_relationships(node_id: str, session=Depends(get_neo4j_se
     - Returns neighbors with their relationship types
     - Includes direction (is_outgoing: true/false)
     - Includes predicate (relationship type)
+    - Includes relationship status, confidence, and method for styling proposed edges
     
     WHY THIS EXISTS:
     Graph visualization needs to know:
     - Which concepts are connected
     - What type of relationship (DEPENDS_ON, RELATED_TO, etc.)
     - Direction (A → B or B → A)
+    - Status (ACCEPTED/PROPOSED) for visual styling
     
     HOW IT'S USED:
     - GraphVisualization uses this to render edges with correct types/colors
     - Shows relationship labels on edges
     - Enables filtering by relationship type
+    - Can style proposed edges differently (e.g., dashed lines)
     
     EXAMPLE:
     GET /concepts/N00123456/neighbors-with-relationships
@@ -488,7 +552,10 @@ def read_neighbors_with_relationships(node_id: str, session=Depends(get_neo4j_se
       {
         "concept": {...},
         "predicate": "DEPENDS_ON",
-        "is_outgoing": true
+        "is_outgoing": true,
+        "relationship_status": "ACCEPTED",
+        "relationship_confidence": 0.95,
+        "relationship_method": "llm"
       },
       ...
     ]
@@ -498,7 +565,144 @@ def read_neighbors_with_relationships(node_id: str, session=Depends(get_neo4j_se
     - Graph rendering - Proper edge visualization
     - fetchGraphData() in api-client.ts - Recursive graph loading
     """
-    return get_neighbors_with_relationships(session, node_id)
+    # If status is explicitly provided, map it to include_proposed
+    if status == "ACCEPTED":
+        include_proposed = "none"
+    elif status == "PROPOSED":
+        include_proposed = "all"  # Will need to filter to PROPOSED only in the query
+    # If status is None, use include_proposed as-is (defaults to "all" to show everything)
+    
+    return get_neighbors_with_relationships(session, node_id, include_proposed=include_proposed)
+
+
+@router.get("/{node_id}/claims")
+def get_claims_for_concept(
+    node_id: str,
+    limit: int = Query(50, description="Maximum number of claims to return"),
+    session=Depends(get_neo4j_session)
+):
+    """
+    Get all claims that mention this concept.
+    
+    Returns claims with confidence, source, and metadata.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (c:Concept {graph_id: $graph_id, node_id: $node_id})-[:BELONGS_TO]->(g)
+    MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(c)
+    WHERE $branch_id IN COALESCE(claim.on_branches, [])
+    OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
+    OPTIONAL MATCH (chunk)-[:FROM_DOCUMENT]->(doc:SourceDocument {graph_id: $graph_id})
+    RETURN claim.claim_id AS claim_id,
+           claim.text AS text,
+           COALESCE(claim.confidence, 0.5) AS confidence,
+           claim.source_id AS source_id,
+           claim.source_span AS source_span,
+           claim.method AS method,
+           chunk.chunk_id AS chunk_id,
+           doc.source AS source_type,
+           doc.url AS source_url,
+           doc.doc_type AS doc_type,
+           doc.company_ticker AS company_ticker
+    ORDER BY claim.confidence DESC
+    LIMIT $limit
+    """
+    
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        node_id=node_id,
+        limit=limit
+    )
+    
+    claims = []
+    for record in result:
+        claims.append({
+            "claim_id": record["claim_id"],
+            "text": record["text"],
+            "confidence": record["confidence"],
+            "source_id": record["source_id"],
+            "source_span": record["source_span"],
+            "method": record["method"],
+            "chunk_id": record["chunk_id"],
+            "source_type": record["source_type"],
+            "source_url": record["source_url"],
+            "doc_type": record["doc_type"],
+            "company_ticker": record["company_ticker"],
+        })
+    
+    return claims
+
+
+@router.get("/{node_id}/sources")
+def get_sources_for_concept(
+    node_id: str,
+    limit: int = Query(100, description="Maximum number of sources to return"),
+    session=Depends(get_neo4j_session)
+):
+    """
+    Get all source chunks and documents that mention this concept.
+    
+    Returns sources grouped by source_type with timeline information.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (c:Concept {graph_id: $graph_id, node_id: $node_id})-[:BELONGS_TO]->(g)
+    MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(c)
+    WHERE $branch_id IN COALESCE(claim.on_branches, [])
+    OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
+    OPTIONAL MATCH (chunk)-[:FROM_DOCUMENT]->(doc:SourceDocument {graph_id: $graph_id})
+    WITH DISTINCT doc, chunk, claim
+    WHERE doc IS NOT NULL
+    RETURN doc.doc_id AS doc_id,
+           doc.source AS source_type,
+           doc.external_id AS external_id,
+           doc.url AS url,
+           doc.doc_type AS doc_type,
+           doc.company_ticker AS company_ticker,
+           doc.published_at AS published_at,
+           doc.metadata AS metadata,
+           collect(DISTINCT {
+             chunk_id: chunk.chunk_id,
+             chunk_index: chunk.chunk_index,
+             text_preview: substring(chunk.text, 0, 200)
+           }) AS chunks,
+           count(DISTINCT claim) AS claim_count
+    ORDER BY doc.published_at DESC, doc.created_at DESC
+    LIMIT $limit
+    """
+    
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        node_id=node_id,
+        limit=limit
+    )
+    
+    sources = []
+    for record in result:
+        sources.append({
+            "doc_id": record["doc_id"],
+            "source_type": record["source_type"],
+            "external_id": record["external_id"],
+            "url": record["url"],
+            "doc_type": record["doc_type"],
+            "company_ticker": record["company_ticker"],
+            "published_at": record["published_at"],
+            "metadata": record["metadata"],
+            "chunks": record["chunks"],
+            "claim_count": record["claim_count"],
+        })
+    
+    return sources
 
 
 @router.post("/relationship-by-ids")
@@ -535,6 +739,78 @@ def create_relationship_by_ids_endpoint(
     """
     create_relationship_by_ids(session, source_id, target_id, predicate)
     return {"status": "ok", "message": f"Relationship {predicate} created from {source_id} to {target_id}"}
+
+
+@router.post("/relationship/propose")
+def propose_relationship_endpoint(
+    source_id: str = Query(..., description="Source concept node_id"),
+    target_id: str = Query(..., description="Target concept node_id"),
+    predicate: str = Query(..., description="Relationship type (e.g., PREREQUISITE_FOR, DEPENDS_ON)"),
+    rationale: Optional[str] = Query(None, description="Optional rationale for the proposal"),
+    session=Depends(get_neo4j_session)
+):
+    """
+    Propose a relationship between two concepts (by node_id).
+    
+    PURPOSE:
+    Creates a PROPOSED relationship that can be reviewed and accepted/rejected later.
+    Used by path runner to suggest connections between adjacent steps.
+    
+    HOW IT WORKS:
+    - Checks if relationship already exists (ACCEPTED or PROPOSED)
+    - If exists, returns error
+    - If not, creates relationship with status=PROPOSED
+    
+    EXAMPLE:
+    POST /concepts/relationship/propose?source_id=N001&target_id=N002&predicate=PREREQUISITE_FOR&rationale=Proposed+from+suggested+path
+    Creates: N001 →[PREREQUISITE_FOR]→ N002 (status: PROPOSED)
+    
+    CONNECTS TO:
+    - PathRunner - "Connect to next" action
+    - Review system - Proposed relationships appear in /review
+    """
+    # Check if relationship already exists
+    if relationship_exists(session, source_id, target_id, predicate):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Relationship {predicate} already exists between {source_id} and {target_id}"
+        )
+    
+    # Create proposed relationship
+    create_relationship_by_ids(
+        session,
+        source_id,
+        target_id,
+        predicate,
+        status="PROPOSED",
+        method="human",
+        rationale=rationale or "Proposed from suggested path"
+    )
+    return {
+        "status": "ok",
+        "message": f"Proposed relationship {predicate} from {source_id} to {target_id}",
+        "exists": False
+    }
+
+
+@router.get("/relationship/check")
+def check_relationship_endpoint(
+    source_id: str = Query(..., description="Source concept node_id"),
+    target_id: str = Query(..., description="Target concept node_id"),
+    predicate: str = Query(..., description="Relationship type to check"),
+    session=Depends(get_neo4j_session)
+):
+    """
+    Check if a relationship exists between two concepts.
+    
+    PURPOSE:
+    Used by frontend to determine if "Connect to next" button should be disabled.
+    
+    RETURNS:
+    - exists: true if relationship exists (ACCEPTED or PROPOSED), false otherwise
+    """
+    exists = relationship_exists(session, source_id, target_id, predicate)
+    return {"exists": exists}
 
 
 @router.delete("/{node_id}")
@@ -648,3 +924,10 @@ def cleanup_test_data(session=Depends(get_neo4j_session)):
     """
     count = delete_test_concepts(session)
     return {"status": "ok", "message": f"Deleted {count} test concepts"}
+
+
+# Smoke tests for include_proposed parameter:
+# curl "http://localhost:8000/concepts/all/graph?include_proposed=auto"
+# curl "http://localhost:8000/concepts/all/graph?include_proposed=all"
+# curl "http://localhost:8000/concepts/all/graph?include_proposed=none"
+# curl "http://localhost:8000/concepts/N12345678/neighbors-with-relationships?include_proposed=auto"

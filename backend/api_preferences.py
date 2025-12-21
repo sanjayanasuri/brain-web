@@ -13,7 +13,8 @@ from typing import List
 from models import (
     ResponseStyleProfileWrapper,
     FocusArea,
-    UserProfile
+    UserProfile,
+    UIPreferences
 )
 from db_neo4j import get_neo4j_session
 from services_graph import (
@@ -23,7 +24,9 @@ from services_graph import (
     upsert_focus_area,
     set_focus_area_active,
     get_user_profile,
-    update_user_profile
+    update_user_profile,
+    get_ui_preferences,
+    update_ui_preferences
 )
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
@@ -87,3 +90,19 @@ def set_profile(profile: UserProfile, session=Depends(get_neo4j_session)):
     Update the user profile.
     """
     return update_user_profile(session, profile)
+
+
+@router.get("/ui", response_model=UIPreferences)
+def get_ui_prefs(session=Depends(get_neo4j_session)):
+    """
+    Get UI preferences (lens system, etc.).
+    """
+    return get_ui_preferences(session)
+
+
+@router.post("/ui", response_model=UIPreferences)
+def set_ui_prefs(prefs: UIPreferences, session=Depends(get_neo4j_session)):
+    """
+    Update UI preferences (lens system, etc.).
+    """
+    return update_ui_preferences(session, prefs)

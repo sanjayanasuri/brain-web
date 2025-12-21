@@ -1,5 +1,7 @@
 """
 Service for ingesting lecture text and extracting graph structure using LLM
+
+Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
 """
 import json
 import re
@@ -31,9 +33,20 @@ from services_graph import (
     create_lecture_segment,
     link_segment_to_concept,
     link_segment_to_analogy,
+    upsert_source_chunk,
+    upsert_claim,
+    link_claim_mentions,
 )
+from services_ingestion_runs import (
+    create_ingestion_run,
+    update_ingestion_run_status,
+)
+from services_claims import extract_claims_from_chunk, normalize_claim_text
+from services_search import embed_text
+from services_branch_explorer import get_active_graph_context, ensure_graph_scoping_initialized
 from prompts import LECTURE_TO_GRAPH_PROMPT, LECTURE_SEGMENTATION_PROMPT
 from config import OPENAI_API_KEY
+import hashlib
 
 # Initialize OpenAI client
 client = None
@@ -59,6 +72,60 @@ else:
 def normalize_name(name: str) -> str:
     """Normalize concept name for comparison (lowercase, strip whitespace)"""
     return name.strip().lower()
+
+
+def chunk_text(text: str, max_chars: int = 1200, overlap: int = 150) -> List[Dict[str, Any]]:
+    """
+    Chunk text into overlapping segments.
+    
+    Args:
+        text: Full text to chunk
+        max_chars: Maximum characters per chunk
+        overlap: Number of characters to overlap between chunks
+    
+    Returns:
+        List of dicts with 'text' and 'index' fields
+    """
+    if not text:
+        return []
+    
+    chunks = []
+    start = 0
+    index = 0
+    
+    while start < len(text):
+        # Calculate end position
+        end = start + max_chars
+        
+        # Try to break at sentence boundary (prefer period, newline, or space)
+        if end < len(text):
+            # Look for sentence boundary in the last 200 chars
+            boundary_chars = ['.', '\n', '!', '?']
+            for i in range(end, max(start + max_chars - 200, start), -1):
+                if text[i] in boundary_chars:
+                    end = i + 1
+                    break
+            else:
+                # No sentence boundary found, try space
+                for i in range(end, max(start + max_chars - 100, start), -1):
+                    if text[i] == ' ':
+                        end = i + 1
+                        break
+        
+        chunk_text_content = text[start:end].strip()
+        if chunk_text_content:
+            chunks.append({
+                "text": chunk_text_content,
+                "index": index
+            })
+            index += 1
+        
+        # Move start position with overlap
+        start = end - overlap
+        if start >= len(text):
+            break
+    
+    return chunks
 
 
 def find_concept_by_name_and_domain(
@@ -503,30 +570,34 @@ Extract the concepts and relationships from this lecture and return them as JSON
         raise
 
 
-def ingest_lecture(
+def run_lecture_extraction_engine(
     session: Session,
     lecture_title: str,
     lecture_text: str,
     domain: Optional[str],
-) -> LectureIngestResult:
+    run_id: str,
+    lecture_id: str,
+) -> Dict[str, Any]:
     """
-    Main function to ingest a lecture:
-    1. Call LLM to extract nodes and links
-    2. Upsert nodes (create or update existing)
-    3. Create relationships
-    4. Return results
+    Extract concepts and relationships from lecture text using LLM.
     
     Args:
         session: Neo4j session
         lecture_title: Title of the lecture
         lecture_text: Full text of the lecture
         domain: Optional domain hint
+        run_id: Ingestion run ID
+        lecture_id: Lecture ID
     
     Returns:
-        LectureIngestResult with created/updated nodes and links
+        Dict with nodes_created, nodes_updated, links_created, node_name_to_id,
+        concepts_created, concepts_updated, relationships_proposed, errors
     """
-    # Generate lecture_id (simple slug-based ID)
-    lecture_id = f"LECTURE_{uuid4().hex[:8].upper()}"
+    # Track counts for run summary
+    concepts_created = 0
+    concepts_updated = 0
+    relationships_proposed = 0
+    errors = []
     
     # Step 1: Call LLM for extraction
     print(f"[Lecture Ingestion] Calling LLM to extract concepts from lecture: {lecture_title}")
@@ -583,13 +654,14 @@ def ingest_lecture(
             # Set last_updated_by to the current lecture_id
             last_updated_by = lecture_id
             
-            # Update lecture_key for backward compatibility
+            # Update lecture_key for backward compatibility and run_id
             query = """
             MATCH (c:Concept {node_id: $node_id})
             SET c.lecture_key = $lecture_key,
                 c.lecture_sources = $lecture_sources,
                 c.created_by = COALESCE(c.created_by, $created_by),
-                c.last_updated_by = $last_updated_by
+                c.last_updated_by = $last_updated_by,
+                c.last_updated_by_run_id = $last_updated_by_run_id
             RETURN c.node_id AS node_id,
                    c.name AS name,
                    c.domain AS domain,
@@ -601,7 +673,9 @@ def ingest_lecture(
                    c.url_slug AS url_slug,
                    COALESCE(c.lecture_sources, []) AS lecture_sources,
                    c.created_by AS created_by,
-                   c.last_updated_by AS last_updated_by
+                   c.last_updated_by AS last_updated_by,
+                   c.created_by_run_id AS created_by_run_id,
+                   c.last_updated_by_run_id AS last_updated_by_run_id
             """
             result = session.run(
                 query,
@@ -609,7 +683,8 @@ def ingest_lecture(
                 lecture_key=lecture_id,
                 lecture_sources=current_sources,
                 created_by=created_by,
-                last_updated_by=last_updated_by
+                last_updated_by=last_updated_by,
+                last_updated_by_run_id=run_id
             )
             record = result.single()
             if record:
@@ -617,6 +692,7 @@ def ingest_lecture(
                 updated = _normalize_concept_from_db(record.data())
             
             nodes_updated.append(updated)
+            concepts_updated += 1
             node_name_to_id[normalized_name] = updated.node_id
         else:
             # Create new node
@@ -632,10 +708,12 @@ def ingest_lecture(
                 lecture_sources=[lecture_id],
                 created_by=lecture_id,
                 last_updated_by=lecture_id,
+                created_by_run_id=run_id,
             )
             
             new_concept = create_concept(session, concept_payload)
             nodes_created.append(new_concept)
+            concepts_created += 1
             node_name_to_id[normalized_name] = new_concept.node_id
     
     # Step 3: Create relationships
@@ -660,44 +738,245 @@ def ingest_lecture(
             print(f"[Lecture Ingestion] WARNING: Target node not found: {extracted_link.target_name}")
             continue
         
-        # Create relationship by IDs (MERGE ensures no duplicates)
+        # Create relationship by IDs with PROPOSED status and metadata
+        # Auto-accept only if confidence is very high (>=0.9) AND relationship type is in allowlist
+        high_confidence_allowlist = ["DEPENDS_ON", "PREREQUISITE_FOR", "RELATED_TO"]
+        should_auto_accept = (
+            extracted_link.confidence >= 0.9
+            and extracted_link.predicate in high_confidence_allowlist
+        )
+        
+        relationship_status = "ACCEPTED" if should_auto_accept else "PROPOSED"
+        
         try:
-            create_relationship_by_ids(session, source_id, target_id, extracted_link.predicate)
+            create_relationship_by_ids(
+                session=session,
+                source_id=source_id,
+                target_id=target_id,
+                predicate=extracted_link.predicate,
+                status=relationship_status,
+                confidence=extracted_link.confidence,
+                method="llm",
+                source_id_meta=lecture_id,
+                rationale=extracted_link.explanation,
+                ingestion_run_id=run_id,
+            )
             links_created.append({
                 "source_id": source_id,
                 "target_id": target_id,
                 "predicate": extracted_link.predicate,
+                "status": relationship_status,
             })
-            print(f"[Lecture Ingestion] Created link: {extracted_link.source_name} -[{extracted_link.predicate}]-> {extracted_link.target_name}")
+            if relationship_status == "PROPOSED":
+                relationships_proposed += 1
+            print(f"[Lecture Ingestion] Created link ({relationship_status}): {extracted_link.source_name} -[{extracted_link.predicate}]-> {extracted_link.target_name} (confidence: {extracted_link.confidence})")
         except Exception as e:
-            print(f"[Lecture Ingestion] ERROR: Failed to create link {extracted_link.source_name} -> {extracted_link.target_name}: {e}")
+            error_msg = f"Failed to create link {extracted_link.source_name} -> {extracted_link.target_name}: {e}"
+            errors.append(error_msg)
+            print(f"[Lecture Ingestion] ERROR: {error_msg}")
     
     print(f"[Lecture Ingestion] Completed: {len(nodes_created)} created, {len(nodes_updated)} updated, {len(links_created)} links created")
     
-    # Step 4: Create Lecture node
-    print(f"[Lecture Ingestion] Creating Lecture node: {lecture_id}")
-    query = """
-    MERGE (l:Lecture {lecture_id: $lecture_id})
-    ON CREATE SET l.title = $title,
-                  l.description = $description,
-                  l.primary_concept = $primary_concept,
-                  l.level = $level,
-                  l.estimated_time = $estimated_time,
-                  l.slug = $slug
-    RETURN l.lecture_id AS lecture_id
+    return {
+        "nodes_created": nodes_created,
+        "nodes_updated": nodes_updated,
+        "links_created": links_created,
+        "node_name_to_id": node_name_to_id,
+        "concepts_created": concepts_created,
+        "concepts_updated": concepts_updated,
+        "relationships_proposed": relationships_proposed,
+        "errors": errors,
+        "extraction": extraction,  # Store extraction for status calculation
+    }
+
+
+def run_chunk_and_claims_engine(
+    session: Session,
+    source_id: str,
+    source_label: str,
+    domain: Optional[str],
+    text: str,
+    run_id: str,
+    known_concepts: List[Concept],
+    include_existing_concepts: bool = True,
+) -> Dict[str, Any]:
     """
-    session.run(
-        query,
-        lecture_id=lecture_id,
-        title=lecture_title,
-        description=None,
-        primary_concept=None,
-        level=None,
-        estimated_time=None,
-        slug=None,
-    )
+    Chunk text and extract claims from chunks.
     
-    # Step 5: Extract segments and analogies
+    Args:
+        session: Neo4j session
+        source_id: Source identifier (e.g., lecture_id)
+        source_label: Source label (e.g., lecture_title)
+        domain: Optional domain hint
+        text: Full text to chunk
+        run_id: Ingestion run ID
+        known_concepts: List of Concept objects from current ingestion
+        include_existing_concepts: Whether to include existing concepts in mention resolution
+    
+    Returns:
+        Dict with chunks_created, claims_created, chunk_ids, claim_ids, errors
+    """
+    errors = []
+    chunks_created = 0
+    claims_created = 0
+    chunk_ids = []
+    claim_ids = []
+    
+    print(f"[Lecture Ingestion] Creating chunks and extracting claims")
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    # Chunk the text
+    chunks = chunk_text(text, max_chars=1200, overlap=150)
+    print(f"[Lecture Ingestion] Created {len(chunks)} chunks")
+    
+    # Build concept lookup map for claim extraction
+    known_concepts_dict = [
+        {"name": c.name, "node_id": c.node_id, "description": c.description}
+        for c in known_concepts
+    ]
+    
+    # Also include existing concepts in the graph for mention resolution
+    existing_concept_map = {}
+    if include_existing_concepts:
+        from services_graph import get_all_concepts
+        existing_concepts = get_all_concepts(session)
+        existing_concept_map = {normalize_name(c.name): c.node_id for c in existing_concepts}
+    
+    for chunk in chunks:
+        chunk_id = f"CHUNK_{uuid4().hex[:8].upper()}"
+        
+        # Create SourceChunk
+        metadata = {
+            "lecture_id": source_id,
+            "lecture_title": source_label,
+            "domain": domain,
+        }
+        try:
+            upsert_source_chunk(
+                session=session,
+                graph_id=graph_id,
+                branch_id=branch_id,
+                chunk_id=chunk_id,
+                source_id=source_id,
+                chunk_index=chunk["index"],
+                text=chunk["text"],
+                metadata=metadata
+            )
+            chunks_created += 1
+            chunk_ids.append(chunk_id)
+        except Exception as e:
+            error_msg = f"Failed to create SourceChunk {chunk_id}: {e}"
+            errors.append(error_msg)
+            print(f"[Lecture Ingestion] ERROR: {error_msg}")
+            continue
+        
+        # Extract claims from chunk
+        claims = extract_claims_from_chunk(chunk["text"], known_concepts_dict)
+        
+        for claim_data in claims:
+            # Create deterministic claim_id
+            normalized_claim_text = normalize_claim_text(claim_data["claim_text"])
+            claim_id_hash = hashlib.sha256(
+                f"{graph_id}{source_id}{normalized_claim_text}".encode()
+            ).hexdigest()[:16]
+            claim_id = f"CLAIM_{claim_id_hash.upper()}"
+            
+            # Resolve mentioned concept names to node_ids
+            mentioned_node_ids = []
+            for concept_name in claim_data.get("mentioned_concept_names", []):
+                normalized_concept_name = normalize_name(concept_name)
+                # First try current ingestion concepts
+                found_id = None
+                for c in known_concepts:
+                    if normalize_name(c.name) == normalized_concept_name:
+                        found_id = c.node_id
+                        break
+                # Fallback to existing concepts
+                if not found_id and include_existing_concepts:
+                    found_id = existing_concept_map.get(normalized_concept_name)
+                
+                if found_id:
+                    mentioned_node_ids.append(found_id)
+            
+            # Compute claim embedding
+            try:
+                claim_embedding = embed_text(claim_data["claim_text"])
+            except Exception as e:
+                print(f"[Lecture Ingestion] WARNING: Failed to embed claim, continuing without embedding: {e}")
+                claim_embedding = None
+            
+            # Create Claim
+            try:
+                upsert_claim(
+                    session=session,
+                    graph_id=graph_id,
+                    branch_id=branch_id,
+                    claim_id=claim_id,
+                    text=claim_data["claim_text"],
+                    confidence=claim_data["confidence"],
+                    method="llm",
+                    source_id=source_id,
+                    source_span=claim_data.get("source_span", f"chunk {chunk['index']}"),
+                    chunk_id=chunk_id,
+                    embedding=claim_embedding,
+                    ingestion_run_id=run_id,
+                )
+                
+                # Link claim to mentioned concepts
+                if mentioned_node_ids:
+                    link_claim_mentions(
+                        session=session,
+                        graph_id=graph_id,
+                        claim_id=claim_id,
+                        mentioned_node_ids=mentioned_node_ids
+                    )
+                
+                claims_created += 1
+                claim_ids.append(claim_id)
+            except Exception as e:
+                error_msg = f"Failed to create Claim {claim_id}: {e}"
+                errors.append(error_msg)
+                print(f"[Lecture Ingestion] ERROR: {error_msg}")
+                continue
+    
+    print(f"[Lecture Ingestion] Created {claims_created} claims from {len(chunks)} chunks")
+    
+    return {
+        "chunks_created": chunks_created,
+        "claims_created": claims_created,
+        "chunk_ids": chunk_ids,
+        "claim_ids": claim_ids,
+        "errors": errors,
+    }
+
+
+def run_segments_and_analogies_engine(
+    session: Session,
+    lecture_id: str,
+    lecture_title: str,
+    lecture_text: str,
+    domain: Optional[str],
+    node_name_to_id: Dict[str, str],
+    nodes_created: List[Concept],
+    nodes_updated: List[Concept],
+) -> List[LectureSegment]:
+    """
+    Extract segments and analogies from lecture text.
+    
+    Args:
+        session: Neo4j session
+        lecture_id: Lecture ID
+        lecture_title: Title of the lecture
+        lecture_text: Full text of the lecture
+        domain: Optional domain hint
+        node_name_to_id: Map from normalized concept name to node_id
+        nodes_created: List of created Concept objects
+        nodes_updated: List of updated Concept objects
+    
+    Returns:
+        List of LectureSegment objects
+    """
     print(f"[Lecture Ingestion] Extracting segments and analogies")
     
     # Build list of concept names that were actually created/updated for the LLM
@@ -823,10 +1102,147 @@ def ingest_lecture(
     
     print(f"[Lecture Ingestion] Created {len(segments_models)} segments")
     
+    return segments_models
+
+
+def ingest_lecture(
+    session: Session,
+    lecture_title: str,
+    lecture_text: str,
+    domain: Optional[str],
+) -> LectureIngestResult:
+    """
+    Main function to ingest a lecture:
+    1. Create ingestion run
+    2. Call extraction engine to extract nodes and links
+    3. Call chunk and claims engine to extract claims
+    4. Create Lecture node
+    5. Call segments and analogies engine
+    6. Update run status
+    7. Return results
+    
+    Args:
+        session: Neo4j session
+        lecture_title: Title of the lecture
+        lecture_text: Full text of the lecture
+        domain: Optional domain hint
+    
+    Returns:
+        LectureIngestResult with created/updated nodes and links
+    """
+    # Create ingestion run
+    ingestion_run = create_ingestion_run(
+        session=session,
+        source_type="LECTURE",
+        source_label=lecture_title,
+    )
+    run_id = ingestion_run.run_id
+    
+    # Generate lecture_id (simple slug-based ID)
+    lecture_id = f"LECTURE_{uuid4().hex[:8].upper()}"
+    
+    # Step 1: Run extraction engine
+    extraction_result = run_lecture_extraction_engine(
+        session=session,
+        lecture_title=lecture_title,
+        lecture_text=lecture_text,
+        domain=domain,
+        run_id=run_id,
+        lecture_id=lecture_id,
+    )
+    
+    nodes_created = extraction_result["nodes_created"]
+    nodes_updated = extraction_result["nodes_updated"]
+    links_created = extraction_result["links_created"]
+    node_name_to_id = extraction_result["node_name_to_id"]
+    concepts_created = extraction_result["concepts_created"]
+    concepts_updated = extraction_result["concepts_updated"]
+    relationships_proposed = extraction_result["relationships_proposed"]
+    errors = extraction_result["errors"]
+    
+    # Step 2: Run chunk and claims engine
+    all_concepts = nodes_created + nodes_updated
+    chunk_claims_result = run_chunk_and_claims_engine(
+        session=session,
+        source_id=lecture_id,
+        source_label=lecture_title,
+        domain=domain,
+        text=lecture_text,
+        run_id=run_id,
+        known_concepts=all_concepts,
+        include_existing_concepts=True,
+    )
+    
+    # Merge errors from chunk/claims engine
+    errors.extend(chunk_claims_result["errors"])
+    
+    # Step 3: Create Lecture node
+    print(f"[Lecture Ingestion] Creating Lecture node: {lecture_id}")
+    query = """
+    MERGE (l:Lecture {lecture_id: $lecture_id})
+    ON CREATE SET l.title = $title,
+                  l.description = $description,
+                  l.primary_concept = $primary_concept,
+                  l.level = $level,
+                  l.estimated_time = $estimated_time,
+                  l.slug = $slug
+    RETURN l.lecture_id AS lecture_id
+    """
+    session.run(
+        query,
+        lecture_id=lecture_id,
+        title=lecture_title,
+        description=None,
+        primary_concept=None,
+        level=None,
+        estimated_time=None,
+        slug=None,
+    )
+    
+    # Step 4: Run segments and analogies engine
+    segments_models = run_segments_and_analogies_engine(
+        session=session,
+        lecture_id=lecture_id,
+        lecture_title=lecture_title,
+        lecture_text=lecture_text,
+        domain=domain,
+        node_name_to_id=node_name_to_id,
+        nodes_created=nodes_created,
+        nodes_updated=nodes_updated,
+    )
+    
+    # Step 5: Update ingestion run status
+    extraction = extraction_result["extraction"]
+    links_count = len(extraction.links) if extraction and extraction.links else 0
+    status = "COMPLETED" if len(errors) == 0 else "PARTIAL" if len(errors) < links_count else "FAILED"
+    update_ingestion_run_status(
+        session=session,
+        run_id=run_id,
+        status=status,
+        summary_counts={
+            "concepts_created": concepts_created,
+            "concepts_updated": concepts_updated,
+            "relationships_proposed": relationships_proposed,
+        },
+        error_count=len(errors) if errors else None,
+        errors=errors if errors else None,
+    )
+    
+    # Extract enrichment fields
+    created_concept_ids = [concept.node_id for concept in nodes_created]
+    updated_concept_ids = [concept.node_id for concept in nodes_updated]
+    created_relationship_count = len(links_created)
+    created_claim_ids = chunk_claims_result.get("claim_ids", [])
+    
     return LectureIngestResult(
         lecture_id=lecture_id,
         nodes_created=nodes_created,
         nodes_updated=nodes_updated,
         links_created=links_created,
         segments=segments_models,
+        run_id=run_id,
+        created_concept_ids=created_concept_ids,
+        updated_concept_ids=updated_concept_ids,
+        created_relationship_count=created_relationship_count,
+        created_claim_ids=created_claim_ids,
     )

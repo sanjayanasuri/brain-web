@@ -1,13 +1,17 @@
 """
 Service for fetching Notion pages and ingesting them as lectures into the knowledge graph
+
+Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
 """
 from typing import Optional, Tuple, List, Dict, Any
 from notion_client import Client
-import httpx
 import os
+from neo4j import Session
 
-from models import LectureIngestRequest, LectureIngestResult
-from config import OPENAI_API_KEY, NOTION_API_KEY, BRAINWEB_API_BASE
+from models import LectureIngestResult
+from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+from services_ingestion_kernel import ingest_artifact
+from config import OPENAI_API_KEY, NOTION_API_KEY
 
 # Initialize Notion client if API key is available
 NOTION = None
@@ -299,6 +303,7 @@ def flatten_notion_page_to_text(page_id: str) -> Tuple[str, str]:
 
 
 def ingest_notion_page_as_lecture(
+    session: Session,
     page_id: str,
     domain: Optional[str] = None
 ) -> LectureIngestResult:
@@ -307,10 +312,11 @@ def ingest_notion_page_as_lecture(
     
     This function:
     1. Fetches the Notion page using flatten_notion_page_to_text()
-    2. Calls the existing POST /lectures/ingest endpoint
+    2. Calls the ingestion kernel directly
     3. Returns the LectureIngestResult
     
     Args:
+        session: Neo4j session
         page_id: Notion page ID (UUID format, with or without hyphens)
         domain: Optional domain hint (defaults to "Software Engineering" if not provided)
     
@@ -319,7 +325,6 @@ def ingest_notion_page_as_lecture(
     
     Raises:
         ValueError: If Notion API key is missing or page fetch fails
-        httpx.HTTPError: If the ingestion endpoint call fails
     """
     # Flatten Notion page to text
     lecture_title, lecture_text = flatten_notion_page_to_text(page_id)
@@ -328,28 +333,53 @@ def ingest_notion_page_as_lecture(
     if domain is None:
         domain = "Software Engineering"
     
-    # Prepare request payload
-    payload = LectureIngestRequest(
-        lecture_title=lecture_title,
-        lecture_text=lecture_text,
+    # Get Notion page URL if available
+    notion_url = None
+    try:
+        # Try to construct a Notion URL (format: https://www.notion.so/{page_id})
+        # Note: This is a best-effort attempt; actual URL might differ
+        notion_url = f"https://www.notion.so/{page_id.replace('-', '')}"
+    except Exception:
+        pass
+    
+    # Build ArtifactInput for the kernel
+    payload = ArtifactInput(
+        artifact_type="notion_page",
+        source_url=notion_url,
+        source_id=page_id,
+        title=lecture_title,
         domain=domain,
+        text=lecture_text,
+        metadata={"notion_page_id": page_id},
+        actions=IngestionActions(
+            run_lecture_extraction=True,
+            run_chunk_and_claims=True,
+            embed_claims=True,
+            create_lecture_node=True,
+            create_artifact_node=True,
+        ),
+        policy=IngestionPolicy(),
     )
     
-    # Call the existing POST /lectures/ingest endpoint
-    url = f"{BRAINWEB_API_BASE}/lectures/ingest"
-    
+    # Call the ingestion kernel directly
     try:
-        with httpx.Client(timeout=300.0) as client:  # 5 minute timeout for LLM processing
-            response = client.post(
-                url,
-                json=payload.model_dump(),
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            result_data = response.json()
-            return LectureIngestResult(**result_data)
-    except httpx.HTTPStatusError as e:
-        error_text = e.response.text if e.response else "Unknown error"
-        raise ValueError(f"Failed to ingest lecture via API: {e.response.status_code} - {error_text}")
-    except httpx.RequestError as e:
-        raise ValueError(f"Failed to connect to ingestion endpoint at {url}: {str(e)}")
+        result = ingest_artifact(session, payload)
+        
+        # Convert IngestionResult to LectureIngestResult
+        if not result.lecture_id:
+            raise ValueError("Ingestion completed but no lecture_id was generated")
+        
+        return LectureIngestResult(
+            lecture_id=result.lecture_id,
+            nodes_created=result.nodes_created,
+            nodes_updated=result.nodes_updated,
+            links_created=result.links_created,
+            segments=result.segments,
+            run_id=result.run_id,
+            created_concept_ids=result.created_concept_ids,
+            updated_concept_ids=result.updated_concept_ids,
+            created_relationship_count=result.created_relationship_count,
+            created_claim_ids=result.created_claim_ids,
+        )
+    except Exception as e:
+        raise ValueError(f"Failed to ingest Notion page via kernel: {str(e)}")

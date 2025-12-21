@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getNotionConfig, updateNotionConfig, NotionConfig } from '../api-client';
-import NotionSyncManager from '../components/NotionSyncManager';
+import NotionSyncManager from '../components/notion/NotionSyncManager';
 
 export default function SourceManagementPage() {
   const [loading, setLoading] = useState(true);

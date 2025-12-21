@@ -1,3 +1,8 @@
+"""
+API endpoints for lecture management and ingestion.
+
+Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
+"""
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks

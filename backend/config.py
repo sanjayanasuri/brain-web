@@ -42,6 +42,9 @@ NOTION_DATABASE_IDS = [
 # Enable Notion auto-sync background loop (dev-only)
 ENABLE_NOTION_AUTO_SYNC = os.getenv("ENABLE_NOTION_AUTO_SYNC", "false").lower() in ("true", "1", "yes")
 
+# Enable Chrome extension and localhost CORS regex patterns (dev-only)
+ENABLE_EXTENSION_DEV = os.getenv("ENABLE_EXTENSION_DEV", "false").lower() in ("true", "1", "yes")
+
 # -----------------------------------------------------------------------------
 # Demo mode (production demo guardrails)
 # -----------------------------------------------------------------------------
@@ -62,3 +65,17 @@ DEMO_RATE_LIMIT_PER_SESSION_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_SESSION
 
 # Bedrock caps (server-side only; enforced in demo mode if Bedrock is enabled later)
 DEMO_BEDROCK_MAX_TOKENS_PER_SESSION = int(os.getenv("DEMO_BEDROCK_MAX_TOKENS_PER_SESSION", "4000"))
+
+# Proposed edge visibility threshold (for auto mode)
+PROPOSED_VISIBILITY_THRESHOLD = float(os.getenv("PROPOSED_VISIBILITY_THRESHOLD", "0.85"))
+
+# SEC EDGAR API User-Agent (required by SEC)
+SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "BrainWeb/1.0 contact@example.com")
+
+# Browser Use Cloud API configuration
+BROWSER_USE_API_KEY = os.getenv("BROWSER_USE_API_KEY")
+BROWSER_USE_CONFUSION_SKILL_ID = os.getenv("BROWSER_USE_CONFUSION_SKILL_ID")
+BROWSER_USE_BASE = os.getenv("BROWSER_USE_BASE", "https://api.browser-use.com/api/v2")
+# Finance skill IDs
+BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID")
+BROWSER_USE_FINANCE_TRACKER_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_TRACKER_SKILL_ID")

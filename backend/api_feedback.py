@@ -9,9 +9,9 @@ This module handles:
 
 from fastapi import APIRouter, Depends
 
-from models import ExplanationFeedback, FeedbackSummary, AnswerRevisionRequest
+from models import ExplanationFeedback, FeedbackSummary, AnswerRevisionRequest, StyleFeedbackRequest
 from db_neo4j import get_neo4j_session
-from services_graph import store_feedback, get_recent_feedback_summary, store_revision
+from services_graph import store_feedback, get_recent_feedback_summary, store_revision, store_style_feedback, get_style_feedback_examples
 from models import Revision
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
@@ -48,3 +48,29 @@ def get_feedback_summary(session=Depends(get_neo4j_session)):
     Used to guide future responses and avoid patterns that produced negative feedback.
     """
     return get_recent_feedback_summary(session)
+
+
+@router.post("/style", status_code=201)
+def submit_style_feedback(fb: StyleFeedbackRequest, session=Depends(get_neo4j_session)):
+    """
+    Submit structured style feedback for learning user preferences.
+    
+    Format matches: "Test1: [original_response] Test1 Feedback: [feedback_notes]"
+    
+    This creates a training dataset for learning the user's style preferences.
+    The feedback is used to automatically refine the style guide.
+    """
+    feedback_id = store_style_feedback(session, fb)
+    return {"feedback_id": feedback_id, "message": "Style feedback stored successfully"}
+
+
+@router.get("/style/examples")
+def get_style_feedback_examples_endpoint(
+    limit: int = 10,
+    session=Depends(get_neo4j_session)
+):
+    """
+    Get recent style feedback examples.
+    Used to show user their feedback history and for style guide refinement.
+    """
+    return get_style_feedback_examples(session, limit=limit)

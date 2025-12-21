@@ -476,7 +476,7 @@ resource "aws_ecs_task_definition" "api" {
       environment = [
         { name = "NODE_ENV", value = "production" },
         { name = "DEMO_MODE", value = "true" },
-        { name = "DEMO_ALLOW_WRITES", value = "true" },
+        { name = "DEMO_ALLOW_WRITES", value = "false" },
         { name = "DEMO_TENANT_ID", value = "demo" },
         { name = "DEMO_GRAPH_ID", value = "demo" },
         { name = "DEMO_SAFE_WRITE_PATHS", value = "/ai/chat,/ai/semantic-search,/events" },

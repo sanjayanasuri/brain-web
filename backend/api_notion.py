@@ -1,11 +1,13 @@
 """
 API router for Notion integration endpoints
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional, Literal
 from pydantic import BaseModel
+from neo4j import Session
 
 from models import LectureIngestResult
+from db_neo4j import get_neo4j_session
 from services_notion import (
     list_notion_pages,
     list_notion_databases,
@@ -44,12 +46,14 @@ def notion_summary():
 @router.post("/ingest-pages")
 def notion_ingest_pages(
     payload: NotionIngestPagesRequest,
+    session: Session = Depends(get_neo4j_session),
 ) -> List[LectureIngestResult]:
     """
     Bulk-ingest specific pages into the graph.
     
     Args:
         payload: Request with page_ids list and optional domain
+        session: Neo4j session
     
     Returns:
         List of LectureIngestResult for each successfully ingested page
@@ -59,7 +63,7 @@ def notion_ingest_pages(
     
     for pid in payload.page_ids:
         try:
-            res = ingest_notion_page_as_lecture(pid, domain=payload.domain)
+            res = ingest_notion_page_as_lecture(session, pid, domain=payload.domain)
             results.append(res)
         except Exception as e:
             # Collect errors but continue processing other pages
@@ -81,12 +85,14 @@ def notion_ingest_pages(
 @router.post("/ingest-all")
 def notion_ingest_all(
     payload: NotionIngestAllRequest,
+    session: Session = Depends(get_neo4j_session),
 ) -> List[LectureIngestResult]:
     """
     Ingest everything of a given type. Start with pages-only.
     
     Args:
         payload: Request with mode and optional domain
+        session: Neo4j session
     
     Returns:
         List of LectureIngestResult for each successfully ingested item
@@ -117,7 +123,7 @@ def notion_ingest_all(
     
     for pid in page_ids:
         try:
-            res = ingest_notion_page_as_lecture(pid, domain=payload.domain)
+            res = ingest_notion_page_as_lecture(session, pid, domain=payload.domain)
             results.append(res)
         except Exception as e:
             # Collect errors but continue processing other pages

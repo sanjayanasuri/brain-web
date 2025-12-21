@@ -7,7 +7,7 @@
 from platform import node
 
 # typing is a module that contains generic types to ensure type safety. 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 # pydantic is a python library that converts JSON data into Python objects.
 # It also serializes Pydantic models back into JSON.
 # Famous in FastAPI development to ensure user input is clean. 
@@ -63,7 +63,10 @@ class Concept (BaseModel):
     # Create a list of lecture sources.
     lecture_sources: List[str] = []  
     created_by: Optional[str] = None  
-    last_updated_by: Optional[str] = None  
+    last_updated_by: Optional[str] = None
+    # Ingestion run tracking
+    created_by_run_id: Optional[str] = None  # ingestion_run_id for new concepts
+    last_updated_by_run_id: Optional[str] = None  # ingestion_run_id for updates  
 
 class ConceptCreate(BaseModel):
     name: str
@@ -79,6 +82,9 @@ class ConceptCreate(BaseModel):
     lecture_sources: Optional[List[str]] = None
     created_by: Optional[str] = None
     last_updated_by: Optional[str] = None
+    # Ingestion run tracking
+    created_by_run_id: Optional[str] = None  # ingestion_run_id for new concepts
+    last_updated_by_run_id: Optional[str] = None  # ingestion_run_id for updates
 
 
 class ConceptUpdate(BaseModel):
@@ -241,6 +247,12 @@ class LectureIngestResult(BaseModel):
     nodes_updated: List[Concept]
     links_created: List[dict]  # List of {source_id, target_id, predicate}
     segments: List[LectureSegment] = []  # NEW: segmented, annotated version of the lecture
+    run_id: Optional[str] = None  # ingestion_run_id for this ingestion
+    # Enrichment fields for tracking created/updated IDs
+    created_concept_ids: List[str] = []
+    updated_concept_ids: List[str] = []
+    created_relationship_count: int = 0
+    created_claim_ids: List[str] = []
 
 
 # ---------- Basic AI Chat Models ----------
@@ -262,6 +274,93 @@ class SemanticSearchRequest(BaseModel):
 class SemanticSearchResponse(BaseModel):
     nodes: List[Concept]
     scores: List[float]
+
+
+class SemanticSearchCommunitiesRequest(BaseModel):
+    message: str
+    limit: int = 5
+    graph_id: str
+    branch_id: str
+
+
+class CommunitySearchResult(BaseModel):
+    community_id: str
+    name: str
+    score: float
+    summary: Optional[str] = None
+
+
+class SemanticSearchCommunitiesResponse(BaseModel):
+    communities: List[CommunitySearchResult]
+
+
+class GraphRAGContextRequest(BaseModel):
+    message: str
+    graph_id: str
+    branch_id: str
+    vertical: Optional[str] = "general"  # "general" | "finance"
+    lens: Optional[str] = None  # For finance: "fundamentals" | "catalysts" | "competition" | "risks" | "narrative"
+    recency_days: Optional[int] = None
+    evidence_strictness: Optional[str] = "medium"  # "high" | "medium" | "low"
+    include_proposed_edges: Optional[bool] = True
+
+
+class GraphRAGContextResponse(BaseModel):
+    context_text: str
+    debug: Optional[Dict[str, Any]] = None
+    meta: Optional[Dict[str, Any]] = None  # Vertical-specific metadata
+
+
+# ---------- Intent-Based Retrieval Models ----------
+
+from enum import Enum
+
+class Intent(str, Enum):
+    """Intent types for deterministic retrieval plans."""
+    DEFINITION_OVERVIEW = "DEFINITION_OVERVIEW"
+    TIMELINE = "TIMELINE"
+    CAUSAL_CHAIN = "CAUSAL_CHAIN"
+    COMPARE = "COMPARE"
+    WHO_NETWORK = "WHO_NETWORK"
+    EVIDENCE_CHECK = "EVIDENCE_CHECK"
+    EXPLORE_NEXT = "EXPLORE_NEXT"
+    WHAT_CHANGED = "WHAT_CHANGED"
+
+
+class RetrievalTraceStep(BaseModel):
+    """A single step in the retrieval plan execution."""
+    step: str
+    params: Dict[str, Any] = {}
+    counts: Dict[str, Any] = {}
+
+
+class RetrievalResult(BaseModel):
+    """Complete retrieval result with intent, trace, and context."""
+    intent: str
+    trace: List[RetrievalTraceStep]
+    context: Dict[str, Any]  # Structured payload with focus_entities, claims, chunks, etc.
+    plan_version: str = "intent_plans_v1"
+
+
+class IntentResult(BaseModel):
+    """Result from intent router."""
+    intent: str
+    confidence: float
+    reasoning: str  # Short explanation of why this intent was chosen
+
+
+class RetrievalRequest(BaseModel):
+    """Request for intent-based retrieval."""
+    message: str
+    mode: str = "graphrag"
+    limit: int = 5
+    intent: Optional[str] = None  # If provided, skip router and use this intent
+    graph_id: Optional[str] = None
+    branch_id: Optional[str] = None
+    detail_level: str = "summary"  # "summary" or "full"
+    limit_claims: Optional[int] = None  # Override default caps
+    limit_entities: Optional[int] = None
+    limit_sources: Optional[int] = None
 
 
 # ---------- Personalization Models ----------
@@ -331,6 +430,31 @@ class UserProfile(BaseModel):
     learning_preferences: Dict[str, Any] = {}
 
 
+class ReminderPreferences(BaseModel):
+    """Preferences for reminder notifications."""
+    weekly_digest: Dict[str, Any] = {
+        "enabled": False,
+        "day_of_week": 1,  # 1-7 (Monday=1, Sunday=7)
+        "hour": 9  # 0-23
+    }
+    review_queue: Dict[str, Any] = {
+        "enabled": False,
+        "cadence_days": 3
+    }
+    finance_stale: Dict[str, Any] = {
+        "enabled": False,
+        "cadence_days": 7
+    }
+
+
+class UIPreferences(BaseModel):
+    """
+    UI preferences for lens system and other UI customizations.
+    """
+    active_lens: str = "NONE"  # "NONE" | "LEARNING" | "FINANCE"
+    reminders: ReminderPreferences = Field(default_factory=ReminderPreferences)
+
+
 class NotionConfig(BaseModel):
     """
     Configuration for Notion integration.
@@ -368,6 +492,20 @@ class AnswerRevisionRequest(BaseModel):
     user_rewritten_answer: str
 
 
+class StyleFeedbackRequest(BaseModel):
+    """
+    Structured feedback for style learning.
+    Matches the format: "Test1: [response] Test1 Feedback: [notes]"
+    """
+    answer_id: str
+    question: str
+    original_response: str  # Exact original response
+    feedback_notes: str  # User's feedback/notes about what could be different
+    user_rewritten_version: Optional[str] = None  # User's version if they rewrote it
+    test_label: Optional[str] = None  # Optional label like "Test1", "Test2", etc.
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 # ---------- Teaching Style Profile Models ----------
 
 class TeachingStyleProfile(BaseModel):
@@ -400,6 +538,9 @@ class Resource(BaseModel):
     mime_type: Optional[str] = None
     caption: Optional[str] = None
     source: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None  # NEW
+    created_at: Optional[str] = None  # ISO format timestamp
+    ingestion_run_id: Optional[str] = None  # ingestion_run_id for resources created during ingestion
 
 
 class ResourceCreate(BaseModel):
@@ -410,6 +551,80 @@ class ResourceCreate(BaseModel):
     mime_type: Optional[str] = None
     caption: Optional[str] = None
     source: Optional[str] = "upload"
+    metadata: Optional[Dict[str, Any]] = None  # NEW
+    ingestion_run_id: Optional[str] = None  # ingestion_run_id for resources created during ingestion
+
+
+# ---------- Artifact Models ----------
+
+class Artifact(BaseModel):
+    """Represents an ingested artifact (webpage, document, etc.)"""
+    artifact_id: str
+    graph_id: str
+    branch_id: str
+    artifact_type: Literal["webpage"]
+    url: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+    captured_at: int  # Unix timestamp in milliseconds
+    content_hash: str
+    text: str  # Full text content
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_by_run_id: Optional[str] = None
+
+
+class WebpageIngestRequest(BaseModel):
+    """Request to ingest a webpage"""
+    url: str
+    graph_id: str
+    branch_id: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+    text: str
+    metadata: Optional[Dict[str, Any]] = None
+    extract_claims: bool = False  # Optional: extract claims for evidence system
+
+
+class WebpageIngestResponse(BaseModel):
+    """Response from webpage ingestion endpoint"""
+    artifact_id: str
+    reused_existing: bool
+    run_id: Optional[str] = None
+    counts: Dict[str, int] = Field(default_factory=dict)  # {concepts_created, concepts_updated, edges_created, claims_created, chunks_created}
+
+
+class ArtifactGraphPreview(BaseModel):
+    """Graph preview node for artifact"""
+    id: str
+    type: str = "artifact"
+    url: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+
+
+class ConceptGraphPreview(BaseModel):
+    """Graph preview node for concept"""
+    id: str
+    type: str = "concept"
+    name: str
+    domain: Optional[str] = None
+    description: Optional[str] = None
+
+
+class GraphEdgePreview(BaseModel):
+    """Graph preview edge"""
+    source: str
+    target: str
+    type: str
+    status: Optional[str] = None
+
+
+class ArtifactViewResponse(BaseModel):
+    """Response for artifact view with graph preview"""
+    artifact: Dict[str, Any]  # artifact fields
+    concepts: List[ConceptGraphPreview]  # top linked concepts
+    nodes: List[Dict[str, Any]]  # artifact + concepts for graph
+    edges: List[GraphEdgePreview]  # MENTIONS + concept-to-concept edges
 
 
 # ---------- Branch Explorer (Graphs / Branches / Snapshots) ----------
@@ -418,8 +633,11 @@ class ResourceCreate(BaseModel):
 class GraphSummary(BaseModel):
     graph_id: str
     name: Optional[str] = None
+    description: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    node_count: int = 0
+    edge_count: int = 0
 
 
 class GraphCreateRequest(BaseModel):
@@ -494,6 +712,32 @@ class SnapshotSummary(BaseModel):
     graph_id: str
     branch_id: str
     name: str
+
+
+# ---------- Ingestion Run Models ----------
+
+class IngestionRun(BaseModel):
+    """Represents a single ingestion run that tags all created/updated objects."""
+    run_id: str  # UUID
+    graph_id: str
+    source_type: str  # "LECTURE" | "NOTION" | "FINANCE" | "UPLOAD" | "URL"
+    source_label: Optional[str] = None  # e.g., lecture title, Notion page title, ticker
+    status: str  # "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED"
+    started_at: str  # ISO timestamp
+    completed_at: Optional[str] = None  # ISO timestamp
+    summary_counts: Optional[Dict[str, int]] = None  # {concepts_created, concepts_updated, resources_created, relationships_proposed}
+    error_count: Optional[int] = None
+    errors: Optional[List[str]] = None  # List of error messages
+    undone_at: Optional[str] = None  # ISO timestamp when run was undone
+    undo_mode: Optional[str] = None  # "SAFE" | "RELATIONSHIPS_ONLY"
+    undo_summary: Optional[Dict[str, Any]] = None  # Archive counts and skipped items
+    restored_at: Optional[str] = None  # ISO timestamp when run was restored
+
+
+class IngestionRunCreate(BaseModel):
+    """Request to create a new ingestion run."""
+    source_type: str
+    source_label: Optional[str] = None
     created_at: str
     focused_node_id: Optional[str] = None
 
@@ -507,3 +751,130 @@ class SnapshotRestoreResponse(BaseModel):
     restored_branch_id: Optional[str] = None
     graph_id: str
     snapshot_id: str
+
+
+# ---------- Relationship Review Models ----------
+
+class RelationshipEdge(BaseModel):
+    """Edge specification for relationship review operations."""
+    src_node_id: str
+    dst_node_id: str
+    rel_type: str
+
+
+class RelationshipReviewItem(BaseModel):
+    """A single relationship item in the review queue."""
+    src_node_id: str
+    src_name: str
+    dst_node_id: str
+    dst_name: str
+    rel_type: str
+    confidence: float
+    method: str
+    rationale: Optional[str] = None
+    source_id: Optional[str] = None
+    chunk_id: Optional[str] = None
+    claim_id: Optional[str] = None
+    model_version: Optional[str] = None
+    created_at: Optional[int] = None
+    updated_at: Optional[int] = None
+    reviewed_at: Optional[int] = None
+    reviewed_by: Optional[str] = None
+
+
+class RelationshipReviewListResponse(BaseModel):
+    """Response for listing relationships for review."""
+    relationships: List[RelationshipReviewItem]
+    total: int
+    graph_id: str
+    status: str
+
+
+class RelationshipAcceptRequest(BaseModel):
+    """Request to accept relationships."""
+    graph_id: Optional[str] = None  # If not provided, uses active graph context
+    edges: List[RelationshipEdge]
+    reviewed_by: Optional[str] = None
+
+
+class RelationshipRejectRequest(BaseModel):
+    """Request to reject relationships."""
+    graph_id: Optional[str] = None  # If not provided, uses active graph context
+    edges: List[RelationshipEdge]
+    reviewed_by: Optional[str] = None
+
+
+class RelationshipEditRequest(BaseModel):
+    """Request to edit a relationship."""
+    graph_id: Optional[str] = None  # If not provided, uses active graph context
+    src_node_id: str
+    dst_node_id: str
+    old_rel_type: str
+    new_rel_type: str
+    reviewed_by: Optional[str] = None
+
+
+class RelationshipReviewActionResponse(BaseModel):
+    """Response for accept/reject/edit actions."""
+    status: str
+    action: str
+    count: int
+    graph_id: str
+
+
+# ---------- Entity Merge Review Models ----------
+
+class MergeCandidateItem(BaseModel):
+    """A single merge candidate in the review queue."""
+    candidate_id: str
+    score: float
+    method: str
+    rationale: str
+    status: str
+    created_at: Optional[int] = None
+    updated_at: Optional[int] = None
+    reviewed_at: Optional[int] = None
+    reviewed_by: Optional[str] = None
+    src_concept: Dict[str, Any]
+    dst_concept: Dict[str, Any]
+
+
+class MergeCandidateListResponse(BaseModel):
+    """Response for listing merge candidates."""
+    candidates: List[MergeCandidateItem]
+    total: int
+    graph_id: str
+    status: str
+
+
+class MergeCandidateAcceptRequest(BaseModel):
+    """Request to accept merge candidates."""
+    graph_id: str
+    candidate_ids: List[str]
+    reviewed_by: Optional[str] = None
+
+
+class MergeCandidateRejectRequest(BaseModel):
+    """Request to reject merge candidates."""
+    graph_id: str
+    candidate_ids: List[str]
+    reviewed_by: Optional[str] = None
+
+
+class MergeExecuteRequest(BaseModel):
+    """Request to execute a merge."""
+    graph_id: str
+    keep_node_id: str
+    merge_node_id: str
+    reviewed_by: Optional[str] = None
+
+
+class MergeExecuteResponse(BaseModel):
+    """Response for merge execution."""
+    status: str
+    keep_node_id: str
+    merge_node_id: str
+    relationships_redirected: int
+    relationships_skipped: int
+    relationships_deleted: int
+    graph_id: str

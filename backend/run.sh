@@ -4,5 +4,5 @@
 
 cd "$(dirname "$0")"
 source .venv/bin/activate
-exec python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+exec python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 

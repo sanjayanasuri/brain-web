@@ -1,0 +1,106 @@
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  width: 360px;
+  background: #0b0f19;
+  color: #e6eaf2;
+}
+
+.container {
+  padding: 12px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.title {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.status {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.status--ok { background: #123d1f; color: #a8f0c0; }
+.status--bad { background: #3d1212; color: #f0a8a8; }
+.status--unknown { background: #1b2436; color: #c8d2ea; }
+
+.section {
+  margin-top: 10px;
+}
+
+.label {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+.value {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.subvalue {
+  font-size: 12px;
+  opacity: 0.75;
+  word-break: break-word;
+}
+
+.modes label {
+  display: block;
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+.input, .textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #22304f;
+  background: #0f1626;
+  color: #e6eaf2;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.textarea {
+  min-height: 56px;
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  flex: 1;
+  border: 1px solid #22304f;
+  background: #0f1626;
+  color: #e6eaf2;
+  border-radius: 10px;
+  padding: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn--primary {
+  background: #1b2a4a;
+  border-color: #2c447a;
+}
+
+.result {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0.9;
+}
+

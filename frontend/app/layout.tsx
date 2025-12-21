@@ -1,5 +1,8 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import TopBarWrapper from './components/topbar/TopBarWrapper';
+import { SidebarProvider } from './components/context-providers/SidebarContext';
+import { LensProvider } from './components/context-providers/LensContext';
 
 export const metadata: Metadata = {
   title: 'Brain Web - Knowledge Graph Explorer',
@@ -13,7 +16,13 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <SidebarProvider>
+          <LensProvider>
+            <TopBarWrapper>{children}</TopBarWrapper>
+          </LensProvider>
+        </SidebarProvider>
+      </body>
     </html>
   );
 }

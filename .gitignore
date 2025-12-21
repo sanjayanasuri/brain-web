@@ -42,17 +42,30 @@ Thumbs.db
 # Logs
 *.log
 logs/
+.cursor/
+
+# Test artifacts
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo
 
 # Docker volumes (data is persisted in Docker volumes, not in repo)
 neo4j-data/
 neo4j-logs/
 
-# Embeddings cache (can be regenerated, but large file ~11MB)
+# Cache files (can be regenerated)
+backend/cache/
 backend/embeddings_cache.json
+backend/notion_*.json
+backend/notion_*.py
 
 # Notion state files (user-specific configuration)
 backend/notion_index_state.json
 backend/notion_page_index.json
+
+# Uploaded resources (user-generated content)
+backend/uploaded_resources/*
+!backend/uploaded_resources/.gitkeep
 
 # Terraform
 .terraform/

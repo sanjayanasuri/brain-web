@@ -1,0 +1,28 @@
+{
+  "defaults": {
+    "since_days": 30,
+    "limit": 20,
+    "news": {
+      "allow_fulltext_fetch": false
+    }
+  },
+  "companies": {
+    "NVDA": {
+      "company_name": "NVIDIA",
+      "cik": null,
+      "ir": {
+        "press_release_index_url": "https://investor.nvidia.com/news-events/press-releases",
+        "shareholder_letter_index_url": "https://investor.nvidia.com/annual-reports",
+        "link_include_patterns": [],
+        "link_exclude_patterns": []
+      },
+      "news": {
+        "rss_feeds": [
+          "https://feeds.finance.yahoo.com/rss/2.0/headline?s=NVDA",
+          "https://www.nasdaq.com/feed/rssoutbound?symbol=NVDA"
+        ],
+        "allow_fulltext_fetch": false
+      }
+    }
+  }
+}

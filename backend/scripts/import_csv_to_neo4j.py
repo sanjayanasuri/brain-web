@@ -154,6 +154,11 @@ def import_nodes(session: Session, file_path: Path):
             query = """
             MERGE (g:GraphSpace {graph_id: 'default'})
             ON CREATE SET g.name = 'Default'
+            // Delete any existing node with this node_id first (before MERGE to avoid constraint violation)
+            WITH g
+            OPTIONAL MATCH (dup:Concept {node_id: $node_id})
+            FOREACH (_ IN CASE WHEN dup IS NULL THEN [] ELSE [1] END | DETACH DELETE dup)
+            WITH g
             MERGE (c:Concept {graph_id: 'default', name: $name})
             ON CREATE SET
                 c.node_id = $node_id,
@@ -164,17 +169,13 @@ def import_nodes(session: Session, file_path: Path):
                 c.url_slug = $url_slug,
                 c.on_branches = ['main']
             ON MATCH SET
+                c.node_id = $node_id,
                 c.domain = $domain,
                 c.type = $type,
                 c.notes_key = $notes_key,
                 c.lecture_key = $lecture_key,
                 c.url_slug = $url_slug,
-                c.on_branches = COALESCE(c.on_branches, ['main'])
-            WITH g, c
-            OPTIONAL MATCH (dup:Concept {node_id: $node_id})
-            WHERE dup <> c
-            FOREACH (_ IN CASE WHEN dup IS NULL THEN [] ELSE [1] END | DETACH DELETE dup)
-            SET c.node_id = $node_id,
+                c.on_branches = COALESCE(c.on_branches, ['main']),
                 c.graph_id = 'default'
             MERGE (c)-[:BELONGS_TO]->(g)
             """

@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Brain Web Capture (Local)",
+  "version": "0.1.0",
+  "description": "Capture webpages into Brain Web running on localhost.",
+  "action": {
+    "default_title": "Capture to Brain Web",
+    "default_popup": "src/popup.html"
+  },
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content_script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "src/service_worker.js",
+    "type": "module"
+  }
+}
+

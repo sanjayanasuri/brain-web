@@ -1,6 +1,8 @@
 """
 Notion auto-sync service for Brain Web
 Polls Notion databases for updated pages and ingests them as lectures
+
+Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
 """
 import json
 from datetime import datetime, timezone

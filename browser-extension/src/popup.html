@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Brain Web Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="title">Brain Web</div>
+        <div id="status" class="status status--unknown">Checking…</div>
+      </div>
+
+      <div class="section">
+        <div class="label">Page</div>
+        <div id="pageTitle" class="value">—</div>
+        <div id="pageUrl" class="subvalue">—</div>
+      </div>
+
+      <div class="section">
+        <div class="label">Capture mode</div>
+        <div class="modes">
+          <label><input type="radio" name="mode" value="selection" /> Selection</label>
+          <label><input type="radio" name="mode" value="reader" checked /> Reader</label>
+          <label><input type="radio" name="mode" value="full" /> Full</label>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="label">Domain</div>
+        <input id="domain" class="input" placeholder="General" />
+      </div>
+
+      <div class="section">
+        <div class="label">Tags (comma separated)</div>
+        <input id="tags" class="input" placeholder="cold-fusion, prediction-markets" />
+      </div>
+
+      <div class="section">
+        <div class="label">Note (optional)</div>
+        <textarea id="note" class="textarea" placeholder="What matters about this page?"></textarea>
+      </div>
+
+      <div class="actions">
+        <button id="captureBtn" class="btn btn--primary">Capture</button>
+        <button id="openBtn" class="btn">Open Brain Web</button>
+      </div>
+
+      <div id="result" class="result"></div>
+
+      <hr />
+
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        <button id="refresh">Refresh</button>
+        <button id="clear">Clear</button>
+      </div>
+
+      <pre id="queue" style="white-space:pre-wrap; font-size:12px; max-height:220px; overflow:auto;"></pre>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
+

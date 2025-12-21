@@ -820,10 +820,44 @@ button {
   margin-top: 4px;
 }
 
+/* Pulse highlight animation for evidence navigation */
+@keyframes pulse-highlight {
+  0% {
+    background-color: var(--background);
+    box-shadow: 0 0 0 0 rgba(17, 138, 178, 0);
+  }
+  50% {
+    background-color: rgba(17, 138, 178, 0.1);
+    box-shadow: 0 0 0 4px rgba(17, 138, 178, 0.2);
+  }
+  100% {
+    background-color: var(--background);
+    box-shadow: 0 0 0 0 rgba(17, 138, 178, 0);
+  }
+}
+
+.resource-item.pulse-highlight {
+  animation: pulse-highlight 1.2s ease-in-out;
+  transition: background-color 0.3s ease;
+}
+
 .resource-upload {
   margin-top: 8px;
 }
 
 .resource-upload__label {
   cursor: pointer;
+}
+
+/* Home dashboard responsive grid */
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+@media (max-width: 968px) {
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
 }

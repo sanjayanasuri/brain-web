@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from api_concepts import router as concepts_router
 from api_ai import router as ai_router
+from api_retrieval import router as retrieval_router
 from api_lectures import router as lectures_router
 from api_admin import router as admin_router
 from api_notion import router as notion_router
@@ -30,7 +31,16 @@ from api_gaps import router as gaps_router
 from api_graphs import router as graphs_router
 from api_branches import router as branches_router
 from api_snapshots import router as snapshots_router
-from api_events import router as events_router
+from api_events import router as events_router, sessions_router
+from api_review import router as review_router
+from api_suggestions import router as suggestions_router
+from api_connectors import router as connectors_router
+from api_finance_ingestion import router as finance_ingestion_router
+from api_finance import router as finance_router
+from api_ingestion_runs import router as ingestion_runs_router
+from api_paths import router as paths_router
+from api_quality import router as quality_router
+from api_web_ingestion import router as web_ingestion_router
 
 from demo_mode import (
     FixedWindowRateLimiter,
@@ -150,16 +160,27 @@ origins = [
     "https://brain-htt06gwfr-sanjayanasuris-projects.vercel.app",
 ]
 
+# CORS configuration
+cors_kwargs = {
+    "allow_origins": origins,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+
+# Add regex patterns for Chrome extensions and localhost dev when enabled
+from config import ENABLE_EXTENSION_DEV
+if ENABLE_EXTENSION_DEV:
+    cors_kwargs["allow_origin_regex"] = r"(chrome-extension://.*|http://localhost:\d+|http://127\.0\.0\.1:\d+)"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    **cors_kwargs,
 )
 
 app.include_router(concepts_router)
 app.include_router(ai_router)
+app.include_router(retrieval_router)
 app.include_router(lectures_router)
 app.include_router(preferences_router)
 app.include_router(feedback_router)
@@ -171,13 +192,24 @@ app.include_router(graphs_router)
 app.include_router(branches_router)
 app.include_router(snapshots_router)
 app.include_router(events_router)
+app.include_router(sessions_router)
+app.include_router(review_router)
+app.include_router(suggestions_router)
+app.include_router(finance_router)
+app.include_router(paths_router)
+app.include_router(quality_router)
+# Web ingestion router is always included but has local-only guard
+app.include_router(web_ingestion_router)
 
-# In demo mode we do not even mount private/admin/debug/test surfaces.
+# In demo mode we do not mount private/admin/debug/test/ingestion surfaces.
 if not demo_settings.demo_mode:
     app.include_router(admin_router)
     app.include_router(notion_router)
     app.include_router(debug_router)
     app.include_router(tests_router)
+    app.include_router(connectors_router)
+    app.include_router(finance_ingestion_router)
+    app.include_router(ingestion_runs_router)
 
 
 @app.middleware("http")
