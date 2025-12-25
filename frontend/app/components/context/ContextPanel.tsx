@@ -7,9 +7,7 @@ import type { Concept, Resource, Suggestion } from '../../api-client';
 import { fetchEvidenceForConcept, type FetchEvidenceResult } from '../../lib/evidenceFetch';
 import { uploadResourceForConcept, getResourcesForConcept, getSuggestions, getSuggestedPaths, type SuggestedPath } from '../../api-client';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
-import { isFinanceSnapshotResource, getSnapshotAsOf, formatSnapshotDate } from '../../utils/financeSnapshot';
 import { toRgba } from '../../utils/colorUtils';
-import { useLens } from '../context-providers/LensContext';
 import {
   filterSuggestions,
   dismissSuggestion,
@@ -17,8 +15,9 @@ import {
   SNOOZE_DURATIONS,
 } from '../../lib/suggestionPrefs';
 import { saveItem, removeSavedItem, isItemSaved, getSavedItems } from '../../lib/savedItems';
-import { getConceptQuality, type ConceptQuality } from '../../api-client';
+import { getConceptQuality, type ConceptQuality, getCrossGraphInstances, linkCrossGraphInstances, getLinkedInstances, updateConcept, getNeighborsWithRelationships, getClaimsForConcept } from '../../api-client';
 import { CoveragePill, FreshnessPill } from '../ui/QualityIndicators';
+import { generateConceptObservation, generateSuggestionObservation } from '../../lib/observations';
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
@@ -63,6 +62,7 @@ function SuggestionOverflowMenu({
           fontSize: '16px',
           lineHeight: 1,
         }}
+        aria-label="More options"
         title="More options"
       >
         ⋯
@@ -207,7 +207,12 @@ interface ContextPanelProps {
   onResourceUpload?: (resource: Resource) => void;
   domainColors: Map<string, string>;
   neighborCount: number;
-  isFinanceRelevant: boolean;
+  connections?: Array<{
+    node_id: string;
+    name: string;
+    predicate: string;
+    isOutgoing: boolean;
+  }>;
   IS_DEMO_MODE: boolean;
   // Activity tab props
   activityEvents?: Array<{
@@ -224,8 +229,6 @@ interface ContextPanelProps {
       onClick: () => void;
     };
   }>;
-  // Finance tab props
-  financeTabContent?: React.ReactNode;
 }
 
 export default function ContextPanel({
@@ -246,10 +249,11 @@ export default function ContextPanel({
   onResourceUpload,
   domainColors,
   neighborCount,
-  isFinanceRelevant,
+  connections = [],
   IS_DEMO_MODE,
   activityEvents = [],
-  financeTabContent,
+  activeGraphId,
+  onSwitchGraph,
 }: ContextPanelProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -267,7 +271,8 @@ export default function ContextPanel({
   // Next steps suggestions state
   const [nextStepsSuggestions, setNextStepsSuggestions] = useState<Suggestion[]>([]);
   const [nextStepsLoading, setNextStepsLoading] = useState(false);
-  const nextStepsCacheRef = useRef<Map<string, Suggestion[]>>(new Map());
+  const nextStepsCacheRef = useRef<Map<string, Suggestion[]>>(new Map()); // Key: conceptId-graphId
+  const suggestionsLoadingRef = useRef<Set<string>>(new Set());
   const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
   const [learnMenuOpen, setLearnMenuOpen] = useState(false);
   const learnMenuRef = useRef<HTMLDivElement>(null);
@@ -279,6 +284,14 @@ export default function ContextPanel({
   // Quality indicators state
   const [conceptQuality, setConceptQuality] = useState<ConceptQuality | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
+  const qualityCacheRef = useRef<Map<string, ConceptQuality>>(new Map());
+  const qualityLoadingRef = useRef<Set<string>>(new Set());
+  
+  // Description generation state
+  const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
+  const [generatedDescription, setGeneratedDescription] = useState<string | null>(null);
+  const descriptionGenerationAttemptedRef = useRef<Set<string>>(new Set());
+  const descriptionGenerationNodeIdRef = useRef<string | null>(null);
 
   // Check if selectedNode is in active path
   const activePathInfo = useMemo(() => {
@@ -309,6 +322,9 @@ export default function ContextPanel({
       return [];
     }
   };
+
+  // Calculate evidence count early so it can be used in useMemo
+  const evidenceCount = selectedResources.length;
 
   // Helper to determine if concept is "thin" (gap)
   const isConceptThin = useMemo(() => {
@@ -346,6 +362,18 @@ export default function ContextPanel({
     }
   }, [selectedNode?.node_id]);
   
+  // Get graphId from searchParams - extract value to prevent infinite loops
+  // searchParams object changes on every render in Next.js, so we extract just the value
+  const graphIdValueRef = useRef<string | undefined>(undefined);
+  const currentGraphIdValue = searchParams?.get('graph_id') || undefined;
+  
+  // Track the actual value, not the object
+  if (graphIdValueRef.current !== currentGraphIdValue) {
+    graphIdValueRef.current = currentGraphIdValue;
+  }
+  
+  const graphId = graphIdValueRef.current;
+
   // Load quality indicators when concept changes
   useEffect(() => {
     if (!selectedNode) {
@@ -353,16 +381,108 @@ export default function ContextPanel({
       return;
     }
     
+    const conceptId = selectedNode.node_id;
+    const cacheKey = `${conceptId}-${graphId || 'default'}`;
+    
+    // Check cache first
+    if (qualityCacheRef.current.has(cacheKey)) {
+      setConceptQuality(qualityCacheRef.current.get(cacheKey)!);
+      setQualityLoading(false);
+      return;
+    }
+    
+    // Prevent duplicate requests
+    if (qualityLoadingRef.current.has(cacheKey)) {
+      return;
+    }
+    
+    // Abort controller to cancel request if node changes
+    const abortController = new AbortController();
+    let isAborted = false;
+    
+    qualityLoadingRef.current.add(cacheKey);
     setQualityLoading(true);
-    const graphId = searchParams?.get('graph_id') || undefined;
-    getConceptQuality(selectedNode.node_id, graphId)
-      .then(setConceptQuality)
-      .catch((err) => {
-        console.warn('Failed to load concept quality:', err);
-        setConceptQuality(null);
-      })
-      .finally(() => setQualityLoading(false));
-  }, [selectedNode?.node_id, searchParams]);
+    
+    // Small delay to prevent rapid-fire calls when switching nodes quickly
+    const timeoutId = setTimeout(() => {
+      getConceptQuality(conceptId, graphId)
+        .then((quality) => {
+          if (!isAborted) {
+            setConceptQuality(quality);
+            // Cache the result
+            qualityCacheRef.current.set(cacheKey, quality);
+          }
+        })
+        .catch((err) => {
+          if (!isAborted) {
+            console.warn('Failed to load concept quality:', err);
+            setConceptQuality(null);
+          }
+        })
+        .finally(() => {
+          if (!isAborted) {
+            setQualityLoading(false);
+            qualityLoadingRef.current.delete(cacheKey);
+          }
+        });
+    }, 150); // Small delay to batch requests
+    
+    return () => {
+      isAborted = true;
+      abortController.abort();
+      clearTimeout(timeoutId);
+      qualityLoadingRef.current.delete(cacheKey);
+    };
+  }, [selectedNode?.node_id, graphId]);
+
+  // Auto-generate description when node is selected and doesn't have one
+  // Made non-blocking and cancellable to prevent UI lock
+  useEffect(() => {
+    if (!selectedNode) {
+      // Reset attempted set when node is deselected
+      descriptionGenerationAttemptedRef.current.clear();
+      setGeneratedDescription(null);
+      setIsGeneratingDescription(false);
+      descriptionGenerationNodeIdRef.current = null;
+      return;
+    }
+    
+    // Clear generated description when switching to a different node
+    // This prevents showing the previous node's generated description
+    setGeneratedDescription(null);
+    setIsGeneratingDescription(false);
+    descriptionGenerationNodeIdRef.current = null;
+    
+    const nodeId = selectedNode.node_id;
+    
+    // Skip if we've already attempted generation for this node
+    if (descriptionGenerationAttemptedRef.current.has(nodeId)) return;
+    
+    // Check if description is missing or too short
+    if (!selectedNode.description || selectedNode.description.length < 20) {
+      // Mark as attempted immediately to prevent multiple calls
+      descriptionGenerationAttemptedRef.current.add(nodeId);
+      
+      // Auto-generate after a delay, but make it cancellable
+      const timer = setTimeout(() => {
+        // Double-check the node is still selected before generating
+        // This prevents generation if user switched nodes quickly
+        if (selectedNode && selectedNode.node_id === nodeId && !isGeneratingDescription) {
+          handleGenerateDescription().catch(err => {
+            // Silently fail - don't block UI
+            console.warn('Description generation failed:', err);
+            descriptionGenerationAttemptedRef.current.delete(nodeId); // Allow retry
+          });
+        }
+      }, 3000); // Increased delay to reduce interference
+      
+      return () => clearTimeout(timer);
+    } else {
+      // If description exists, mark as attempted so we don't try again
+      descriptionGenerationAttemptedRef.current.add(nodeId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNode?.node_id]);
 
   // Load next steps suggestions when concept changes
   useEffect(() => {
@@ -372,34 +492,58 @@ export default function ContextPanel({
     }
 
     const conceptId = selectedNode.node_id;
+    const cacheKey = `${conceptId}-${graphId || 'default'}`;
     
     // Check cache first
-    if (nextStepsCacheRef.current.has(conceptId)) {
-      const cached = nextStepsCacheRef.current.get(conceptId)!;
+    if (nextStepsCacheRef.current.has(cacheKey)) {
+      const cached = nextStepsCacheRef.current.get(cacheKey)!;
       const filtered = filterSuggestions(cached);
       setNextStepsSuggestions(filtered);
       return;
     }
 
-    // Fetch suggestions
-    setNextStepsLoading(true);
-    const graphId = searchParams?.get('graph_id') || undefined;
+    // Prevent duplicate requests
+    if (suggestionsLoadingRef.current.has(cacheKey)) {
+      return;
+    }
+
+    // Abort controller to cancel requests if component unmounts or node changes
+    const abortController = new AbortController();
     
-    getSuggestions(3, graphId, undefined, conceptId)
-      .then((suggestions) => {
-        const filtered = filterSuggestions(suggestions);
-        setNextStepsSuggestions(filtered);
-        // Cache the results
-        nextStepsCacheRef.current.set(conceptId, suggestions);
-      })
-      .catch((error) => {
-        console.warn('Failed to load next steps suggestions:', error);
-        setNextStepsSuggestions([]);
-      })
-      .finally(() => {
-        setNextStepsLoading(false);
-      });
-  }, [selectedNode?.node_id, searchParams]);
+    suggestionsLoadingRef.current.add(cacheKey);
+    setNextStepsLoading(true);
+    
+    // Use a small delay to batch requests and prevent rapid-fire calls
+    const timeoutId = setTimeout(() => {
+      getSuggestions(3, graphId, undefined, conceptId)
+        .then((suggestions) => {
+          if (!abortController.signal.aborted) {
+            const filtered = filterSuggestions(suggestions);
+            setNextStepsSuggestions(filtered);
+            // Cache the results
+            nextStepsCacheRef.current.set(cacheKey, suggestions);
+          }
+        })
+        .catch((error) => {
+          if (!abortController.signal.aborted) {
+            console.warn('Failed to load next steps suggestions:', error);
+            setNextStepsSuggestions([]);
+          }
+        })
+        .finally(() => {
+          if (!abortController.signal.aborted) {
+            setNextStepsLoading(false);
+            suggestionsLoadingRef.current.delete(cacheKey);
+          }
+        });
+    }, 100); // Small delay to batch requests
+    
+    return () => {
+      abortController.abort();
+      clearTimeout(timeoutId);
+      suggestionsLoadingRef.current.delete(cacheKey);
+    };
+  }, [selectedNode?.node_id, graphId]);
 
   // Load suggested paths when concept changes
   useEffect(() => {
@@ -409,7 +553,6 @@ export default function ContextPanel({
     }
 
     const conceptId = selectedNode.node_id;
-    setPathsLoading(true);
     const graphId = searchParams?.get('graph_id') || undefined;
     
     if (!graphId) {
@@ -417,53 +560,135 @@ export default function ContextPanel({
       return;
     }
 
-    getSuggestedPaths(graphId, conceptId, 2, activeLens)
-      .then((paths) => {
-        // Filter out dismissed paths
-        const dismissed = getDismissedPaths(graphId);
-        const filtered = paths.filter(p => !dismissed.includes(p.path_id));
-        setSuggestedPaths(filtered);
-      })
-      .catch((error) => {
-        console.warn('Failed to load suggested paths:', error);
-        setSuggestedPaths([]);
-      })
-      .finally(() => {
-        setPathsLoading(false);
-      });
-  }, [selectedNode?.node_id, searchParams, activeLens]);
+    // Abort controller to cancel request if node changes
+    const abortController = new AbortController();
+    let isAborted = false;
+    
+    setPathsLoading(true);
+    
+    // Small delay to prevent rapid-fire calls when switching nodes quickly
+    const timeoutId = setTimeout(() => {
+      getSuggestedPaths(graphId, conceptId, 2)
+        .then((paths) => {
+          if (!isAborted) {
+            // Filter out dismissed paths
+            const dismissed = getDismissedPaths(graphId);
+            const filtered = paths.filter(p => !dismissed.includes(p.path_id));
+            setSuggestedPaths(filtered);
+          }
+        })
+        .catch((error) => {
+          if (!isAborted) {
+            console.warn('Failed to load suggested paths:', error);
+            setSuggestedPaths([]);
+          }
+        })
+        .finally(() => {
+          if (!isAborted) {
+            setPathsLoading(false);
+          }
+        });
+    }, 150); // Small delay to batch requests
+    
+    return () => {
+      isAborted = true;
+      abortController.abort();
+      clearTimeout(timeoutId);
+      setPathsLoading(false);
+    };
+  }, [selectedNode?.node_id, graphId]);
 
-  // Default tab logic: Lens-aware
-  // - FINANCE lens + finance-relevant concept → Finance tab
-  // - Check for ?tab=finance query param (from suggestions)
-  // - Else: Evidence if count > 0, else Overview
+  // Default tab logic: Evidence if count > 0, else Overview
   // Only set default when node changes, not when resources change
-  const { activeLens } = useLens();
   const prevNodeIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (selectedNode && selectedNode.node_id !== prevNodeIdRef.current) {
       prevNodeIdRef.current = selectedNode.node_id;
       
-      // Check for ?tab=data query param first (from suggestions)
-      const tabParam = searchParams?.get('tab');
-      if (tabParam === 'data' && isFinanceRelevant) {
-        setActiveTab('data');
-      } else if (activeLens === 'FINANCE' && isFinanceRelevant) {
-        // FINANCE lens + finance-relevant → Data tab
-        setActiveTab('data');
-      } else if (selectedResources.length > 0) {
+      if (selectedResources.length > 0) {
         setActiveTab('evidence');
       } else {
         setActiveTab('overview');
       }
     }
-  }, [selectedNode?.node_id, setActiveTab, isFinanceRelevant, activeLens, searchParams]);
+  }, [selectedNode?.node_id, setActiveTab, selectedResources.length]);
 
-  const evidenceCount = selectedResources.length;
   const notesCount = notes.length;
-  const connectionsCount = neighborCount;
+  const connectionsCount = connections.length || neighborCount;
 
   const isPinned = selectedNode ? isConceptPinned(selectedNode.node_id) : false;
+
+  const handleGenerateDescription = async () => {
+    if (!selectedNode) return;
+    
+    const currentNodeId = selectedNode.node_id;
+    descriptionGenerationNodeIdRef.current = currentNodeId;
+    setIsGeneratingDescription(true);
+    setGeneratedDescription(null);
+    
+    try {
+      // Fetch context (neighbors and claims) to help generate better description
+      const [neighbors, claims] = await Promise.all([
+        getNeighborsWithRelationships(selectedNode.node_id).catch(() => []),
+        getClaimsForConcept(selectedNode.node_id, 3).catch(() => []),
+      ]);
+      
+      const context = {
+        neighbors: neighbors.slice(0, 5),
+        claims: claims.slice(0, 3),
+      };
+      
+      // Call the description generation API
+      const response = await fetch('/api/brain-web/concepts/generate-description', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conceptName: selectedNode.name,
+          domain: selectedNode.domain,
+          type: selectedNode.type,
+          context,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.error || !data.description) {
+        throw new Error(data.error || 'Failed to generate description');
+      }
+      
+      // Only update state if this generation is still for the current node
+      // (user might have switched nodes while generation was in progress)
+      if (descriptionGenerationNodeIdRef.current === currentNodeId && selectedNode?.node_id === currentNodeId) {
+        // Update the concept with the generated description
+        const updatedConcept = await updateConcept(selectedNode.node_id, {
+          description: data.description,
+        });
+        
+        setGeneratedDescription(data.description);
+        
+        // Update the selected node description in the UI immediately
+        if (selectedNode) {
+          selectedNode.description = data.description;
+        }
+      }
+      
+      // Don't reload the page - just update the state
+      // The description will show immediately in the UI
+      
+    } catch (error) {
+      // Only show error if this generation is still for the current node
+      if (descriptionGenerationNodeIdRef.current === currentNodeId) {
+        console.error('Failed to generate description:', error);
+        alert(error instanceof Error ? error.message : 'Failed to generate description');
+      }
+    } finally {
+      // Only clear loading state if this generation is still for the current node
+      if (descriptionGenerationNodeIdRef.current === currentNodeId) {
+        setIsGeneratingDescription(false);
+        descriptionGenerationNodeIdRef.current = null;
+      }
+    }
+  };
 
   const handleFetchEvidence = async () => {
     if (!selectedNode) return;
@@ -472,6 +697,20 @@ export default function ContextPanel({
       const graphId = searchParams?.get('graph_id') || undefined;
       const result = await fetchEvidenceForConcept(selectedNode.node_id, selectedNode.name, graphId);
       
+      // Always refresh resources, even on error, to show current state
+      if (result.resources) {
+        onFetchEvidence?.(result);
+      } else if (result.error) {
+        // On error, still try to refresh resources to show current state
+        try {
+          const currentResources = await getResourcesForConcept(selectedNode.node_id);
+          onFetchEvidence?.({ ...result, resources: currentResources });
+        } catch (refreshError) {
+          // If refresh also fails, just show the error
+          console.error('Failed to refresh resources after error:', refreshError);
+        }
+      }
+
       if (result.error) {
         setFetchEvidenceState({
           conceptId: selectedNode.node_id,
@@ -479,10 +718,6 @@ export default function ContextPanel({
           error: result.error,
         });
         return;
-      }
-
-      if (result.resources) {
-        onFetchEvidence?.(result);
       }
 
       if (result.addedCount === 0) {
@@ -503,10 +738,11 @@ export default function ContextPanel({
         // Refresh suggestions after a short delay
         setTimeout(() => {
           const graphId = searchParams?.get('graph_id') || undefined;
+          const cacheKey = `${selectedNode.node_id}-${graphId || 'default'}`;
           getSuggestions(3, graphId, undefined, selectedNode.node_id)
             .then((suggestions) => {
               setNextStepsSuggestions(suggestions);
-              nextStepsCacheRef.current.set(selectedNode.node_id, suggestions);
+              nextStepsCacheRef.current.set(cacheKey, suggestions);
             })
             .catch(console.warn);
         }, 1000);
@@ -540,18 +776,9 @@ export default function ContextPanel({
     const action = suggestion.primary_action || suggestion.action;
     
     if (action.kind === 'OPEN_CONCEPT') {
-      // Check if suggestion is for a finance-relevant concept and we're in Finance lens
-      const shouldOpenFinance = isFinanceRelevant && activeLens === 'FINANCE';
-      
       if (action.href) {
         router.push(action.href);
       } else if (suggestion.concept_id) {
-        // If this is the current concept and finance-relevant, switch to Data tab
-        if (selectedNode?.node_id === suggestion.concept_id && shouldOpenFinance) {
-          setActiveTab('data');
-          return;
-        }
-        
         const params = new URLSearchParams();
         params.set('select', suggestion.concept_id);
         if (suggestion.graph_id) {
@@ -618,10 +845,11 @@ export default function ContextPanel({
             // Refresh suggestions after a short delay
             setTimeout(() => {
               const graphId = searchParams?.get('graph_id') || undefined;
+              const cacheKey = `${conceptId}-${graphId || 'default'}`;
               getSuggestions(3, graphId, undefined, conceptId)
                 .then((suggestions) => {
                   setNextStepsSuggestions(suggestions);
-                  nextStepsCacheRef.current.set(conceptId, suggestions);
+                  nextStepsCacheRef.current.set(cacheKey, suggestions);
                 })
                 .catch(console.warn);
             }, 1000);
@@ -974,13 +1202,18 @@ export default function ContextPanel({
                 color: isPinned ? 'var(--accent)' : 'var(--muted)',
                 fontSize: '18px',
               }}
+              aria-label={isPinned ? 'Unpin concept' : 'Pin concept'}
               title={isPinned ? 'Unpin concept' : 'Pin concept'}
             >
               {isPinned ? '📌' : '📍'}
             </button>
             {onClose && (
               <button
-                onClick={onClose}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onClose();
+                }}
                 style={{
                   background: 'transparent',
                   border: 'none',
@@ -988,7 +1221,10 @@ export default function ContextPanel({
                   padding: '4px',
                   color: 'var(--muted)',
                   fontSize: '18px',
+                  zIndex: 1000,
+                  position: 'relative',
                 }}
+                aria-label="Close"
                 title="Close"
               >
                 ×
@@ -1016,38 +1252,7 @@ export default function ContextPanel({
           )}
         </div>
 
-        {/* Finance shortcut button (only for company concepts) */}
-        {isFinanceRelevant && (
-          <div style={{ marginBottom: '8px' }}>
-            <button
-              onClick={() => setActiveTab('data')}
-              className="pill pill--ghost"
-              style={{
-                fontSize: '12px',
-                cursor: 'pointer',
-                padding: '6px 12px',
-              }}
-            >
-              Data
-            </button>
-          </div>
-        )}
-
-        {/* Description preview */}
-        {selectedNode.description && (
-          <p style={{
-            fontSize: '13px',
-            lineHeight: '1.5',
-            color: 'var(--muted)',
-            margin: 0,
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}>
-            {selectedNode.description}
-          </p>
-        )}
+        {/* Description preview removed - shown in overview instead */}
       </div>
 
       {/* Quick Actions Row */}
@@ -1174,25 +1379,6 @@ export default function ContextPanel({
             </button>
           );
         })}
-        {isFinanceRelevant && (
-          <button
-            onClick={() => setActiveTab('data')}
-            style={{
-              padding: '10px 12px',
-              background: 'transparent',
-              border: 'none',
-              borderBottom: activeTab === 'data' ? '3px solid var(--accent)' : '3px solid transparent',
-              color: activeTab === 'data' ? 'var(--accent)' : 'var(--muted)',
-              fontSize: '13px',
-              fontWeight: activeTab === 'data' ? '600' : '400',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Data
-          </button>
-        )}
       </div>
 
       {/* Tab Content */}
@@ -1202,103 +1388,48 @@ export default function ContextPanel({
         padding: '20px',
       }}>
         {activeTab === 'overview' && (
-          <div>
-            <div style={{ marginBottom: '16px' }}>
-              <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
-                {selectedNode.name}
-              </h4>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px', alignItems: 'center' }}>
-                <span className="badge badge--soft">{selectedNode.type}</span>
-                <span className="badge" style={{ 
-                  background: toRgba(domainColor, 0.16), 
-                  color: domainColor,
-                }}>
-                  {selectedNode.domain}
-                </span>
-                {conceptQuality && !qualityLoading && (
-                  <>
-                    <CoveragePill 
-                      coverageScore={conceptQuality.coverage_score} 
-                      breakdown={conceptQuality.coverage_breakdown}
-                    />
-                    <FreshnessPill freshness={conceptQuality.freshness} />
-                  </>
-                )}
+          <div className="fade-in">
+            {/* Description - main content of overview */}
+            {selectedNode.description || generatedDescription ? (
+              <div style={{ fontSize: '14px', lineHeight: '1.6', color: 'var(--ink)' }}>
+                {(() => {
+                  const desc = generatedDescription || selectedNode.description || '';
+                  return desc;
+                })()}
               </div>
-            </div>
-
-            {/* Thin concept callout */}
-            {isConceptThin && (
-              <div style={{
-                marginBottom: '16px',
-                padding: '12px',
-                background: 'rgba(17, 138, 178, 0.05)',
-                border: '1px solid rgba(17, 138, 178, 0.2)',
-                borderRadius: '8px',
-              }}>
-                <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--ink)', marginBottom: '8px' }}>
-                  This concept is underdeveloped
+            ) : (
+              isGeneratingDescription ? (
+                <div style={{ fontSize: '14px', lineHeight: '1.6', color: 'var(--muted)', fontStyle: 'italic' }}>
+                  Generating description...
                 </div>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                  <button
-                    onClick={() => handleLearnAction('explain')}
-                    className="pill pill--ghost"
-                    style={{
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      padding: '6px 12px',
-                    }}
-                  >
-                    Explain
-                  </button>
-                  <button
-                    onClick={handleFetchEvidence}
-                    disabled={isFetching}
-                    className="pill pill--ghost"
-                    style={{
-                      fontSize: '12px',
-                      cursor: isFetching ? 'not-allowed' : 'pointer',
-                      padding: '6px 12px',
-                      opacity: isFetching ? 0.5 : 1,
-                    }}
-                  >
-                    Add evidence
-                  </button>
-                  <button
-                    onClick={() => handleLearnAction('prerequisites')}
-                    className="pill pill--ghost"
-                    style={{
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      padding: '6px 12px',
-                    }}
-                  >
-                    Connect prerequisites
-                  </button>
+              ) : (
+                <div style={{ fontSize: '14px', lineHeight: '1.6', color: 'var(--muted)', fontStyle: 'italic' }}>
+                  Description will be generated automatically...
                 </div>
-              </div>
+              )
             )}
 
-            {/* Next steps module */}
-            <div style={{ 
-              marginBottom: '16px',
-              padding: '12px',
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              maxHeight: '140px',
-              overflowY: 'auto',
-            }}>
-              <h5 style={{ 
-                fontSize: '13px', 
-                fontWeight: '600', 
-                marginBottom: '8px', 
-                color: 'var(--ink)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
+            {/* Observations module - hidden, only show if user explicitly wants to see all */}
+            {false && nextStepsSuggestions.length > 0 && (
+              <div style={{ 
+                marginBottom: '16px',
+                padding: '12px',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                maxHeight: '140px',
+                overflowY: 'auto',
               }}>
-                Next steps
-              </h5>
+                <h5 style={{ 
+                  fontSize: '13px', 
+                  fontWeight: '600', 
+                  marginBottom: '8px', 
+                  color: 'var(--ink)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                }}>
+                  Related observations
+                </h5>
               
               {dismissedMessage && (
                 <div style={{
@@ -1326,18 +1457,7 @@ export default function ContextPanel({
               ) : nextStepsSuggestions.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {(() => {
-                    // Sort suggestions: promote GAP_DEFINE and GAP_EVIDENCE when LEARNING lens is active
-                    const sorted = [...nextStepsSuggestions];
-                    if (activeLens === 'LEARNING') {
-                      sorted.sort((a, b) => {
-                        const aIsGap = a.type === 'GAP_DEFINE' || a.type === 'GAP_EVIDENCE';
-                        const bIsGap = b.type === 'GAP_DEFINE' || b.type === 'GAP_EVIDENCE';
-                        if (aIsGap && !bIsGap) return -1;
-                        if (!aIsGap && bIsGap) return 1;
-                        return 0;
-                      });
-                    }
-                    return sorted;
+                    return nextStepsSuggestions;
                   })().map((suggestion) => (
                     <div 
                       key={suggestion.id}
@@ -1354,18 +1474,12 @@ export default function ContextPanel({
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ 
                           fontSize: '13px', 
-                          fontWeight: '500', 
                           color: 'var(--ink)',
-                          marginBottom: '2px',
-                        }}>
-                          {suggestion.title}
-                        </div>
-                        <div style={{ 
-                          fontSize: '11px', 
-                          color: 'var(--muted)',
                           lineHeight: '1.4',
                         }}>
-                          {suggestion.rationale}
+                          {suggestion.concept_name 
+                            ? generateSuggestionObservation(suggestion.type, suggestion.concept_name, suggestion.rationale)
+                            : suggestion.title}
                         </div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1444,44 +1558,18 @@ export default function ContextPanel({
                             ? 'Review'
                             : suggestion.action.kind === 'FETCH_EVIDENCE'
                             ? 'Fetch Evidence'
-                            : activeLens === 'LEARNING' && suggestion.type === 'GAP_DEFINE'
-                            ? 'Learn'
-                            : activeLens === 'LEARNING' && suggestion.action.kind === 'OPEN_CONCEPT'
-                            ? 'Explore'
                             : 'Open'}
                         </button>
                       </div>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div style={{ 
-                  padding: '12px',
-                  textAlign: 'center',
-                  color: 'var(--muted)',
-                  fontSize: '13px',
-                }}>
-                  <div style={{ marginBottom: '8px' }}>Nothing urgent here.</div>
-                  <button
-                    onClick={() => setActiveTab('connections')}
-                    style={{
-                      padding: '6px 12px',
-                      fontSize: '12px',
-                      background: 'transparent',
-                      color: 'var(--accent)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Explore connections
-                  </button>
-                </div>
-              )}
-            </div>
+              ) : null}
+              </div>
+            )}
 
-            {/* Quality suggestions (only for this concept) */}
-            {(() => {
+            {/* Quality suggestions - hidden, merged into insights above */}
+            {false && (() => {
               const qualityTypes: SuggestionType[] = ['COVERAGE_LOW', 'EVIDENCE_STALE'];
               const qualitySuggestions = nextStepsSuggestions.filter(s => 
                 qualityTypes.includes(s.type) && s.concept_id === selectedNode?.node_id
@@ -1720,185 +1808,15 @@ export default function ContextPanel({
               </div>
             )}
 
-            {/* Data snapshot teaser card (only for tracked concepts) */}
-            {isFinanceRelevant && (() => {
-              const financeSnapshot = selectedResources.find(res => isFinanceSnapshotResource(res));
-              const snapshotAsOf = financeSnapshot ? getSnapshotAsOf(financeSnapshot) : null;
-              
-              return (
-                <div style={{ 
-                  marginBottom: '16px',
-                  padding: '12px',
-                  background: 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                }}>
-                  <h5 style={{ 
-                    fontSize: '13px', 
-                    fontWeight: '600', 
-                    marginBottom: '8px', 
-                    color: 'var(--ink)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                  }}>
-                    Data snapshot
-                  </h5>
-                  
-                  {financeSnapshot && snapshotAsOf ? (
-                    <div>
-                      <div style={{ 
-                        fontSize: '12px', 
-                        color: 'var(--muted)', 
-                        marginBottom: '8px' 
-                      }}>
-                        Last updated: {formatSnapshotDate(snapshotAsOf)}
-                      </div>
-                      <button
-                        onClick={() => setActiveTab('data')}
-                        className="pill pill--ghost"
-                        style={{
-                          fontSize: '12px',
-                          cursor: 'pointer',
-                          padding: '6px 12px',
-                        }}
-                      >
-                        Open Data tab
-                      </button>
-                    </div>
-                  ) : (
-                    <div>
-                      <div style={{ 
-                        fontSize: '12px', 
-                        color: 'var(--muted)', 
-                        marginBottom: '8px' 
-                      }}>
-                        No snapshot yet
-                      </div>
-                      <div style={{ 
-                        fontSize: '11px', 
-                        color: 'var(--muted)', 
-                        fontStyle: 'italic',
-                        marginBottom: '8px' 
-                      }}>
-                        Enable Data lens to fetch snapshots
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+            {/* Description is already shown in the header preview, so we don't duplicate it here */}
+            {/* Auto-generation happens automatically when node is selected */}
 
-            {selectedNode.description ? (
-              <div style={{ fontSize: '14px', lineHeight: '1.6', color: 'var(--ink)', marginBottom: '16px' }}>
-                {(() => {
-                  const sentences = selectedNode.description.split(/[.!?]+/).filter(s => s.trim().length > 0);
-                  const truncated = sentences.slice(0, 6).join('. ').trim();
-                  return truncated + (sentences.length > 6 ? '...' : '');
-                })()}
-              </div>
-            ) : (
-              <p style={{ fontStyle: 'italic', marginBottom: '16px', color: 'var(--muted)' }}>
-                No description available. This node represents: {selectedNode.name}
-              </p>
-            )}
-
-            {/* Fetch Evidence CTA */}
-            <div style={{ 
-              padding: '16px', 
-              background: hasResources ? 'var(--background)' : 'rgba(17, 138, 178, 0.05)',
-              border: hasResources ? '1px solid var(--border)' : '1px solid rgba(17, 138, 178, 0.2)',
-              borderRadius: '8px',
-              marginBottom: '16px',
-            }}>
-              <div style={{ marginBottom: '8px' }}>
-                <button
-                  onClick={handleFetchEvidence}
-                  disabled={isFetching}
-                  style={{
-                    padding: '10px 16px',
-                    background: hasResources 
-                      ? 'transparent' 
-                      : (isFetching ? 'var(--muted)' : 'var(--accent)'),
-                    color: hasResources 
-                      ? 'var(--accent)' 
-                      : 'white',
-                    border: hasResources 
-                      ? '1px solid var(--accent)' 
-                      : 'none',
-                    borderRadius: '6px',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    cursor: isFetching ? 'not-allowed' : 'pointer',
-                    width: '100%',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  {isFetching ? 'Fetching...' : 'Fetch Evidence'}
-                </button>
-              </div>
-              <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '8px' }}>
-                Pull supporting sources from the web and attach them to this concept.
-              </div>
-              
-              {fetchSuccess && currentFetchState.addedCount !== undefined && (
-                <div style={{ 
-                  padding: '8px 12px', 
-                  background: 'rgba(34, 197, 94, 0.1)', 
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  color: 'rgb(34, 197, 94)',
-                  marginTop: '8px',
-                }}>
-                  Added {currentFetchState.addedCount} source{currentFetchState.addedCount !== 1 ? 's' : ''}
-                  <button
-                    onClick={() => setActiveTab('evidence')}
-                    style={{
-                      marginLeft: '12px',
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'rgb(34, 197, 94)',
-                      textDecoration: 'underline',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      fontWeight: '600',
-                    }}
-                  >
-                    Review evidence →
-                  </button>
-                </div>
-              )}
-
-              {fetchEmpty && (
-                <div style={{ 
-                  padding: '8px 12px', 
-                  background: 'rgba(251, 191, 36, 0.1)', 
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  color: 'rgb(251, 191, 36)',
-                  marginTop: '8px',
-                }}>
-                  No sources found
-                </div>
-              )}
-
-              {fetchError && currentFetchState.error && (
-                <div style={{ 
-                  padding: '8px 12px', 
-                  background: 'rgba(239, 68, 68, 0.1)', 
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  color: 'rgb(239, 68, 68)',
-                  marginTop: '8px',
-                }}>
-                  {currentFetchState.error}
-                </div>
-              )}
-            </div>
+            {/* Fetch Evidence CTA removed - already available in header quick actions */}
           </div>
         )}
 
         {activeTab === 'evidence' && (
-          <div>
+          <div className="fade-in">
             {/* Filters and Search */}
             <div style={{ marginBottom: '16px' }}>
               <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2172,7 +2090,7 @@ export default function ContextPanel({
         )}
 
         {activeTab === 'notes' && (
-          <div>
+          <div className="fade-in">
             <div style={{ marginBottom: '16px' }}>
               <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
                 Notes
@@ -2253,7 +2171,7 @@ export default function ContextPanel({
         )}
 
         {activeTab === 'connections' && (
-          <div>
+          <div className="fade-in">
             <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
               Connections
             </h4>
@@ -2264,20 +2182,56 @@ export default function ContextPanel({
                 </p>
               </div>
             ) : (
-              <div style={{ padding: '12px', background: 'rgba(0, 0, 0, 0.02)', borderRadius: '8px', border: '1px dashed var(--border)' }}>
-                <p style={{ fontSize: '13px', color: 'var(--muted)', margin: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div style={{ fontSize: '13px', color: 'var(--muted)' }}>
                   {connectionsCount} connection{connectionsCount !== 1 ? 's' : ''} found.
-                </p>
-                <p style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px', fontStyle: 'italic' }}>
-                  Connection details coming soon.
-                </p>
+                </div>
+                {connections.map((connection) => (
+                  <div
+                    key={`${connection.node_id}:${connection.predicate}:${connection.isOutgoing ? 'out' : 'in'}`}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: '12px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
+                        {connection.name}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                        {connection.isOutgoing ? 'Outgoing' : 'Incoming'}: {connection.predicate}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => router.push(`/concepts/${connection.node_id}`)}
+                      style={{
+                        border: 'none',
+                        background: 'rgba(17, 138, 178, 0.12)',
+                        color: 'var(--accent)',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        padding: '6px 10px',
+                        borderRadius: '999px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
 
         {activeTab === 'activity' && (
-          <div>
+          <div className="fade-in">
             <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
               Activity Feed
             </h4>
@@ -2319,13 +2273,7 @@ export default function ContextPanel({
           </div>
         )}
 
-        {activeTab === 'data' && financeTabContent && (
-          <div>
-            {financeTabContent}
-          </div>
-        )}
       </div>
     </div>
   );
 }
-

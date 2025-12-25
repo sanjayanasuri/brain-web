@@ -41,6 +41,10 @@ from api_ingestion_runs import router as ingestion_runs_router
 from api_paths import router as paths_router
 from api_quality import router as quality_router
 from api_web_ingestion import router as web_ingestion_router
+from api_quotes import router as quotes_router
+from api_claims_from_quotes import router as claims_from_quotes_router
+from api_extend import router as extend_router
+from api_trails import router as trails_router
 
 from demo_mode import (
     FixedWindowRateLimiter,
@@ -95,12 +99,11 @@ async def lifespan(app: FastAPI):
             print(f"[SYNC] ⚠ {msg}")
             logger.warning(msg)
         else:
-            print("[SYNC] Starting CSV auto-import on startup...")
-            logger.info("Starting CSV auto-import on startup...")
-            from scripts import import_csv_to_neo4j
-            import_csv_to_neo4j.main()
-            print("[SYNC] ✓ CSV auto-import completed successfully")
-            logger.info("CSV auto-import completed successfully")
+            # Skip CSV auto-import on startup to avoid re-importing data that already exists
+            # CSV import should be manual via /admin/import endpoint
+            # This prevents duplicate nodes when CSV files contain old data from different graphs
+            print("[SYNC] ⚠ Skipping CSV auto-import on startup (use /admin/import to import manually)")
+            logger.info("Skipping CSV auto-import on startup - use /admin/import for manual imports")
     except FileNotFoundError as e:
         print(f"[SYNC] ⚠ CSV files not found, skipping import: {e}")
         logger.warning(f"CSV files not found, skipping import: {e}")
@@ -168,10 +171,13 @@ cors_kwargs = {
     "allow_headers": ["*"],
 }
 
-# Add regex patterns for Chrome extensions and localhost dev when enabled
+# Add regex patterns for Chrome extensions, localhost, and local network IPs
 from config import ENABLE_EXTENSION_DEV
 if ENABLE_EXTENSION_DEV:
-    cors_kwargs["allow_origin_regex"] = r"(chrome-extension://.*|http://localhost:\d+|http://127\.0\.0\.1:\d+)"
+    cors_kwargs["allow_origin_regex"] = r"(chrome-extension://.*|http://localhost:\d+|http://127\.0\.0\.1:\d+|http://192\.168\.\d+\.\d+:\d+)"
+else:
+    # Always allow local network IPs for mobile development
+    cors_kwargs["allow_origin_regex"] = r"(http://192\.168\.\d+\.\d+:\d+|http://10\.\d+\.\d+\.\d+:\d+|http://172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+)"
 
 app.add_middleware(
     CORSMiddleware,
@@ -200,6 +206,13 @@ app.include_router(paths_router)
 app.include_router(quality_router)
 # Web ingestion router is always included but has local-only guard
 app.include_router(web_ingestion_router)
+# Phase 2: Evidence Graph endpoints
+app.include_router(quotes_router)
+app.include_router(claims_from_quotes_router)
+# Phase 3: Extend system
+app.include_router(extend_router)
+# Phase 4: Trails system
+app.include_router(trails_router)
 
 # In demo mode we do not mount private/admin/debug/test/ingestion surfaces.
 if not demo_settings.demo_mode:

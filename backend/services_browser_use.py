@@ -13,6 +13,14 @@ from config import BROWSER_USE_API_KEY, BROWSER_USE_BASE
 logger = logging.getLogger("brain_web")
 
 
+class BrowserUseAPIError(Exception):
+    """Custom exception for Browser Use API errors that preserves HTTP status codes."""
+    def __init__(self, message: str, status_code: int = None, response_text: str = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_text = response_text
+
+
 def execute_skill(skill_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute a Browser Use skill with the given parameters.
@@ -25,7 +33,7 @@ def execute_skill(skill_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         Dictionary containing the skill execution result
         
     Raises:
-        requests.HTTPError: If the API request fails
+        BrowserUseAPIError: If the API request fails (preserves HTTP status code)
         ValueError: If BROWSER_USE_API_KEY is not configured
     """
     if not BROWSER_USE_API_KEY:
@@ -48,15 +56,33 @@ def execute_skill(skill_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         # Log HTTP status code
         logger.info(f"Browser Use skill execution returned status code: {r.status_code}")
         
-        # If request failed, log response text (first 2000 chars)
+        # If request failed, log response text and raise with preserved status code
         if not r.ok:
             response_text = r.text[:2000] if r.text else "(empty response)"
             logger.error(
                 f"Browser Use skill execution failed with status {r.status_code}. "
                 f"Response (first 2000 chars): {response_text}"
             )
-        
-        r.raise_for_status()
+            
+            # Create a more descriptive error message
+            error_msg = f"{r.status_code} Client Error: {r.reason or 'Bad Request'}"
+            if response_text and response_text != "(empty response)":
+                # Try to extract error detail from JSON response if available
+                try:
+                    error_json = r.json()
+                    if isinstance(error_json, dict) and "detail" in error_json:
+                        error_msg = f"{r.status_code} {r.reason or 'Error'}: {error_json['detail']}"
+                    elif isinstance(error_json, dict) and "message" in error_json:
+                        error_msg = f"{r.status_code} {r.reason or 'Error'}: {error_json['message']}"
+                except (ValueError, KeyError):
+                    # If not JSON or no detail field, use the response text
+                    error_msg = f"{r.status_code} {r.reason or 'Error'}: {response_text[:500]}"
+            
+            raise BrowserUseAPIError(
+                error_msg,
+                status_code=r.status_code,
+                response_text=response_text
+            )
         
         # Try to parse JSON and log if parsing fails
         try:
@@ -71,10 +97,23 @@ def execute_skill(skill_id: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
             )
             raise ValueError(f"Invalid JSON response from Browser Use API: {str(e)}") from e
             
+    except BrowserUseAPIError:
+        # Re-raise our custom error as-is
+        raise
     except requests.exceptions.Timeout:
         logger.error(f"Browser Use skill execution timed out after 180 seconds")
-        raise
+        raise BrowserUseAPIError("Request timed out after 180 seconds", status_code=504)
+    except requests.exceptions.HTTPError as e:
+        # Handle other HTTP errors
+        status_code = e.response.status_code if e.response else None
+        response_text = e.response.text[:2000] if e.response and e.response.text else None
+        logger.error(f"Browser Use skill execution HTTP error: {str(e)}")
+        raise BrowserUseAPIError(
+            f"HTTP error: {str(e)}",
+            status_code=status_code,
+            response_text=response_text
+        )
     except requests.exceptions.RequestException as e:
         logger.error(f"Browser Use skill execution request failed: {str(e)}")
-        raise
+        raise BrowserUseAPIError(f"Request failed: {str(e)}", status_code=None)
 

@@ -14,14 +14,12 @@ import {
 import { fetchRecentSessions, fetchRecentEvents, type SessionSummary, type ActivityEvent } from '../lib/eventsClient';
 import { getSavedItems, type SavedItem } from '../lib/savedItems';
 import { getLastSession } from '../lib/sessionState';
-import { useLens } from '../components/context-providers/LensContext';
 import { filterSuggestions } from '../lib/suggestionPrefs';
 import { markDigestOpened } from '../lib/reminders';
 import { logEvent } from '../lib/eventsClient';
 
 export default function DigestPage() {
   const router = useRouter();
-  const { activeLens } = useLens();
   const [loading, setLoading] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [events, setEvents] = useState<ActivityEvent[]>([]);
@@ -44,34 +42,33 @@ export default function DigestPage() {
         const lastSession = getLastSession();
         const graphId = lastSession?.graph_id;
 
-        // Fetch all data in parallel
-        const [sessionsData, eventsData, suggestionsData, pathsData] = await Promise.all([
+        // Fetch all data in parallel (including review count)
+        const [sessionsData, eventsData, suggestionsData, pathsData, reviewData] = await Promise.allSettled([
           fetchRecentSessions(20).catch(() => []),
           fetchRecentEvents({ limit: 200, graph_id: graphId }).catch(() => []),
           graphId ? getSuggestions(20, graphId).catch(() => []) : Promise.resolve([]),
-          graphId ? getSuggestedPaths(graphId, undefined, 6, activeLens).catch(() => []) : Promise.resolve([]),
+          graphId ? getSuggestedPaths(graphId, undefined, 6).catch(() => []) : Promise.resolve([]),
+          graphId ? listProposedRelationships(graphId, 'PROPOSED', 1, 0).catch(() => ({ total: 0 })) : Promise.resolve({ total: 0 }),
         ]);
 
-        setSessions(sessionsData);
-        setEvents(eventsData);
+        if (sessionsData.status === 'fulfilled') setSessions(sessionsData.value);
+        if (eventsData.status === 'fulfilled') setEvents(eventsData.value);
         
-        // Filter suggestions by user prefs
-        const filtered = filterSuggestions(suggestionsData);
-        setSuggestions(filtered.slice(0, 8));
-
-        // Get review count
-        if (graphId) {
-          try {
-            const reviewData = await listProposedRelationships(graphId, 'PROPOSED', 1, 0);
-            setReviewCount(reviewData.total);
-          } catch {
-            setReviewCount(0);
-          }
+        if (suggestionsData.status === 'fulfilled') {
+          // Filter suggestions by user prefs
+          const filtered = filterSuggestions(suggestionsData.value);
+          setSuggestions(filtered.slice(0, 8));
         }
 
-        setPaths(pathsData.slice(0, 3));
+        if (pathsData.status === 'fulfilled') {
+          setPaths(pathsData.value.slice(0, 3));
+        }
 
-        // Get saved items
+        if (reviewData.status === 'fulfilled') {
+          setReviewCount(reviewData.value.total || 0);
+        }
+
+        // Get saved items (synchronous)
         const saved = getSavedItems();
         setSavedItems(saved.slice(0, 6));
       } catch (err) {
@@ -82,7 +79,7 @@ export default function DigestPage() {
     }
 
     loadDigest();
-  }, [activeLens]);
+  }, []);
 
   // Compute this week's stats
   const thisWeekStart = new Date();

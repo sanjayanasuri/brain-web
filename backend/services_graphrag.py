@@ -135,15 +135,17 @@ def fetch_claims_with_mentions(
     if not community_ids:
         return []
     
-    # Fetch claims with their mentioned concepts and chunk_id in one query per community
+    # OPTIMIZED: Fetch all communities in a single batched query using UNWIND
+    # This reduces database round trips from N queries to 1 query
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
-    MATCH (k:Community {graph_id: $graph_id, community_id: $comm_id})-[:BELONGS_TO]->(g)
+    UNWIND $community_ids AS comm_id
+    MATCH (k:Community {graph_id: $graph_id, community_id: comm_id})-[:BELONGS_TO]->(g)
     MATCH (c:Concept {graph_id: $graph_id})-[:IN_COMMUNITY]->(k)
     MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(c)
     WHERE $branch_id IN COALESCE(claim.on_branches, [])
     WITH k.community_id AS comm_id, claim
-    ORDER BY claim.confidence DESC
+    ORDER BY comm_id, claim.confidence DESC
     WITH comm_id, collect(claim)[0..$limit] AS claims
     UNWIND claims AS claim
     OPTIONAL MATCH (claim)-[:MENTIONS]->(mentioned:Concept {graph_id: $graph_id})
@@ -161,28 +163,27 @@ def fetch_claims_with_mentions(
     """
     
     all_claims = []
+    # Single query for all communities instead of looping
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        community_ids=community_ids,
+        limit=limit_per_comm
+    )
     
-    for comm_id in community_ids:
-        result = session.run(
-            query,
-            graph_id=graph_id,
-            branch_id=branch_id,
-            comm_id=comm_id,
-            limit=limit_per_comm
-        )
-        
-        for record in result:
-            all_claims.append({
-                "claim_id": record.get("claim_id"),
-                "text": record.get("text"),
-                "confidence": record.get("confidence", 0.5),
-                "source_id": record.get("source_id"),
-                "source_span": record.get("source_span"),
-                "chunk_id": record.get("chunk_id"),
-                "embedding": record.get("embedding"),
-                "mentioned_node_ids": record.get("mentioned_node_ids", []),
-                "community_id": comm_id,
-            })
+    for record in result:
+        all_claims.append({
+            "claim_id": record.get("claim_id"),
+            "text": record.get("text"),
+            "confidence": record.get("confidence", 0.5),
+            "source_id": record.get("source_id"),
+            "source_span": record.get("source_span"),
+            "chunk_id": record.get("chunk_id"),
+            "embedding": record.get("embedding"),
+            "mentioned_node_ids": record.get("mentioned_node_ids", []),
+            "community_id": record.get("comm_id"),
+        })
     
     return all_claims
 

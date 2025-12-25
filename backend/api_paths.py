@@ -48,10 +48,10 @@ def _get_prereq_and_dependent_counts(session: Session, concept_id: str, graph_id
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
     MATCH (c:Concept {{node_id: $concept_id}})-[:BELONGS_TO]->(g)
     MATCH (prereq:Concept)-[:BELONGS_TO]->(g)
-    MATCH (prereq)-[r1:PREREQUISITE_FOR]->(c)
+    MATCH (prereq)-[r:PREREQUISITE_FOR]->(c)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
       AND $branch_id IN COALESCE(prereq.on_branches, [])
-      AND $branch_id IN COALESCE(r1.on_branches, [])
+      AND $branch_id IN COALESCE(r.on_branches, [])
       AND COALESCE(prereq.is_merged, false) = false
       AND {edge_visibility_clause}
     RETURN count(DISTINCT prereq) AS prereq_count
@@ -61,10 +61,10 @@ def _get_prereq_and_dependent_counts(session: Session, concept_id: str, graph_id
     dependent_query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
     MATCH (c:Concept {{node_id: $concept_id}})-[:BELONGS_TO]->(g)
-    MATCH (c)-[r2:PREREQUISITE_FOR]->(dependent:Concept)-[:BELONGS_TO]->(g)
+    MATCH (c)-[r:PREREQUISITE_FOR]->(dependent:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
       AND $branch_id IN COALESCE(dependent.on_branches, [])
-      AND $branch_id IN COALESCE(r2.on_branches, [])
+      AND $branch_id IN COALESCE(r.on_branches, [])
       AND COALESCE(dependent.is_merged, false) = false
       AND {edge_visibility_clause}
     RETURN count(DISTINCT dependent) AS dependent_count
@@ -142,7 +142,7 @@ def _score_path(
             step_id = step["concept_id"]
             # Get immediate neighbors
             neighbors = get_neighbors_with_relationships(session, step_id, include_proposed="auto")
-            neighbor_ids = {n["node_id"] for n in neighbors}
+            neighbor_ids = {n["concept"].node_id for n in neighbors}
             step_neighbors[step_id] = neighbor_ids
         
         # Calculate average overlap

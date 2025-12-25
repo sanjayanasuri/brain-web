@@ -370,17 +370,66 @@ def list_graphs(session: Session) -> List[Dict[str, Any]]:
                 "updated_at": updated_at,
                 "node_count": node_count,
                 "edge_count": edge_count,
+                "template_id": g.get("template_id"),
+                "template_label": g.get("template_label"),
+                "template_description": g.get("template_description"),
+                "template_tags": g.get("template_tags"),
+                "intent": g.get("intent"),
             }
         )
     return out
 
 
-def create_graph(session: Session, name: str) -> Dict[str, Any]:
+def create_graph(
+    session: Session,
+    name: str,
+    template_id: Optional[str] = None,
+    template_label: Optional[str] = None,
+    template_description: Optional[str] = None,
+    template_tags: Optional[List[str]] = None,
+    intent: Optional[str] = None,
+) -> Dict[str, Any]:
     ensure_schema_constraints(session)
     graph_id = f"G{uuid4().hex[:8].upper()}"
     g = ensure_graphspace_exists(session, graph_id, name=name)
+    if template_id or template_label or template_description or template_tags or intent:
+        query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        SET g.template_id = COALESCE($template_id, g.template_id),
+            g.template_label = COALESCE($template_label, g.template_label),
+            g.template_description = COALESCE($template_description, g.template_description),
+            g.template_tags = CASE
+                WHEN $template_tags IS NULL THEN g.template_tags
+                ELSE $template_tags
+            END,
+            g.intent = COALESCE($intent, g.intent),
+            g.updated_at = $now
+        RETURN g
+        """
+        rec = session.run(
+            query,
+            graph_id=graph_id,
+            template_id=template_id,
+            template_label=template_label,
+            template_description=template_description,
+            template_tags=template_tags,
+            intent=intent,
+            now=_now_iso(),
+        ).single()
+        if rec:
+            g = rec["g"]
     ensure_branch_exists(session, graph_id, DEFAULT_BRANCH_ID, name="Main")
-    return g
+    return {
+        "graph_id": g.get("graph_id"),
+        "name": g.get("name"),
+        "created_at": g.get("created_at"),
+        "updated_at": g.get("updated_at"),
+        "template_id": g.get("template_id"),
+        "template_label": g.get("template_label"),
+        "template_description": g.get("template_description"),
+        "template_tags": g.get("template_tags"),
+        "intent": g.get("intent"),
+    }
 
 
 def rename_graph(session: Session, graph_id: str, name: str) -> Dict[str, Any]:

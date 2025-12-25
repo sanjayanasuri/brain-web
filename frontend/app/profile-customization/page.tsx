@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   getResponseStyle,
   updateResponseStyle,
@@ -14,6 +15,7 @@ import {
   recomputeTeachingStyle,
   getUIPreferences,
   updateUIPreferences,
+  getGraphOverview,
   ResponseStyleProfileWrapper,
   FocusArea,
   UserProfile,
@@ -21,8 +23,13 @@ import {
   type UIPreferences,
   type ReminderPreferences,
 } from '../api-client';
+import { getLastSession } from '../lib/sessionState';
+
+const GRAPH_PREFETCH_LIMITS = { nodes: 200, edges: 400 };
+const GRAPH_PREFETCH_STALE_MS = 60 * 1000;
 
 export default function ControlPanelPage() {
+  const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +48,16 @@ export default function ControlPanelPage() {
 
   const [newFocusName, setNewFocusName] = useState('');
   const [newFocusDescription, setNewFocusDescription] = useState('');
+
+  useEffect(() => {
+    const lastSession = getLastSession();
+    const graphId = lastSession?.graph_id || 'default';
+    queryClient.prefetchQuery({
+      queryKey: ['graph', graphId, 'overview', GRAPH_PREFETCH_LIMITS.nodes, GRAPH_PREFETCH_LIMITS.edges],
+      queryFn: () => getGraphOverview(graphId, GRAPH_PREFETCH_LIMITS.nodes, GRAPH_PREFETCH_LIMITS.edges),
+      staleTime: GRAPH_PREFETCH_STALE_MS,
+    }).catch(() => undefined);
+  }, [queryClient]);
 
   useEffect(() => {
     async function loadAll() {
@@ -149,6 +166,25 @@ export default function ControlPanelPage() {
         err instanceof Error
           ? err.message
           : 'Failed to toggle focus area',
+      );
+    }
+  }
+
+  async function handleRemoveFocus(area: FocusArea) {
+    if (!area.active) {
+      setFocusAreas(prev => prev.filter(a => a.id !== area.id));
+      return;
+    }
+    try {
+      const updated = await setFocusAreaActive(area.id, false);
+      setFocusAreas(prev =>
+        prev.map(a => (a.id === updated.id ? updated : a)),
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to remove focus area',
       );
     }
   }
@@ -567,15 +603,22 @@ export default function ControlPanelPage() {
 
             <div className="legend">
               {focusAreas.map(area => (
-                <button
-                  key={area.id}
-                  className={`pill ${
-                    area.active ? 'pill--active' : ''
-                  }`}
-                  onClick={() => handleToggleFocus(area)}
-                >
-                  {area.name}
-                </button>
+                <div key={area.id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <button
+                    className={`pill ${
+                      area.active ? 'pill--active' : ''
+                    }`}
+                    onClick={() => handleToggleFocus(area)}
+                  >
+                    {area.name}
+                  </button>
+                  <button
+                    className="pill pill--ghost pill--small"
+                    onClick={() => handleRemoveFocus(area)}
+                  >
+                    Remove
+                  </button>
+                </div>
               ))}
             </div>
 

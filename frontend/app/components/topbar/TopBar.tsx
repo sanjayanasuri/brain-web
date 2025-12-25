@@ -3,11 +3,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, type GraphSummary, type Concept, type Resource } from '../../api-client';
+import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, type CreateGraphOptions, type GraphSummary, type Concept, type Resource } from '../../api-client';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { setLastSession, getRecentConceptViews, pushRecentConceptView } from '../../lib/sessionState';
 import { logEvent, fetchRecentEvents } from '../../lib/eventsClient';
-import { useLens, type LensType } from '../context-providers/LensContext';
 import { fetchEvidenceForConcept } from '../../lib/evidenceFetch';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
 
@@ -49,6 +48,37 @@ const MAX_PINNED_GRAPHS = 10;
 const OMNIBOX_RECENT_CONCEPTS_KEY = 'brainweb:omnibox:recent_concepts';
 const OMNIBOX_RECENT_RESOURCES_KEY = 'brainweb:omnibox:recent_resources';
 const OMNIBOX_RECENT_COMMANDS_KEY = 'brainweb:omnibox:recent_commands';
+
+const GRAPH_TEMPLATES = [
+  {
+    id: 'blank',
+    label: 'Blank canvas',
+    description: 'Start with an empty graph and build from scratch.',
+    tags: ['flexible', 'general'],
+    intent: 'Explore ideas and connect concepts freely.',
+  },
+  {
+    id: 'finance',
+    label: 'Finance research',
+    description: 'Track companies, metrics, and thesis drivers.',
+    tags: ['10-Ks', 'earnings', 'markets'],
+    intent: 'Understand financial performance and key risks.',
+  },
+  {
+    id: 'lecture',
+    label: 'Lecture ingestion',
+    description: 'Turn classes into connected study maps.',
+    tags: ['slides', 'readings', 'definitions'],
+    intent: 'Capture lecture concepts and build exam-ready connections.',
+  },
+  {
+    id: 'literature',
+    label: 'Literature review',
+    description: 'Map papers, methods, and research gaps.',
+    tags: ['citations', 'methods', 'summaries'],
+    intent: 'Synthesize a research landscape and highlight gaps.',
+  },
+];
 
 interface RecentConcept {
   node_id: string;
@@ -842,6 +872,7 @@ export default function TopBar() {
   const [selectedResultIndex, setSelectedResultIndex] = useState(-1);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const createGraphInputRef = useRef<HTMLInputElement>(null);
   const searchDropdownRef = useRef<HTMLDivElement>(null);
   const searchAbortControllerRef = useRef<AbortController | null>(null);
   
@@ -852,15 +883,17 @@ export default function TopBar() {
   
   const [graphSwitcherOpen, setGraphSwitcherOpen] = useState(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const [createGraphOpen, setCreateGraphOpen] = useState(false);
+  const [createGraphName, setCreateGraphName] = useState('');
+  const [createGraphError, setCreateGraphError] = useState<string | null>(null);
+  const [createGraphLoading, setCreateGraphLoading] = useState(false);
+  const [createGraphTemplateId, setCreateGraphTemplateId] = useState('blank');
+  const [createGraphIntent, setCreateGraphIntent] = useState('');
   const [graphSearchQuery, setGraphSearchQuery] = useState('');
   const [scopePickerSearchQuery, setScopePickerSearchQuery] = useState('');
   const graphSwitcherRef = useRef<HTMLDivElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
   
-  // Lens system
-  const { activeLens, setActiveLens } = useLens();
-  const [lensMenuOpen, setLensMenuOpen] = useState(false);
-  const lensMenuRef = useRef<HTMLDivElement>(null);
 
   // Load graphs on mount
   useEffect(() => {
@@ -885,18 +918,25 @@ export default function TopBar() {
     loadGraphs();
   }, []);
 
-  // Update active graph when URL changes
+  // Update active graph when URL changes - sync with URL param
   useEffect(() => {
     const graphIdParam = searchParams?.get('graph_id');
-    if (graphIdParam && graphIdParam !== activeGraphId) {
-      setActiveGraphId(graphIdParam);
-      addRecentGraph(graphIdParam);
+    if (graphIdParam) {
+      if (graphIdParam !== activeGraphId) {
+        setActiveGraphId(graphIdParam);
+        addRecentGraph(graphIdParam);
+      }
       // Reset scope to current when graph changes
       if (searchScope === 'current' || searchScope === graphIdParam) {
         setSearchScope('current');
       }
+    } else {
+      // If no graph_id in URL, use 'default' or keep current
+      if (!activeGraphId) {
+        setActiveGraphId('default');
+      }
     }
-  }, [searchParams, activeGraphId]);
+  }, [searchParams]);
 
   // Get effective graph_id for search based on scope
   const getSearchGraphId = (): string | undefined => {
@@ -1498,15 +1538,6 @@ export default function TopBar() {
       case 'switch-graph':
         setGraphSwitcherOpen(true);
         break;
-      case 'lens-none':
-        setActiveLens('NONE');
-        break;
-      case 'lens-learning':
-        setActiveLens('LEARNING');
-        break;
-      case 'lens-finance':
-        setActiveLens('FINANCE');
-        break;
       case 'clear-highlights':
         // Clear highlights - this would need to be implemented in the graph visualization
         console.log('Clear highlights - to be implemented');
@@ -1520,20 +1551,9 @@ export default function TopBar() {
         router.push(`/home?${params.toString()}`);
         break;
       default:
-        // Handle lens command with argument
-        if (baseCommand === 'lens') {
-          if (arg === 'none') {
-            setActiveLens('NONE');
-          } else if (arg === 'learning') {
-            setActiveLens('LEARNING');
-          } else if (arg === 'finance') {
-            setActiveLens('FINANCE');
-          }
-        } else {
-          console.warn('Unknown action:', actionId);
-        }
+        console.warn('Unknown action:', actionId);
     }
-  }, [router, setActiveLens]);
+  }, [router]);
 
   // Graph switching
   const handleSelectGraph = useCallback(async (graphId: string) => {
@@ -1571,31 +1591,62 @@ export default function TopBar() {
     }
   }, [graphs, router, pathname]);
 
-  // Create new graph
-  const handleCreateGraph = useCallback(async () => {
-    const name = prompt('Enter graph name:');
-    if (!name?.trim()) return;
-    
+  const handleCreateGraph = useCallback(() => {
+    setCreateGraphName('');
+    setCreateGraphError(null);
+    setCreateGraphTemplateId('blank');
+    setCreateGraphIntent('');
+    setCreateGraphOpen(true);
+    setNewMenuOpen(false);
+    setGraphSwitcherOpen(false);
+  }, []);
+
+  const handleConfirmCreateGraph = useCallback(async () => {
+    const name = createGraphName.trim();
+    if (!name) {
+      setCreateGraphError('Please enter a graph name.');
+      return;
+    }
+
+    const selectedTemplate = GRAPH_TEMPLATES.find(template => template.id === createGraphTemplateId);
+    const options: CreateGraphOptions = {};
+
+    if (selectedTemplate && selectedTemplate.id !== 'blank') {
+      options.template_id = selectedTemplate.id;
+      options.template_label = selectedTemplate.label;
+      options.template_description = selectedTemplate.description;
+      options.template_tags = selectedTemplate.tags;
+    }
+
+    if (createGraphIntent.trim()) {
+      options.intent = createGraphIntent.trim();
+    }
+
+    setCreateGraphLoading(true);
+    setCreateGraphError(null);
     try {
-      const result = await createGraph(name.trim());
+      const result = await createGraph(name, Object.keys(options).length ? options : undefined);
       setActiveGraphId(result.active_graph_id);
       addRecentGraph(result.active_graph_id);
-      
+
       // Refresh graphs list
       const data = await listGraphs();
       setGraphs(data.graphs || []);
-      
+
       // Navigate to explorer with new graph
       const params = new URLSearchParams();
       params.set('graph_id', result.active_graph_id);
       router.push(`/?${params.toString()}`);
-      
-      setNewMenuOpen(false);
+
+      setCreateGraphOpen(false);
+      setCreateGraphName('');
     } catch (err) {
       console.error('Failed to create graph:', err);
-      alert('Failed to create graph');
+      setCreateGraphError('Failed to create graph.');
+    } finally {
+      setCreateGraphLoading(false);
     }
-  }, [router]);
+  }, [createGraphName, router]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -1605,9 +1656,6 @@ export default function TopBar() {
       }
       if (newMenuRef.current && !newMenuRef.current.contains(event.target as Node)) {
         setNewMenuOpen(false);
-      }
-      if (lensMenuRef.current && !lensMenuRef.current.contains(event.target as Node)) {
-        setLensMenuOpen(false);
       }
       if (scopeMenuRef.current && !scopeMenuRef.current.contains(event.target as Node)) {
         setScopeMenuOpen(false);
@@ -1622,6 +1670,12 @@ export default function TopBar() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (createGraphOpen) {
+      createGraphInputRef.current?.focus();
+    }
+  }, [createGraphOpen]);
 
   const recentGraphIds = getRecentGraphs();
   const pinnedGraphIds = getPinnedGraphs();
@@ -1659,7 +1713,8 @@ export default function TopBar() {
   };
 
   return (
-    <div style={{
+    <>
+      <div style={{
       height: '56px',
       borderBottom: '1px solid var(--border)',
       backgroundColor: 'var(--surface)',
@@ -1672,7 +1727,13 @@ export default function TopBar() {
       boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
     }}>
       {/* Left: Hamburger (mobile) + Logo + Explorer link */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: '200px' }}>
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: isMobile ? '12px' : '16px', 
+        minWidth: isMobile ? 'auto' : '200px',
+        flexShrink: 0,
+      }}>
         {isMobile && (pathname === '/' || pathname === '/home') && (
           <button
             onClick={() => setIsMobileSidebarOpen(true)}
@@ -1680,24 +1741,28 @@ export default function TopBar() {
               background: 'transparent',
               border: 'none',
               cursor: 'pointer',
-              padding: '8px',
+              padding: '10px',
               borderRadius: '4px',
               color: 'var(--ink)',
               fontSize: '20px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              minWidth: '44px',
+              minHeight: '44px',
             }}
+            aria-label="Open sidebar"
             title="Open sidebar"
           >
             ☰
           </button>
         )}
         <Link href="/home" style={{ 
-          fontSize: '18px', 
+          fontSize: isMobile ? '16px' : '18px', 
           fontWeight: 600, 
           color: 'var(--ink)',
           textDecoration: 'none',
+          whiteSpace: 'nowrap',
         }}>
           Brain Web
         </Link>
@@ -1716,307 +1781,8 @@ export default function TopBar() {
         )}
       </div>
 
-      {/* Center: Omnibox */}
-      <div style={{ 
-        flex: 1, 
-        maxWidth: '600px', 
-        margin: '0 auto',
-        position: 'relative',
-      }}>
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          position: 'relative',
-        }}>
-          {/* Scope chip */}
-          <div ref={scopeMenuRef} style={{ position: 'relative' }}>
-            <button
-              onClick={() => setScopeMenuOpen(!scopeMenuOpen)}
-              style={{
-                height: '28px',
-                padding: '0 10px',
-                borderRadius: '14px',
-                border: '1px solid var(--border)',
-                backgroundColor: searchFocused ? '#ffffff' : '#f8f9fa',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: 'var(--ink)',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                if (!scopeMenuOpen) e.currentTarget.style.backgroundColor = '#f0f0f0';
-              }}
-              onMouseLeave={(e) => {
-                if (!scopeMenuOpen) e.currentTarget.style.backgroundColor = searchFocused ? '#ffffff' : '#f8f9fa';
-              }}
-            >
-              <span>{getScopeDisplayName()}</span>
-              <span style={{ fontSize: '10px', color: 'var(--muted)' }}>▼</span>
-            </button>
-            
-            {scopeMenuOpen && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                marginTop: '4px',
-                backgroundColor: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-                minWidth: '180px',
-                zIndex: 1002,
-                overflow: 'hidden',
-              }}>
-                <div
-                  onClick={() => {
-                    setSearchScope('current');
-                    setScopeMenuOpen(false);
-                  }}
-                  style={{
-                    padding: '10px 16px',
-                    cursor: 'pointer',
-                    backgroundColor: searchScope === 'current' ? '#f0f7ff' : 'transparent',
-                    color: searchScope === 'current' ? 'var(--accent)' : 'var(--ink)',
-                    fontWeight: searchScope === 'current' ? '600' : '400',
-                    transition: 'background-color 0.1s',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (searchScope !== 'current') {
-                      e.currentTarget.style.backgroundColor = '#f8f9fa';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (searchScope !== 'current') {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }
-                  }}
-                >
-                  This graph
-                </div>
-                <div
-                  onClick={() => {
-                    // Disabled in v1
-                  }}
-                  title="Coming soon"
-                  style={{
-                    padding: '10px 16px',
-                    cursor: 'not-allowed',
-                    backgroundColor: 'transparent',
-                    color: 'var(--muted)',
-                    opacity: 0.5,
-                    position: 'relative',
-                  }}
-                >
-                  All graphs
-                  <span style={{
-                    position: 'absolute',
-                    right: '8px',
-                    fontSize: '10px',
-                    color: 'var(--muted)',
-                  }}>🔒</span>
-                </div>
-                <div
-                  onClick={() => {
-                    setScopePickerOpen(true);
-                    setScopeMenuOpen(false);
-                  }}
-                  style={{
-                    padding: '10px 16px',
-                    cursor: 'pointer',
-                    backgroundColor: 'transparent',
-                    color: 'var(--ink)',
-                    transition: 'background-color 0.1s',
-                    borderTop: '1px solid var(--border)',
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  Choose graph…
-                </div>
-              </div>
-            )}
-
-            {/* Graph picker */}
-            {scopePickerOpen && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                marginTop: '4px',
-                backgroundColor: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-                minWidth: '280px',
-                maxHeight: '400px',
-                overflowY: 'auto',
-                zIndex: 1002,
-              }}>
-                <div style={{ padding: '8px', borderBottom: '1px solid var(--border)' }}>
-                  <input
-                    type="text"
-                    placeholder="Search graphs..."
-                    value={scopePickerSearchQuery}
-                    onChange={(e) => setScopePickerSearchQuery(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      width: '100%',
-                      height: '32px',
-                      padding: '0 12px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--border)',
-                      backgroundColor: 'var(--background)',
-                      fontSize: '14px',
-                      fontFamily: 'inherit',
-                      outline: 'none',
-                    }}
-                  />
-                </div>
-                {graphs.filter(g => {
-                  if (!scopePickerSearchQuery.trim()) return true;
-                  const query = scopePickerSearchQuery.toLowerCase();
-                  return (g.name || '').toLowerCase().includes(query) || 
-                         g.graph_id.toLowerCase().includes(query);
-                }).map(graph => (
-                  <div
-                    key={graph.graph_id}
-                    onClick={() => {
-                      setSearchScope(graph.graph_id);
-                      setScopePickerOpen(false);
-                    }}
-                    style={{
-                      padding: '10px 16px',
-                      cursor: 'pointer',
-                      backgroundColor: searchScope === graph.graph_id ? '#f0f7ff' : 'transparent',
-                      color: searchScope === graph.graph_id ? 'var(--accent)' : 'var(--ink)',
-                      fontWeight: searchScope === graph.graph_id ? '600' : '400',
-                      transition: 'background-color 0.1s',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (searchScope !== graph.graph_id) {
-                        e.currentTarget.style.backgroundColor = '#f8f9fa';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (searchScope !== graph.graph_id) {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }
-                    }}
-                  >
-                    <div style={{ fontSize: '14px' }}>
-                      {graph.name || graph.graph_id}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
-                      {getGraphMetaLine(graph)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="Search or type a command…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
-            onKeyDown={handleSearchKeyDown}
-            style={{
-              flex: 1,
-              height: '36px',
-              padding: '0 16px',
-              borderRadius: '18px',
-              border: searchFocused ? '2px solid #6366f1' : '1px solid var(--border)',
-              backgroundColor: searchFocused ? '#ffffff' : '#f8f9fa',
-              fontSize: '14px',
-              fontFamily: 'inherit',
-              outline: 'none',
-              transition: 'all 0.2s',
-            }}
-          />
-        </div>
-        
-        {/* Search dropdown */}
-        {searchFocused && (searchResults.length > 0 || searchLoading) && (
-          <div
-            ref={searchDropdownRef}
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              right: 0,
-              marginTop: '4px',
-              backgroundColor: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-              maxHeight: '500px',
-              zIndex: 1001,
-              display: 'flex',
-              overflow: 'hidden',
-            }}
-          >
-            <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
-              {searchLoading ? (
-                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)' }}>
-                  Searching...
-                </div>
-              ) : searchResults.length === 0 ? (
-                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)' }}>
-                  No matches
-                </div>
-              ) : (
-                <div style={{ padding: '8px 0' }}>
-                  {renderGroupedResults(
-                    searchResults, 
-                    selectedResultIndex, 
-                    handleSelectResult, 
-                    setSelectedResultIndex,
-                    !searchQuery.trim()
-                  )}
-                </div>
-              )}
-            </div>
-            {selectedResultIndex >= 0 && searchResults[selectedResultIndex] && (
-              renderPreviewPanel(
-                searchResults[selectedResultIndex],
-                previewConcept,
-                previewLoading,
-                () => handleSelectResult(searchResults[selectedResultIndex], false),
-                searchResults[selectedResultIndex].type === 'concept' 
-                  ? () => handleSelectResult(searchResults[selectedResultIndex], true)
-                  : searchResults[selectedResultIndex].type === 'evidence' && searchResults[selectedResultIndex].concept_id
-                  ? () => {
-                      const params = new URLSearchParams();
-                      params.set('select', searchResults[selectedResultIndex].concept_id!);
-                      if (activeGraphId) {
-                        params.set('graph_id', activeGraphId);
-                      }
-                      router.push(`/?${params.toString()}`);
-                    }
-                  : searchResults[selectedResultIndex].type === 'graph'
-                  ? () => handleSelectResult(searchResults[selectedResultIndex], true)
-                  : undefined,
-                searchResults[selectedResultIndex].type === 'concept'
-                  ? () => handlePinConcept(searchResults[selectedResultIndex].concept)
-                  : undefined,
-                searchResults[selectedResultIndex].type === 'concept'
-                  ? isConceptPinned(searchResults[selectedResultIndex].concept.node_id)
-                  : undefined
-              )
-            )}
-          </div>
-        )}
-      </div>
+      {/* Center: Empty - search moved to ExplorerToolbar */}
+      <div style={{ flex: 1 }} />
 
       {/* Right: Graph switcher + New + Profile */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '300px', justifyContent: 'flex-end' }}>
@@ -2462,131 +2228,6 @@ export default function TopBar() {
           )}
         </div>
 
-        {/* Lens chip dropdown */}
-        <div ref={lensMenuRef} style={{ position: 'relative' }}>
-          <div
-            onClick={() => setLensMenuOpen(!lensMenuOpen)}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '16px',
-              backgroundColor: lensMenuOpen ? '#f0f0f0' : 'transparent',
-              border: '1px solid var(--border)',
-              cursor: 'pointer',
-              fontSize: '12px',
-              color: 'var(--ink)',
-              fontWeight: '500',
-              whiteSpace: 'nowrap',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={(e) => {
-              if (!lensMenuOpen) e.currentTarget.style.backgroundColor = '#f8f9fa';
-            }}
-            onMouseLeave={(e) => {
-              if (!lensMenuOpen) e.currentTarget.style.backgroundColor = 'transparent';
-            }}
-          >
-            <span>Lens:</span>
-            <span style={{ color: 'var(--accent)', fontWeight: '600' }}>
-              {activeLens === 'NONE' ? 'None' : activeLens === 'LEARNING' ? 'Learning' : 'Data'}
-            </span>
-            <span style={{ fontSize: '10px' }}>▼</span>
-          </div>
-          
-          {/* Tracked shortcut (only when Lens = FINANCE) */}
-          {activeLens === 'FINANCE' && (
-            <button
-              onClick={() => {
-                // Navigate to explorer - tracked companies panel should be visible there
-                const params = new URLSearchParams();
-                const graphId = searchParams?.get('graph_id');
-                if (graphId) {
-                  params.set('graph_id', graphId);
-                }
-                params.set('show', 'tracked');
-                router.push(`/?${params.toString()}`);
-              }}
-              style={{
-                padding: '6px 12px',
-                borderRadius: '16px',
-                backgroundColor: 'transparent',
-                border: '1px solid var(--border)',
-                cursor: 'pointer',
-                fontSize: '12px',
-                color: 'var(--ink)',
-                fontWeight: '500',
-                whiteSpace: 'nowrap',
-                marginLeft: '8px',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = '#f8f9fa';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-            >
-              Tracked
-            </button>
-          )}
-          
-          {lensMenuOpen && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: '4px',
-                backgroundColor: 'white',
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                minWidth: '140px',
-                zIndex: 1000,
-                overflow: 'hidden',
-              }}
-            >
-              {(['NONE', 'LEARNING', 'FINANCE'] as LensType[]).map((lens) => {
-                const isFinance = lens === 'FINANCE';
-                const showFinanceTooltip = isFinance; // Could check for finance nodes here if needed
-                
-                return (
-                  <div
-                    key={lens}
-                    onClick={async () => {
-                      await setActiveLens(lens);
-                      setLensMenuOpen(false);
-                    }}
-                    title={showFinanceTooltip ? 'Data lens works best on tracked concepts.' : undefined}
-                    style={{
-                      padding: '10px 16px',
-                      cursor: 'pointer',
-                      backgroundColor: activeLens === lens ? '#f0f7ff' : 'transparent',
-                      color: activeLens === lens ? 'var(--accent)' : 'var(--ink)',
-                      fontWeight: activeLens === lens ? '600' : '400',
-                      transition: 'background-color 0.1s',
-                      position: 'relative',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (activeLens !== lens) {
-                        e.currentTarget.style.backgroundColor = '#f8f9fa';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (activeLens !== lens) {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }
-                    }}
-                  >
-                    {lens === 'NONE' ? 'None' : lens === 'LEARNING' ? 'Learning' : 'Data'}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
 
         {/* Profile icon (simple placeholder) */}
         <div
@@ -2608,6 +2249,172 @@ export default function TopBar() {
         </div>
       </div>
     </div>
+      {createGraphOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2000,
+            padding: '24px',
+          }}
+          onClick={() => {
+            if (!createGraphLoading) setCreateGraphOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-graph-title"
+            style={{
+              backgroundColor: 'var(--surface)',
+              borderRadius: '12px',
+              border: '1px solid var(--border)',
+              boxShadow: '0 16px 40px rgba(15, 23, 42, 0.2)',
+              width: '100%',
+              maxWidth: '420px',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div
+                id="create-graph-title"
+                style={{ fontSize: '16px', fontWeight: 600, color: 'var(--ink)' }}
+              >
+                Create a new graph
+              </div>
+              <div style={{ fontSize: '13px', color: 'var(--muted)' }}>
+                Give this workspace a name to get started.
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                Pick a starting point
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {GRAPH_TEMPLATES.map((template) => {
+                  const isSelected = createGraphTemplateId === template.id;
+                  return (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => {
+                        setCreateGraphTemplateId(template.id);
+                        if (!createGraphIntent.trim()) {
+                          setCreateGraphIntent(template.intent);
+                        }
+                      }}
+                      style={{
+                        flex: '1 1 160px',
+                        minWidth: '160px',
+                        borderRadius: '10px',
+                        border: isSelected ? '1px solid #6366f1' : '1px solid var(--border)',
+                        backgroundColor: isSelected ? '#eef2ff' : 'white',
+                        padding: '10px',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        color: 'var(--ink)',
+                      }}
+                    >
+                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{template.label}</div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
+                        {template.description}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#6366f1', marginTop: '6px' }}>
+                        {template.tags.join(' · ')}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <input
+              ref={createGraphInputRef}
+              type="text"
+              value={createGraphName}
+              placeholder="e.g. Q4 research map"
+              onChange={(event) => setCreateGraphName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleConfirmCreateGraph();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  if (!createGraphLoading) setCreateGraphOpen(false);
+                }
+              }}
+              style={{
+                width: '100%',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                fontSize: '14px',
+                color: 'var(--ink)',
+                backgroundColor: 'white',
+              }}
+            />
+            <input
+              type="text"
+              value={createGraphIntent}
+              placeholder="What are you hoping to use this graph for?"
+              onChange={(event) => setCreateGraphIntent(event.target.value)}
+              style={{
+                width: '100%',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                fontSize: '13px',
+                color: 'var(--ink)',
+                backgroundColor: 'white',
+              }}
+            />
+            {createGraphError && (
+              <div style={{ color: '#b91c1c', fontSize: '12px' }}>{createGraphError}</div>
+            )}
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setCreateGraphOpen(false)}
+                disabled={createGraphLoading}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--border)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--ink)',
+                  cursor: createGraphLoading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCreateGraph}
+                disabled={createGraphLoading}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: '#6366f1',
+                  color: 'white',
+                  fontWeight: 600,
+                  cursor: createGraphLoading ? 'not-allowed' : 'pointer',
+                  opacity: createGraphLoading ? 0.7 : 1,
+                }}
+              >
+                {createGraphLoading ? 'Creating...' : 'Create graph'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
-

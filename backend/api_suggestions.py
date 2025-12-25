@@ -86,13 +86,27 @@ def _generate_quality_suggestions(
                     
                     if actions:
                         primary_action = actions[0]
+                        # Generate observational title based on what's missing
+                        if not breakdown["has_description"] and breakdown["evidence_count"] > 0:
+                            title = f'"{concept_name}" appears frequently across your graph, but rarely stands on its own'
+                            rationale = "It's usually referenced in passing rather than examined directly."
+                        elif not breakdown["has_description"]:
+                            title = f'"{concept_name}" is often assumed rather than explained directly'
+                            rationale = "It appears in your recent exploration without a clear definition."
+                        elif breakdown["evidence_count"] == 0:
+                            title = f'"{concept_name}" appears central to many connections, but remains implicit'
+                            rationale = "It lacks supporting evidence in your graph."
+                        else:
+                            title = f'"{concept_name}" appears frequently across claims, but rarely stands on its own'
+                            rationale = "It's usually referenced in passing rather than examined directly."
+                        
                         suggestions.append({
                             "id": _generate_suggestion_id("COVERAGE_LOW", concept_id=concept_id),
                             "type": "COVERAGE_LOW",
                             "kind": "COVERAGE_LOW",
-                            "title": "This concept is thinly covered",
-                            "rationale": f"Coverage score is {coverage['coverage_score']}/100.",
-                            "explanation": f"Coverage score is {coverage['coverage_score']}/100. Adding description, evidence, or connections would improve it.",
+                            "title": title,
+                            "rationale": rationale,
+                            "explanation": rationale,
                             "severity": "MEDIUM",
                             "priority": 60,  # Lower priority than GAP_* suggestions
                             "concept_id": concept_id,
@@ -117,9 +131,9 @@ def _generate_quality_suggestions(
                         "id": _generate_suggestion_id("EVIDENCE_STALE", concept_id=concept_id),
                         "type": "EVIDENCE_STALE",
                         "kind": "EVIDENCE_STALE",
-                        "title": "Evidence for this concept may be outdated",
+                        "title": f'"{concept_name}" appears in older evidence, but hasn\'t surfaced in your recent exploration',
                         "rationale": "The newest evidence is older than 120 days.",
-                        "explanation": "The newest evidence is older than 120 days and may need refreshing.",
+                        "explanation": "The newest evidence is older than 120 days.",
                         "severity": "LOW",
                         "priority": 55,
                         "concept_id": concept_id,
@@ -152,9 +166,9 @@ def _generate_quality_suggestions(
                         "id": _generate_suggestion_id("GRAPH_HEALTH_ISSUE", graph_id=graph_id),
                         "type": "GRAPH_HEALTH_ISSUE",
                         "kind": "GRAPH_HEALTH_ISSUE",
-                        "title": "This graph has several coverage gaps",
-                        "rationale": f"{stats['missing_description_pct']:.1f}% missing descriptions, {stats['no_evidence_pct']:.1f}% without evidence.",
-                        "explanation": f"{stats['missing_description_pct']:.1f}% missing descriptions, {stats['no_evidence_pct']:.1f}% without evidence.",
+                        "title": f"Many concepts in your graph appear frequently but remain implicit",
+                        "rationale": f"{stats['missing_description_pct']:.1f}% are referenced without clear definitions, {stats['no_evidence_pct']:.1f}% lack supporting evidence.",
+                        "explanation": f"{stats['missing_description_pct']:.1f}% are referenced without clear definitions, {stats['no_evidence_pct']:.1f}% lack supporting evidence.",
                         "severity": "MEDIUM",
                         "priority": 50,
                         "graph_id": graph_id,
@@ -186,9 +200,9 @@ def _generate_quality_suggestions(
                         "id": _generate_suggestion_id("REVIEW_BACKLOG", graph_id=graph_id),
                         "type": "REVIEW_BACKLOG",
                         "kind": "REVIEW_BACKLOG",
-                        "title": "You have unreviewed relationships",
-                        "rationale": f"{proposed_count} proposed relationships are waiting for review.",
-                        "explanation": f"{proposed_count} proposed relationships are waiting for review.",
+                        "title": f"Several relationships are proposed but not yet reviewed",
+                        "rationale": f"{proposed_count} connections between concepts are waiting for your review.",
+                        "explanation": f"{proposed_count} connections between concepts are waiting for your review.",
                         "severity": "LOW",
                         "priority": 45,
                         "graph_id": graph_id,
@@ -268,8 +282,8 @@ def get_suggestions(
                     suggestions.append({
                         "id": _generate_suggestion_id("GAP_DEFINE", concept_id=concept_id),
                         "type": "GAP_DEFINE",
-                        "title": f"Define {concept_name}",
-                        "rationale": "This concept has no definition yet.",
+                        "title": f'"{concept_name}" appears frequently but remains implicit in your graph',
+                        "rationale": "It's usually referenced in passing rather than examined directly.",
                         "priority": 90,
                         "concept_id": concept_id,
                         "concept_name": concept_name,
@@ -285,8 +299,8 @@ def get_suggestions(
                     suggestions.append({
                         "id": _generate_suggestion_id("GAP_EVIDENCE", concept_id=concept_id),
                         "type": "GAP_EVIDENCE",
-                        "title": f"Add evidence for {concept_name}",
-                        "rationale": "Adding sources will make answers more trustworthy.",
+                        "title": f'"{concept_name}" is referenced but lacks supporting evidence',
+                        "rationale": "It appears in your graph without sources to ground it.",
                         "priority": 85,
                         "concept_id": concept_id,
                         "concept_name": concept_name,
@@ -339,7 +353,6 @@ def get_suggestions(
                 
                 # 4. REVIEW_RELATIONSHIPS: Proposed relationships involving this concept
                 try:
-                    from services_branch_explorer import get_active_graph_context
                     _, branch_id = get_active_graph_context(session)
                     
                     proposed_rel_query = """
@@ -405,8 +418,8 @@ def get_suggestions(
                 suggestions.append({
                     "id": _generate_suggestion_id("GAP_DEFINE", concept_id=record["node_id"]),
                     "type": "GAP_DEFINE",
-                    "title": f"Define {record['name']}",
-                    "rationale": "This concept shows up in your activity but has no definition yet.",
+                    "title": f'"{record["name"]}" appears in your activity but remains implicit',
+                    "rationale": "It's referenced but lacks a clear definition.",
                     "priority": 90,
                     "concept_id": record["node_id"],
                     "concept_name": record["name"],
@@ -437,8 +450,8 @@ def get_suggestions(
                 suggestions.append({
                     "id": _generate_suggestion_id("GAP_EVIDENCE", concept_id=record["node_id"]),
                     "type": "GAP_EVIDENCE",
-                    "title": f"Add evidence for {record['name']}",
-                    "rationale": "Adding sources will make answers more trustworthy.",
+                    "title": f'"{record["name"]}" is referenced but lacks supporting evidence',
+                    "rationale": "It appears in your graph without sources to ground it.",
                     "priority": 85,
                     "concept_id": record["node_id"],
                     "concept_name": record["name"],
@@ -519,8 +532,12 @@ def get_suggestions(
                         
                         if not has_description or not has_resources:
                             suggestion_type = "GAP_DEFINE" if not has_description else "GAP_EVIDENCE"
-                            title = f"Fill in {record['name']}"
-                            rationale = "You recently viewed this and it's still thin."
+                            if not has_description:
+                                title = f'"{record["name"]}" appears frequently but remains implicit'
+                                rationale = "You recently viewed this and it's still referenced without a clear definition."
+                            else:
+                                title = f'"{record["name"]}" is referenced but lacks supporting evidence'
+                                rationale = "You recently viewed this and it still lacks sources to ground it."
                             priority = 65
                             
                             if not has_description:

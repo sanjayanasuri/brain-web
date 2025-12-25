@@ -52,6 +52,11 @@ export interface GraphSummary {
   updated_at?: string | null;
   node_count?: number;
   edge_count?: number;
+  template_id?: string | null;
+  template_label?: string | null;
+  template_description?: string | null;
+  template_tags?: string[] | null;
+  intent?: string | null;
 }
 
 export interface GraphListResponse {
@@ -64,6 +69,14 @@ export interface GraphSelectResponse {
   active_graph_id: string;
   active_branch_id: string;
   graph: any;
+}
+
+export interface CreateGraphOptions {
+  template_id?: string;
+  template_label?: string;
+  template_description?: string;
+  template_tags?: string[];
+  intent?: string;
 }
 
 export async function listGraphs(): Promise<GraphListResponse> {
@@ -84,11 +97,11 @@ export async function listGraphs(): Promise<GraphListResponse> {
   }
 }
 
-export async function createGraph(name: string): Promise<GraphSelectResponse> {
+export async function createGraph(name: string, options?: CreateGraphOptions): Promise<GraphSelectResponse> {
   const res = await fetch(`${API_BASE_URL}/graphs/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, ...options }),
   });
   if (!res.ok) throw new Error(`Failed to create graph: ${res.statusText}`);
   return res.json();
@@ -339,6 +352,7 @@ export async function getNeighborsWithRelationships(nodeId: string): Promise<Arr
 /**
  * Fetch the full graph starting from a root node
  * This recursively fetches neighbors to build a complete subgraph
+ * OPTIMIZED: Parallelizes fetching at each depth level for faster loading
  */
 export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): Promise<GraphData> {
   const nodes = new Map<string, Concept>();
@@ -346,22 +360,30 @@ export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): 
   const linkSet = new Set<string>(); // Track links to avoid duplicates
   const visited = new Set<string>();
 
-  async function fetchNodeAndNeighbors(nodeId: string, depth: number) {
-    if (depth > maxDepth || visited.has(nodeId)) {
-      return;
+  /**
+   * Fetch a single node and its neighbors, then return the neighbor IDs for next level
+   * This allows us to parallelize all fetches at the same depth
+   */
+  async function fetchNodeAndNeighbors(nodeId: string): Promise<string[]> {
+    if (visited.has(nodeId)) {
+      return [];
     }
     visited.add(nodeId);
 
     try {
-      // Fetch the node
-      const node = await getConcept(nodeId);
-      nodes.set(nodeId, node);
-
-      // Fetch neighbors with relationships
-      const neighborsWithRels = await getNeighborsWithRelationships(nodeId);
+      // Fetch node and neighbors in parallel (they're independent)
+      const [node, neighborsWithRels] = await Promise.all([
+        getConcept(nodeId),
+        getNeighborsWithRelationships(nodeId)
+      ]);
       
+      nodes.set(nodeId, node);
+      const neighborIds: string[] = [];
+      
+      // Process all neighbors
       for (const { concept, predicate, is_outgoing, relationship_status, relationship_confidence, relationship_method, relationship_rationale, relationship_source_id, relationship_chunk_id } of neighborsWithRels) {
         nodes.set(concept.node_id, concept);
+        neighborIds.push(concept.node_id);
         
         // Create link with proper direction and predicate
         const linkKey = is_outgoing 
@@ -382,18 +404,46 @@ export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): 
             relationship_chunk_id,
           });
         }
-
-        // Recursively fetch neighbors if we haven't reached max depth
-        if (depth < maxDepth) {
-          await fetchNodeAndNeighbors(concept.node_id, depth + 1);
-        }
       }
+      
+      return neighborIds;
     } catch (error) {
       console.error(`Error fetching node ${nodeId}:`, error);
+      return [];
     }
   }
 
-  await fetchNodeAndNeighbors(rootNodeId, 0);
+  /**
+   * Fetch all nodes at a given depth level in parallel
+   */
+  async function fetchLevel(nodeIds: string[], depth: number): Promise<void> {
+    if (depth > maxDepth || nodeIds.length === 0) {
+      return;
+    }
+
+    // Fetch all nodes at this level in parallel
+    const neighborIdArrays = await Promise.all(
+      nodeIds.map(nodeId => fetchNodeAndNeighbors(nodeId))
+    );
+
+    // Collect all unique neighbor IDs for the next level
+    const nextLevelNodeIds = new Set<string>();
+    for (const neighborIds of neighborIdArrays) {
+      for (const neighborId of neighborIds) {
+        if (!visited.has(neighborId)) {
+          nextLevelNodeIds.add(neighborId);
+        }
+      }
+    }
+
+    // Recursively fetch the next level
+    if (nextLevelNodeIds.size > 0) {
+      await fetchLevel(Array.from(nextLevelNodeIds), depth + 1);
+    }
+  }
+
+  // Start fetching from the root node
+  await fetchLevel([rootNodeId], 0);
 
   return {
     nodes: Array.from(nodes.values()),
@@ -635,14 +685,110 @@ export async function createConcept(concept: {
   notes_key?: string | null;
   lecture_key?: string | null;
   url_slug?: string | null;
+  graph_id?: string | null;
+  add_to_global?: boolean;
 }): Promise<Concept> {
-  const response = await fetch(`${API_BASE_URL}/concepts/`, {
+  const params = new URLSearchParams();
+  if (concept.graph_id) {
+    params.append('graph_id', concept.graph_id);
+  }
+  if (concept.add_to_global) {
+    params.append('add_to_global', 'true');
+  }
+  const url = `${API_BASE_URL}/concepts/${params.toString() ? '?' + params.toString() : ''}`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(concept),
+    body: JSON.stringify({
+      name: concept.name,
+      domain: concept.domain,
+      type: concept.type,
+      notes_key: concept.notes_key,
+      lecture_key: concept.lecture_key,
+      url_slug: concept.url_slug,
+    }),
   });
   if (!response.ok) {
     throw new Error(`Failed to create concept: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Get all instances of a concept across all graphs by matching the concept name
+ */
+export async function getCrossGraphInstances(nodeId: string): Promise<{
+  concept_name: string;
+  instances: Array<{
+    node_id: string;
+    name: string;
+    domain: string;
+    type: string;
+    description: string | null;
+    graph_id: string;
+    graph_name: string;
+    created_by: string | null;
+    last_updated_by: string | null;
+  }>;
+  total_instances: number;
+}> {
+  const response = await fetch(`${API_BASE_URL}/concepts/${encodeURIComponent(nodeId)}/cross-graph-instances`);
+  if (!response.ok) {
+    throw new Error(`Failed to get cross-graph instances: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Link two concept instances across graphs
+ */
+export async function linkCrossGraphInstances(
+  sourceNodeId: string,
+  targetNodeId: string,
+  linkType: 'user_linked' | 'manual_merge' | 'auto_detected' = 'user_linked'
+): Promise<{
+  source_node_id: string;
+  target_node_id: string;
+  source_graph_id: string;
+  target_graph_id: string;
+  link_type: string;
+  linked_at: string;
+  linked_by: string;
+}> {
+  const params = new URLSearchParams();
+  params.append('target_node_id', targetNodeId);
+  params.append('link_type', linkType);
+  const response = await fetch(
+    `${API_BASE_URL}/concepts/${encodeURIComponent(sourceNodeId)}/link-cross-graph?${params.toString()}`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to link cross-graph instances: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Get all linked cross-graph instances for a concept
+ */
+export async function getLinkedInstances(nodeId: string): Promise<{
+  instances: Array<{
+    node_id: string;
+    name: string;
+    domain: string;
+    type: string;
+    description: string | null;
+    graph_id: string;
+    graph_name: string;
+    link_type: string;
+    linked_at: string;
+    linked_by: string;
+  }>;
+  total: number;
+}> {
+  const response = await fetch(`${API_BASE_URL}/concepts/${encodeURIComponent(nodeId)}/linked-instances`);
+  if (!response.ok) {
+    throw new Error(`Failed to get linked instances: ${response.statusText}`);
   }
   return response.json();
 }
@@ -1756,8 +1902,7 @@ export interface SuggestedPath {
 export async function getSuggestedPaths(
   graphId: string,
   conceptId?: string,
-  limit: number = 10,
-  lens: 'NONE' | 'LEARNING' | 'FINANCE' = 'NONE'
+  limit: number = 10
 ): Promise<SuggestedPath[]> {
   const params = new URLSearchParams();
   params.set('graph_id', graphId);
@@ -1765,7 +1910,6 @@ export async function getSuggestedPaths(
     params.set('concept_id', conceptId);
   }
   params.set('limit', limit.toString());
-  params.set('lens', lens);
   
   const res = await fetch(`${API_BASE_URL}/paths/suggested?${params.toString()}`);
   if (!res.ok) {
@@ -1828,3 +1972,171 @@ export async function getGraphQuality(graphId: string): Promise<GraphQuality> {
   return res.json();
 }
 
+// --- Graph Files API helpers ---
+
+export interface GraphFile {
+  name: string;
+  path: string;
+  size: number;
+  size_formatted: string;
+  modified: string;
+  modified_formatted: string;
+  type: string;
+  description: string;
+  graph_id?: string | null;
+  graph_name?: string | null;
+  recently_changed?: boolean;
+}
+
+export interface FilePreviewResponse {
+  filename: string;
+  total_lines: number;
+  preview_lines: string[][];
+  headers: string[] | null;
+  previewed_lines: number;
+}
+
+export interface GraphFilesResponse {
+  status: string;
+  graph_dir?: string;
+  files: GraphFile[];
+  total_files: number;
+  total_size: number;
+  total_size_formatted: string;
+  message?: string;
+}
+
+export async function getGraphFiles(): Promise<GraphFilesResponse> {
+  const res = await fetch(`${API_BASE_URL}/admin/graph-files`);
+  if (!res.ok) {
+    throw new Error(`Failed to get graph files: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function previewGraphFile(filename: string, lines: number = 10): Promise<FilePreviewResponse> {
+  const res = await fetch(`${API_BASE_URL}/admin/graph-files/preview/${encodeURIComponent(filename)}?lines=${lines}`);
+  if (!res.ok) {
+    throw new Error(`Failed to preview file: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export function downloadGraphFile(filename: string): void {
+  const url = `${API_BASE_URL}/admin/graph-files/download/${encodeURIComponent(filename)}`;
+  window.open(url, '_blank');
+}
+
+export async function triggerExport(perGraph: boolean = true): Promise<{ status: string; detail: string }> {
+  const res = await fetch(`${API_BASE_URL}/admin/export?per_graph=${perGraph}`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to trigger export: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+// ---- Trails API ----
+
+export interface TrailStep {
+  step_id: string;
+  index: number;
+  kind: string;
+  ref_id: string;
+  title?: string | null;
+  note?: string | null;
+  meta?: Record<string, any> | null;
+  created_at?: number | null;
+}
+
+export interface Trail {
+  trail_id: string;
+  title: string;
+  status: string;
+  pinned: boolean;
+  created_at: number;
+  updated_at: number;
+  steps: TrailStep[];
+}
+
+export interface TrailSummary {
+  trail_id: string;
+  title: string;
+  status: string;
+  pinned: boolean;
+  created_at: number;
+  updated_at: number;
+  step_count: number;
+}
+
+export async function listTrails(status?: string, limit: number = 10): Promise<{ trails: TrailSummary[] }> {
+  const params = new URLSearchParams();
+  if (status) params.append('status', status);
+  params.append('limit', limit.toString());
+  
+  const res = await fetch(`${API_BASE_URL}/trails?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Failed to list trails: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getTrail(trailId: string): Promise<Trail> {
+  const res = await fetch(`${API_BASE_URL}/trails/${trailId}`);
+  if (!res.ok) {
+    throw new Error(`Failed to get trail: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function createTrail(title: string, pinned: boolean = false): Promise<{ trail_id: string; title: string; status: string }> {
+  const res = await fetch(`${API_BASE_URL}/trails/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, pinned }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to create trail: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function resumeTrail(trailId: string): Promise<{ trail_id: string; status: string; last_step_id?: string; last_step_index?: number; last_step_kind?: string; last_step_ref_id?: string }> {
+  const res = await fetch(`${API_BASE_URL}/trails/${trailId}/resume`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to resume trail: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function archiveTrail(trailId: string): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/trails/${trailId}/archive`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to archive trail: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function appendTrailStep(
+  trailId: string,
+  kind: string,
+  refId: string,
+  title?: string,
+  note?: string,
+  meta?: Record<string, any>
+): Promise<{ step_id: string; index: number }> {
+  const res = await fetch(`${API_BASE_URL}/trails/${trailId}/append`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, ref_id: refId, title, note, meta }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to append step: ${res.statusText}`);
+  }
+  return res.json();
+}

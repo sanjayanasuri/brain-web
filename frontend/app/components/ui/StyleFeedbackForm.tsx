@@ -24,6 +24,7 @@ export default function StyleFeedbackForm({
   const [testLabel, setTestLabel] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,11 +91,61 @@ export default function StyleFeedbackForm({
     );
   }
 
+  // If collapsed, show just a button to expand
+  if (!isExpanded) {
+    return (
+      <div style={{ marginTop: '8px' }}>
+        <button
+          type="button"
+          onClick={() => setIsExpanded(true)}
+          style={{
+            padding: '6px 12px',
+            background: 'transparent',
+            border: '1px solid #d1d5db',
+            borderRadius: '6px',
+            fontSize: '12px',
+            color: '#6b7280',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <span>+</span>
+          <span>Style Feedback</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={handleSubmit} style={{ marginTop: '16px', padding: '16px', border: '1px solid #e5e7eb', borderRadius: '8px' }}>
-      <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '14px', fontWeight: 600 }}>
-        Style Feedback (Help me learn your preferences)
-      </h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>
+          Style Feedback (Help me learn your preferences)
+        </h3>
+        <button
+          type="button"
+          onClick={() => setIsExpanded(false)}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            fontSize: '18px',
+            color: '#6b7280',
+            cursor: 'pointer',
+            padding: '0',
+            lineHeight: 1,
+            width: '20px',
+            height: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          title="Collapse"
+        >
+          ×
+        </button>
+      </div>
       
       <div style={{ marginBottom: '12px' }}>
         <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>

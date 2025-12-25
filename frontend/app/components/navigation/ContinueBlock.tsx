@@ -174,6 +174,7 @@ export default function ContinueBlock({ graphId, onPathResume }: ContinueBlockPr
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}
+                  aria-label="Dismiss"
                   title="Dismiss"
                 >
                   ×

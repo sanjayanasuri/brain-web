@@ -8,10 +8,209 @@ from services_intent_router import classify_intent
 from services_retrieval_plans import run_plan
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 from services_logging import log_graphrag_event
+from cache_utils import get_cached, set_cached
 from typing import Dict, Any, List, Optional
 from neo4j import Session
+import hashlib
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+def fetch_trail_context(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    trail_id: str,
+    limit: int = 8
+) -> Dict[str, Any]:
+    """
+    Fetch last N TrailSteps for the trail_id ordered by index desc.
+    
+    Returns:
+        { "trail_id": ..., "steps": [...], "summary": "1-3 sentence deterministic summary" }
+    
+    Summary rules:
+    - Prefer last 1–2 "page/quote/concept" steps
+    - Include key titles/ref_ids
+    - No LLM call. Deterministic string assembly only.
+    """
+    query = """
+    MATCH (t:Trail {graph_id: $graph_id, trail_id: $trail_id})
+    WHERE $branch_id IN COALESCE(t.on_branches, [])
+    MATCH (t)-[:HAS_STEP]->(s:TrailStep {graph_id: $graph_id})
+    WHERE $branch_id IN COALESCE(s.on_branches, [])
+    RETURN s.step_id AS step_id,
+           s.index AS index,
+           s.kind AS kind,
+           s.ref_id AS ref_id,
+           s.title AS title,
+           s.created_at AS created_at
+    ORDER BY s.index DESC
+    LIMIT $limit
+    """
+    result = session.run(query, graph_id=graph_id, branch_id=branch_id, trail_id=trail_id, limit=limit)
+    
+    steps = []
+    for record in result:
+        steps.append({
+            "step_id": record.get("step_id"),
+            "index": record.get("index"),
+            "kind": record.get("kind"),
+            "ref_id": record.get("ref_id"),
+            "title": record.get("title"),
+            "created_at": record.get("created_at"),
+        })
+    
+    # Build deterministic summary
+    summary_parts = []
+    # Prefer last 1-2 page/quote/concept steps
+    relevant_steps = [s for s in steps if s["kind"] in ["page", "quote", "concept"]][:2]
+    if relevant_steps:
+        for step in relevant_steps:
+            kind = step["kind"]
+            ref_id = step["ref_id"]
+            title = step.get("title")
+            if title:
+                summary_parts.append(f"{kind.title()}: {title}")
+            else:
+                summary_parts.append(f"{kind.title()}: {ref_id[:50]}")
+    
+    summary = ". ".join(summary_parts) if summary_parts else f"Trail with {len(steps)} steps"
+    
+    return {
+        "trail_id": trail_id,
+        "steps": steps,
+        "summary": summary,
+    }
+
+
+def fetch_focus_context(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    focus_concept_id: Optional[str] = None,
+    focus_quote_id: Optional[str] = None,
+    focus_page_url: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fetch focus context based on focus_concept_id, focus_quote_id, or focus_page_url.
+    
+    Returns structured dict with IDs for trace.
+    """
+    result: Dict[str, Any] = {
+        "focus_type": None,
+        "concept": None,
+        "quotes": [],
+        "claims": [],
+        "sources": [],
+    }
+    
+    if focus_concept_id:
+        # Fetch concept + top quotes + top claims for that concept
+        query = """
+        MATCH (c:Concept {graph_id: $graph_id, node_id: $concept_id})
+        WHERE $branch_id IN COALESCE(c.on_branches, [])
+        OPTIONAL MATCH (c)-[:HAS_QUOTE]->(q:Quote {graph_id: $graph_id})
+        WHERE $branch_id IN COALESCE(q.on_branches, [])
+        OPTIONAL MATCH (c)-[:SUPPORTED_BY]->(cl:Claim {graph_id: $graph_id})
+        WHERE $branch_id IN COALESCE(cl.on_branches, [])
+        OPTIONAL MATCH (q)-[:QUOTED_FROM]->(d:SourceDocument {graph_id: $graph_id})
+        RETURN c.node_id AS concept_id,
+               c.name AS concept_name,
+               collect(DISTINCT {
+                   quote_id: q.quote_id,
+                   text: q.text,
+                   source_url: d.url,
+                   source_title: d.title
+               })[0..5] AS quotes,
+               collect(DISTINCT {
+                   claim_id: cl.claim_id,
+                   text: cl.text,
+                   confidence: cl.confidence
+               })[0..5] AS claims
+        LIMIT 1
+        """
+        try:
+            query_result = session.run(query, graph_id=graph_id, branch_id=branch_id, concept_id=focus_concept_id)
+            record = query_result.single()
+            if record:
+                result["focus_type"] = "concept"
+                result["concept"] = {
+                    "concept_id": record.get("concept_id"),
+                    "name": record.get("concept_name"),
+                }
+                result["quotes"] = [q for q in record.get("quotes", []) if q.get("quote_id")]
+                result["claims"] = [c for c in record.get("claims", []) if c.get("claim_id")]
+        except Exception as e:
+            print(f"[Retrieval API] WARNING: Failed to fetch focus concept context: {e}")
+    
+    elif focus_quote_id:
+        # Fetch quote text + source url + attached concepts
+        query = """
+        MATCH (q:Quote {graph_id: $graph_id, quote_id: $quote_id})
+        WHERE $branch_id IN COALESCE(q.on_branches, [])
+        OPTIONAL MATCH (q)-[:QUOTED_FROM]->(d:SourceDocument {graph_id: $graph_id})
+        OPTIONAL MATCH (c:Concept {graph_id: $graph_id})-[r:HAS_QUOTE]->(q)
+        WHERE $branch_id IN COALESCE(c.on_branches, [])
+        RETURN q.quote_id AS quote_id,
+               q.text AS text,
+               d.url AS source_url,
+               d.title AS source_title,
+               collect(DISTINCT {node_id: c.node_id, name: c.name}) AS attached_concepts
+        LIMIT 1
+        """
+        try:
+            query_result = session.run(query, graph_id=graph_id, branch_id=branch_id, quote_id=focus_quote_id)
+            record = query_result.single()
+            if record:
+                result["focus_type"] = "quote"
+                result["quotes"] = [{
+                    "quote_id": record.get("quote_id"),
+                    "text": record.get("text"),
+                    "source_url": record.get("source_url"),
+                    "source_title": record.get("source_title"),
+                }]
+                result["concept"] = None
+                attached = record.get("attached_concepts", [])
+                if attached:
+                    result["concept"] = attached[0]  # Use first attached concept
+        except Exception as e:
+            print(f"[Retrieval API] WARNING: Failed to fetch focus quote context: {e}")
+    
+    elif focus_page_url:
+        # Fetch quotes by source url (capped)
+        query = """
+        MATCH (d:SourceDocument {graph_id: $graph_id})
+        WHERE d.url = $url
+        MATCH (q:Quote {graph_id: $graph_id})-[r:QUOTED_FROM]->(d)
+        WHERE $branch_id IN COALESCE(q.on_branches, [])
+        RETURN q.quote_id AS quote_id,
+               q.text AS text,
+               d.url AS source_url,
+               d.title AS source_title
+        LIMIT 10
+        """
+        try:
+            query_result = session.run(query, graph_id=graph_id, branch_id=branch_id, url=focus_page_url)
+            quotes = []
+            for record in query_result:
+                quotes.append({
+                    "quote_id": record.get("quote_id"),
+                    "text": record.get("text"),
+                    "source_url": record.get("source_url"),
+                    "source_title": record.get("source_title"),
+                })
+            if quotes:
+                result["focus_type"] = "page"
+                result["quotes"] = quotes
+                result["sources"] = [{
+                    "url": quotes[0].get("source_url"),
+                    "title": quotes[0].get("source_title"),
+                }]
+        except Exception as e:
+            print(f"[Retrieval API] WARNING: Failed to fetch focus page context: {e}")
+    
+    return result
 
 
 @router.post("/retrieve", response_model=RetrievalResult)
@@ -26,6 +225,8 @@ def retrieve_endpoint(
     Otherwise: run router → plan.
     
     Returns RetrievalResult with intent, trace, and context.
+    
+    Cached for 2 minutes to improve performance for repeated queries.
     """
     ensure_graph_scoping_initialized(session)
     
@@ -35,6 +236,33 @@ def retrieve_endpoint(
         branch_id = payload.branch_id
     else:
         graph_id, branch_id = get_active_graph_context(session)
+    
+    # Build cache key (exclude trail_id and focus_* from cache key since they're session-specific)
+    message_hash = hashlib.md5(payload.message.encode()).hexdigest()[:8]
+    cache_key = (
+        "retrieve",
+        graph_id or "",
+        branch_id or "",
+        message_hash,
+        payload.intent or "",
+        payload.limit or 5,
+        payload.detail_level or "summary",
+        payload.limit_claims or 0,
+        payload.limit_entities or 0,
+        payload.limit_sources or 0,
+    )
+    
+    # Try cache first (2 minute TTL for retrieval operations)
+    # Skip cache if trail_id or focus_* are provided (session-specific)
+    if not payload.trail_id and not payload.focus_concept_id and not payload.focus_quote_id and not payload.focus_page_url:
+        cached_result = get_cached(*cache_key, ttl_seconds=120)
+        if cached_result is not None:
+            # Convert dict back to RetrievalResult
+            try:
+                return RetrievalResult(**cached_result)
+            except Exception as e:
+                print(f"[Retrieval API] WARNING: Failed to deserialize cached result: {e}")
+                # Continue with fresh retrieval
     
     # Determine intent
     if payload.intent:
@@ -69,7 +297,85 @@ def retrieve_endpoint(
     evidence_used = _extract_evidence_used(session, graph_id, branch_id, result.context)
     result.context["evidence_used"] = evidence_used
     
-    # Log the retrieval event
+    # Phase B: Fetch trail and focus context if provided (non-blocking - don't fail if slow)
+    trail_context = None
+    focus_context = None
+    
+    # Fetch trail and focus context in parallel if both are needed
+    if payload.trail_id or (payload.focus_concept_id or payload.focus_quote_id or payload.focus_page_url):
+        try:
+            if payload.trail_id:
+                trail_context = fetch_trail_context(session, graph_id, branch_id, payload.trail_id, limit=8)
+                result.context["session_context"] = trail_context
+            
+            if payload.focus_concept_id or payload.focus_quote_id or payload.focus_page_url:
+                focus_context = fetch_focus_context(
+                    session,
+                    graph_id,
+                    branch_id,
+                    payload.focus_concept_id,
+                    payload.focus_quote_id,
+                    payload.focus_page_url
+                )
+                result.context["focus_context"] = focus_context
+        except Exception as e:
+            print(f"[Retrieval API] WARNING: Failed to fetch session/focus context: {e}")
+            # Continue without context - don't fail the whole request
+    
+    # Populate trace IDs for frontend
+    trace_ids: Dict[str, Any] = {
+        "used_trail_step_ids": [],
+        "used_quote_ids": [],
+        "used_claim_ids": [],
+        "used_concept_ids": [],
+        "used_source_urls": [],
+    }
+    
+    # Collect IDs from trail context
+    if trail_context:
+        trace_ids["used_trail_step_ids"] = [s["step_id"] for s in trail_context.get("steps", [])]
+    
+    # Collect IDs from focus context
+    if focus_context:
+        if focus_context.get("concept"):
+            trace_ids["used_concept_ids"].append(focus_context["concept"].get("concept_id"))
+        trace_ids["used_quote_ids"].extend([q.get("quote_id") for q in focus_context.get("quotes", []) if q.get("quote_id")])
+        trace_ids["used_claim_ids"].extend([c.get("claim_id") for c in focus_context.get("claims", []) if c.get("claim_id")])
+        trace_ids["used_source_urls"].extend([s.get("url") for s in focus_context.get("sources", []) if s.get("url")])
+    
+    # Collect IDs from retrieval result context
+    if result.context.get("focus_entities"):
+        trace_ids["used_concept_ids"].extend([e.get("node_id") for e in result.context["focus_entities"] if e.get("node_id")])
+    if result.context.get("claims"):
+        trace_ids["used_claim_ids"].extend([c.get("claim_id") for c in result.context["claims"] if c.get("claim_id")])
+    if result.context.get("evidence_used"):
+        trace_ids["used_source_urls"].extend([e.get("url") for e in result.context["evidence_used"] if e.get("url")])
+    
+    # Deduplicate lists
+    trace_ids["used_trail_step_ids"] = list(set(trace_ids["used_trail_step_ids"]))
+    trace_ids["used_quote_ids"] = list(set(trace_ids["used_quote_ids"]))
+    trace_ids["used_claim_ids"] = list(set(trace_ids["used_claim_ids"]))
+    trace_ids["used_concept_ids"] = list(set(trace_ids["used_concept_ids"]))
+    trace_ids["used_source_urls"] = list(set(trace_ids["used_source_urls"]))
+    
+    # Attach trace IDs to result context
+    result.context["trace_ids"] = trace_ids
+    
+    # Cache result if no session-specific context (trail_id/focus_*)
+    if not payload.trail_id and not payload.focus_concept_id and not payload.focus_quote_id and not payload.focus_page_url:
+        try:
+            # Convert RetrievalResult to dict for caching
+            result_dict = {
+                "intent": result.intent,
+                "trace": [step.dict() if hasattr(step, 'dict') else step for step in result.trace],
+                "context": result.context,
+                "plan_version": result.plan_version,
+            }
+            set_cached(*cache_key, result_dict, ttl_seconds=120)
+        except Exception as e:
+            print(f"[Retrieval API] WARNING: Failed to cache result: {e}")
+    
+    # Log the retrieval event (non-blocking - don't fail if logging fails)
     try:
         log_graphrag_event(
             graph_id=graph_id,

@@ -106,6 +106,7 @@ async function runCaptureNow(item) {
     capture_mode: extracted?.mode_used || capture_mode,
     text: extractedText,
     selection_text: extracted?.selection_text || null,
+    anchor: extracted?.anchor || null,
     domain,
     tags,
     note,
@@ -198,3 +199,154 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Opportunistic pump at startup
 pumpQueue().catch(() => {});
+
+// Keyboard command handlers
+chrome.commands.onCommand.addListener(async (command) => {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab?.url) return;
+
+    const { apiBase } = await getSettings();
+
+    if (command === "capture-selection") {
+      // Capture selection as quote
+      const extracted = await extractFromTab(tab.id, "selection");
+      if (!extracted?.selection_text) {
+        showToast(tab.id, "No selection found. Highlight text first.");
+        return;
+      }
+
+      const payload = {
+        tabId: tab.id,
+        url: tab.url,
+        title: tab.title || null,
+        capture_mode: "selection",
+        domain: safeHostname(tab.url) || "General",
+        tags: [],
+        note: null,
+        metadata: { initiated_at: new Date().toISOString(), via: "keyboard_shortcut" }
+      };
+
+      const item = await enqueueCapture(payload);
+      await pumpQueue();
+      
+      // Show toast
+      const trailName = await getActiveTrailName(apiBase);
+      showToast(tab.id, `Saved to Trail: ${trailName || "Default"}`, [
+        { label: "Attach to concept", action: "attach" },
+        { label: "Undo", action: "undo", itemId: item.id }
+      ]);
+    }
+
+    else if (command === "capture-page") {
+      // Capture page
+      const payload = {
+        tabId: tab.id,
+        url: tab.url,
+        title: tab.title || null,
+        capture_mode: "reader",
+        domain: safeHostname(tab.url) || "General",
+        tags: [],
+        note: null,
+        metadata: { initiated_at: new Date().toISOString(), via: "keyboard_shortcut" }
+      };
+
+      const item = await enqueueCapture(payload);
+      await pumpQueue();
+      
+      const trailName = await getActiveTrailName(apiBase);
+      showToast(tab.id, `Saved to Trail: ${trailName || "Default"}`, [
+        { label: "Undo", action: "undo", itemId: item.id }
+      ]);
+    }
+
+    else if (command === "start-trail") {
+      // Start or resume trail
+      const activeTrail = await getActiveTrail(apiBase);
+      if (activeTrail) {
+        showToast(tab.id, `Resuming trail: ${activeTrail.title}`);
+      } else {
+        // Create new trail
+        const title = `Trail ${new Date().toLocaleDateString()}`;
+        const trail = await createTrail(apiBase, title);
+        await setActiveTrailId(trail.trail_id);
+        showToast(tab.id, `Started trail: ${title}`);
+      }
+    }
+
+    else if (command === "extend-mode") {
+      // Show extend mode picker (open popup)
+      chrome.action.openPopup();
+    }
+  } catch (error) {
+    console.error("[ServiceWorker] Command error:", error);
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      showToast(tab.id, `Error: ${error.message}`);
+    }
+  }
+});
+
+// Helper: Get active trail name
+async function getActiveTrailName(apiBase) {
+  try {
+    const trailId = await getActiveTrailId();
+    if (!trailId) return null;
+    const res = await fetch(`${apiBase}/trails/${trailId}`);
+    if (res.ok) {
+      const data = await res.json();
+      return data.title;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+// Helper: Get active trail
+async function getActiveTrail(apiBase) {
+  try {
+    const res = await fetch(`${apiBase}/trails?status=active&limit=1`);
+    if (res.ok) {
+      const data = await res.json();
+      return data.trails?.[0] || null;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+// Helper: Create trail
+async function createTrail(apiBase, title) {
+  const res = await fetch(`${apiBase}/trails/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, pinned: false })
+  });
+  if (!res.ok) throw new Error("Failed to create trail");
+  return res.json();
+}
+
+// Helper: Get/set active trail ID in storage
+async function getActiveTrailId() {
+  const { activeTrailId } = await chrome.storage.local.get(["activeTrailId"]);
+  return activeTrailId || null;
+}
+
+async function setActiveTrailId(trailId) {
+  await chrome.storage.local.set({ activeTrailId: trailId });
+}
+
+// Helper: Show toast notification in content script
+async function showToast(tabId, message, actions = []) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "BW_SHOW_TOAST",
+      message,
+      actions
+    });
+  } catch (e) {
+    // Content script might not be ready, ignore
+  }
+}

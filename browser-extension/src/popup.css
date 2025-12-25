@@ -104,3 +104,42 @@ body {
   opacity: 0.9;
 }
 
+.resume-prompt {
+  margin-top: 10px;
+  margin-bottom: 10px;
+  padding: 12px;
+  background: #1b2a4a;
+  border: 1px solid #2c447a;
+  border-radius: 8px;
+}
+
+.resume-prompt-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.resume-prompt-trail {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.resume-prompt-time {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 8px;
+}
+
+.resume-prompt-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.btn--small {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+

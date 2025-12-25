@@ -21,6 +21,7 @@ from services_graph import (
     _normalize_include_proposed,
     _build_edge_visibility_where_clause,
 )
+from cache_utils import get_cached, set_cached, invalidate_cache_pattern
 
 router = APIRouter(prefix="/graphs", tags=["graphs"])
 
@@ -38,7 +39,15 @@ def list_graphs_endpoint(session=Depends(get_neo4j_session)):
 
 @router.post("/", response_model=GraphSelectResponse)
 def create_graph_endpoint(payload: GraphCreateRequest, session=Depends(get_neo4j_session)):
-    g = create_graph(session, payload.name)
+    g = create_graph(
+        session,
+        payload.name,
+        template_id=payload.template_id,
+        template_label=payload.template_label,
+        template_description=payload.template_description,
+        template_tags=payload.template_tags,
+        intent=payload.intent,
+    )
     active_graph_id, active_branch_id = set_active_graph(session, g["graph_id"])
     return {
         "active_graph_id": active_graph_id,
@@ -97,18 +106,35 @@ def get_graph_overview_endpoint(
     Get a lightweight overview of the graph with top nodes by degree.
     
     Returns a sampled subset of the graph for fast initial loading.
+    Cached for 2 minutes to improve performance.
     """
+    # Try cache first (cache key includes all parameters)
+    cache_key = ("graph_overview", graph_id, limit_nodes, limit_edges, include_proposed)
+    cached_result = get_cached(*cache_key, ttl_seconds=120)
+    if cached_result is not None:
+        return cached_result
+    
     try:
         # Set the active graph context
         set_active_graph(session, graph_id)
         ensure_graph_scoping_initialized(session)
         
         result = get_graph_overview(session, limit_nodes=limit_nodes, limit_edges=limit_edges, include_proposed=include_proposed)
-        return {
+        response = {
             "nodes": result["nodes"],
             "edges": result["edges"],
             "meta": result["meta"]
         }
+        
+        # Log for debugging if no nodes found
+        if len(response["nodes"]) == 0:
+            import sys
+            graph_id_actual, branch_id_actual = get_active_graph_context(session)
+            print(f"[DEBUG] Graph {graph_id} overview returned 0 nodes (active context: graph_id={graph_id_actual}, branch_id={branch_id_actual})", file=sys.stderr)
+        
+        # Cache the result
+        set_cached(cache_key[0], response, *cache_key[1:], ttl_seconds=120)
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -126,7 +152,14 @@ def get_graph_neighbors_endpoint(
     Get neighbors of a concept within a specific graph.
     
     Returns the center node and its neighbors with relationships.
+    Cached for 1 minute to improve performance.
     """
+    # Try cache first
+    cache_key = ("graph_neighbors", graph_id, concept_id, hops, limit, include_proposed)
+    cached_result = get_cached(*cache_key, ttl_seconds=60)
+    if cached_result is not None:
+        return cached_result
+    
     try:
         # Set the active graph context
         set_active_graph(session, graph_id)
@@ -171,11 +204,15 @@ def get_graph_neighbors_endpoint(
                 "chunk_id": item.get("relationship_chunk_id"),
             })
         
-        return {
+        response = {
             "center": center,
             "nodes": nodes,
             "edges": edges,
         }
+        
+        # Cache the result
+        set_cached(cache_key[0], response, *cache_key[1:], ttl_seconds=60)
+        return response
     except HTTPException:
         raise
     except Exception as e:

@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getGapsOverview, type GapsOverview, getSuggestions, type Suggestion, listGraphs, type GraphSummary, getSuggestedPaths, type SuggestedPath } from '../api-client';
+import { useQueryClient } from '@tanstack/react-query';
+import { getGapsOverview, type GapsOverview, getSuggestions, type Suggestion, type SuggestionType, listGraphs, type GraphSummary, getSuggestedPaths, type SuggestedPath, getConcept, getNeighborsWithRelationships, getResourcesForConcept, getClaimsForConcept, getSourcesForConcept, getSegmentsByConcept, getConceptQuality } from '../api-client';
 import { fetchEvidenceForConcept } from '../lib/evidenceFetch';
 import {
   getLastSession,
@@ -31,15 +32,38 @@ import {
 } from '../lib/suggestionPrefs';
 import { fetchRecentEvents, fetchRecentSessions, type ActivityEvent, type SessionSummary } from '../lib/eventsClient';
 import SessionDrawer from '../components/navigation/SessionDrawer';
-import { useLens } from '../components/context-providers/LensContext';
 import PathRunner from '../components/navigation/PathRunner';
 import { saveItem, removeSavedItem, isItemSaved, getSavedItems, type SavedItemKind } from '../lib/savedItems';
 import ReminderBanner from '../components/ui/ReminderBanner';
 import { evaluateReminders, type ReminderBanner as ReminderBannerType, type ReminderPreferences } from '../lib/reminders';
-import { getUIPreferences, listProposedRelationships, getLatestFinanceSnapshots, listFinanceTracking, getGraphQuality, type GraphQuality } from '../api-client';
+import { getUIPreferences, listProposedRelationships, getLatestFinanceSnapshots, listFinanceTracking, getGraphQuality, type GraphQuality, listTrails, type TrailStep } from '../api-client';
 import { GraphHealthBadge } from '../components/ui/QualityIndicators';
 import ContinueBlock from '../components/navigation/ContinueBlock';
 import { clearContinuation } from '../lib/continuation';
+import NarrativeCard from '../components/home/NarrativeCard';
+import CollapsibleSection from '../components/home/CollapsibleSection';
+import TrailSidebar from '../components/trails/TrailSidebar';
+import ResumeThinkingPrompt from '../components/trails/ResumeThinkingPrompt';
+import { getActiveTrailId, setActiveTrailId, clearActiveTrailId } from '../lib/trailState';
+import {
+  type NarrativeItem,
+  type NarrativeSection,
+  SECTION_TITLE,
+  CTA,
+  mapGapToNarrative,
+  mapSuggestionToNarrative,
+  calculateNarrativeScore,
+  buildExplorerUrl,
+} from '../lib/homeNarrative';
+import { useTheme } from '../components/context-providers/ThemeProvider';
+
+function SkeletonLine({ width, height = 10 }: { width: string | number; height?: number }) {
+  return <div className="skeleton skeleton-line" style={{ width, height }} />;
+}
+
+function SkeletonCard({ height }: { height: number }) {
+  return <div className="skeleton skeleton-card" style={{ height }} />;
+}
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
@@ -170,7 +194,8 @@ function SuggestionOverflowMenu({
 
 export default function HomePage() {
   const router = useRouter();
-  const { activeLens } = useLens();
+  const queryClient = useQueryClient();
+  const { theme, toggleTheme } = useTheme();
   const [lastSession, setLastSessionState] = useState<LastSession | null>(null);
   const [recentViews, setRecentViews] = useState<RecentConceptView[]>([]);
   const [pinnedConcepts, setPinnedConcepts] = useState<PinnedConcept[]>([]);
@@ -194,6 +219,89 @@ export default function HomePage() {
   const [reminderBanner, setReminderBanner] = useState<ReminderBannerType | null>(null);
   const [graphQualities, setGraphQualities] = useState<Record<string, GraphQuality>>({});
   const [graphs, setGraphs] = useState<GraphSummary[]>([]);
+  const [activeGraphId, setActiveGraphId] = useState<string>('');
+  const [secondaryLoaded, setSecondaryLoaded] = useState(false);
+  const [activeTrailId, setActiveTrailIdState] = useState<string | null>(null);
+  const [showResumePrompt, setShowResumePrompt] = useState(false);
+
+  useEffect(() => {
+    router.prefetch('/');
+    router.prefetch('/profile-customization');
+  }, [router]);
+
+  const getCached = <T,>(key: Array<string | number | null | undefined>) => {
+    const cached = queryClient.getQueryData<{ data: T; ts: number }>(key);
+    return cached?.data ?? null;
+  };
+
+  const setCached = <T,>(key: Array<string | number | null | undefined>, data: T) => {
+    queryClient.setQueryData(key, { data, ts: Date.now() });
+  };
+
+  const getCachedPaths = (graphId?: string | null): SuggestedPath[] => {
+    if (typeof window === 'undefined') return [];
+    if (!graphId) return [];
+    try {
+      const stored = localStorage.getItem(`brainweb:suggestedPaths:${graphId}`);
+      if (!stored) return [];
+      return JSON.parse(stored);
+    } catch {
+      return [];
+    }
+  };
+
+  const setCachedPaths = (graphId: string | undefined | null, paths: SuggestedPath[]) => {
+    if (typeof window === 'undefined') return;
+    if (!graphId) return;
+    try {
+      localStorage.setItem(`brainweb:suggestedPaths:${graphId}`, JSON.stringify(paths));
+    } catch {
+      // Ignore localStorage errors
+    }
+  };
+
+  const prefetchConceptData = useCallback((conceptId: string, conceptName?: string) => {
+    if (!conceptId) return;
+    queryClient.prefetchQuery({
+      queryKey: ['concept', conceptId],
+      queryFn: () => getConcept(conceptId),
+    }).then((concept) => {
+      const name = conceptName || concept?.name;
+      if (name) {
+        queryClient.prefetchQuery({
+          queryKey: ['concept', conceptId, 'segments', name],
+          queryFn: () => getSegmentsByConcept(name),
+          staleTime: 30 * 60 * 1000,
+        });
+      }
+    }).catch(() => undefined);
+
+    queryClient.prefetchQuery({
+      queryKey: ['concept', conceptId, 'neighbors-with-relationships'],
+      queryFn: () => getNeighborsWithRelationships(conceptId),
+    }).catch(() => undefined);
+
+    queryClient.prefetchQuery({
+      queryKey: ['concept', conceptId, 'resources'],
+      queryFn: () => getResourcesForConcept(conceptId),
+    }).catch(() => undefined);
+
+    queryClient.prefetchQuery({
+      queryKey: ['concept', conceptId, 'claims'],
+      queryFn: () => getClaimsForConcept(conceptId),
+    }).catch(() => undefined);
+
+    queryClient.prefetchQuery({
+      queryKey: ['concept', conceptId, 'sources'],
+      queryFn: () => getSourcesForConcept(conceptId),
+    }).catch(() => undefined);
+
+    queryClient.prefetchQuery({
+      queryKey: ['concept', conceptId, 'quality'],
+      queryFn: () => getConceptQuality(conceptId),
+      staleTime: 30 * 60 * 1000,
+    }).catch(() => undefined);
+  }, [queryClient]);
 
   // Close customize panel when clicking outside
   useEffect(() => {
@@ -209,213 +317,323 @@ export default function HomePage() {
   }, [showCustomizePanel]);
 
   useEffect(() => {
-    // Load all data
-    const loadData = async () => {
+    let isMounted = true;
+    setLoading(true);
+    setError(null);
+    
+    // Load immediate data from localStorage (synchronous, fast)
+    const cachedSession = getLastSession();
+    setLastSessionState(cachedSession);
+    setRecentViews(getRecentConceptViews().slice(0, 5));
+    setPinnedConcepts(getPinnedConcepts());
+    
+    // Load cached API data immediately (synchronous, fast)
+    const cachedGraphs = getCached<GraphSummary[]>(['home', 'graphs']);
+    if (cachedGraphs && cachedGraphs.length > 0) {
+      setGraphs(cachedGraphs);
+      setSecondaryLoaded(true);
+    }
+    const cachedSessions = getCached<SessionSummary[]>(['home', 'recent-sessions']);
+    if (cachedSessions && cachedSessions.length > 0) {
+      setRecentSessions(cachedSessions);
+      setSecondaryLoaded(true);
+    }
+    const cachedActivity = getCached<ActivityEvent[]>(['home', 'activity']);
+    if (cachedActivity && cachedActivity.length > 0) {
+      setActivityEvents(cachedActivity);
+      setSecondaryLoaded(true);
+    }
+    const cachedGaps = getCached<GapsOverview | null>(['home', 'gaps']);
+    if (cachedGaps) {
+      setGaps(cachedGaps);
+      setSecondaryLoaded(true);
+    }
+    const cachedSuggestions = getCached<Suggestion[]>(['home', 'suggestions']);
+    if (cachedSuggestions && cachedSuggestions.length > 0) {
+      setSuggestions(cachedSuggestions);
+      setSecondaryLoaded(true);
+    }
+    const cachedPaths = getCached<SuggestedPath[]>(['home', 'paths', cachedSession?.graph_id || '']);
+    if (cachedPaths && cachedPaths.length > 0) {
+      setSuggestedPaths(cachedPaths);
+      setSecondaryLoaded(true);
+    }
+    const cachedPathsLocal = getCachedPaths(cachedSession?.graph_id);
+    if (cachedPathsLocal.length > 0) {
+      setSuggestedPaths(cachedPathsLocal);
+      setSecondaryLoaded(true);
+    }
+    
+    // Start loading all data immediately - optimized with parallelization
+    const loadAllData = async () => {
       try {
-        setLoading(true);
-        
-        // Load from localStorage
-        setLastSessionState(getLastSession());
-        setRecentViews(getRecentConceptViews().slice(0, 5));
-        setPinnedConcepts(getPinnedConcepts());
-        
-        // Load graphs
-        try {
-          const graphsData = await listGraphs();
-          setGraphs(graphsData.graphs || []);
-          
-          // Load quality for pinned graphs
-          const PINNED_GRAPHS_KEY = 'brainweb:pinnedGraphIds';
-          const pinnedGraphIds = typeof window !== 'undefined' 
-            ? JSON.parse(localStorage.getItem(PINNED_GRAPHS_KEY) || '[]')
-            : [];
-          
-          const qualityPromises = pinnedGraphIds
-            .slice(0, 5)
-            .map(async (graphId: string) => {
-              try {
-                const quality = await getGraphQuality(graphId);
-                return { graphId, quality };
-              } catch (err) {
-                console.warn(`Failed to load quality for graph ${graphId}:`, err);
-                return null;
-              }
-            });
-          
-          const qualityResults = await Promise.all(qualityPromises);
-          const qualityMap: Record<string, GraphQuality> = {};
-          qualityResults.forEach(result => {
-            if (result) {
-              qualityMap[result.graphId] = result.quality;
-            }
-          });
-          setGraphQualities(qualityMap);
-        } catch (err) {
-          console.warn('Failed to load graphs:', err);
-          setGraphs([]);
+        const lastSession = cachedSession;
+        const recentViews = getRecentConceptViews();
+        const recentConceptIds = recentViews.slice(0, 10).map(v => v.id);
+        const signals = getRecentExplorationSignals(6);
+        if (isMounted) {
+          setRecentSignals(signals);
         }
-        
-        // Load activity events from backend
-        try {
-          const lastSession = getLastSession();
-          const backendEvents = await fetchRecentEvents({
+
+        const PINNED_GRAPHS_KEY = 'brainweb:pinnedGraphIds';
+        const pinnedGraphIds = typeof window !== 'undefined' 
+          ? JSON.parse(localStorage.getItem(PINNED_GRAPHS_KEY) || '[]')
+          : [];
+
+        // Load graphs first (needed for pathsGraphId), but in parallel with other calls
+        const graphsPromise = listGraphs().catch((err) => {
+          console.warn('Failed to load graphs:', err);
+          return { graphs: [] };
+        });
+
+        // Start all API calls in parallel immediately - no delays
+        const [
+          graphsResult,
+          eventsResult,
+          sessionsResult,
+          gapsResult,
+          suggestionsResult,
+          signalSuggestionsResult,
+          pathsResult,
+          remindersResult,
+          ...qualityResults
+        ] = await Promise.allSettled([
+          // Graphs (load first but still parallel)
+          graphsPromise,
+          
+          // Activity events
+          fetchRecentEvents({
             limit: 20,
             graph_id: lastSession?.graph_id,
-          });
-          setActivityEvents(backendEvents);
-        } catch (err) {
-          console.warn('Failed to load backend events, falling back to localStorage:', err);
-          // Fallback to localStorage if backend fails
-          const localEvents = getActivityEvents(10);
-          setActivityEvents(localEvents.map(e => ({
-            id: `local-${e.ts}`,
-            user_id: 'demo',
-            type: e.type as any,
-            payload: e.payload,
-            created_at: new Date(e.ts).toISOString(),
-          })));
-        }
-
-        // Load recent sessions from backend
-        try {
-          const sessions = await fetchRecentSessions(10);
-          setRecentSessions(sessions);
-        } catch (err) {
-          console.warn('Failed to load recent sessions:', err);
-          setRecentSessions([]);
-        }
-        
-        // Load recent exploration signals
-        const signals = getRecentExplorationSignals(6);
-        setRecentSignals(signals);
-
-        // Load gaps from API
-        try {
-          const gapsData = await getGapsOverview(20);
-          setGaps(gapsData);
-        } catch (err) {
-          console.warn('Failed to load gaps:', err);
-          // Don't fail the whole page if gaps fail
-        }
-
-        // Load suggestions from API
-        try {
-          const lastSession = getLastSession();
-          const recentViews = getRecentConceptViews();
-          const recentConceptIds = recentViews.slice(0, 10).map(v => v.id);
-          const suggestionsData = await getSuggestions(
+          }).catch(() => {
+            // Fallback to localStorage if backend fails
+            const localEvents = getActivityEvents(10);
+            return localEvents.map(e => ({
+              id: `local-${e.ts}`,
+              user_id: 'demo',
+              type: e.type as any,
+              payload: e.payload,
+              created_at: new Date(e.ts).toISOString(),
+            }));
+          }),
+          
+          // Recent sessions
+          fetchRecentSessions(10).catch(() => []),
+          
+          // Gaps
+          getGapsOverview(20).catch(() => null),
+          
+          // Regular suggestions
+          getSuggestions(
             8,
             lastSession?.graph_id,
             recentConceptIds.length > 0 ? recentConceptIds : undefined
-          );
-          setSuggestions(suggestionsData);
-        } catch (err) {
-          console.warn('Failed to load suggestions:', err);
-          // Don't fail the whole page if suggestions fail
-        }
-
-        // Load suggestions for recent exploration signals (batched)
-        try {
-          const signals = getRecentExplorationSignals(6);
-          if (signals.length > 0) {
-            const lastSession = getLastSession();
-            const uniqueConceptIds = [...new Set(signals.map(s => s.concept_id))];
-            
-            // Batch fetch: collect all concept_ids and fetch once
-            const allSuggestions = await getSuggestions(
-              20,
-              lastSession?.graph_id,
-              uniqueConceptIds.length > 0 ? uniqueConceptIds : undefined
-            );
-            
-            // Match suggestions to signals by concept_id
-            const matched: Record<string, Suggestion[]> = {};
-            signals.forEach(signal => {
-              const matchedForConcept = allSuggestions
-                .filter(s => s.concept_id === signal.concept_id)
-                .slice(0, 1); // Take first suggestion per concept
-              if (matchedForConcept.length > 0) {
-                matched[signal.concept_id] = matchedForConcept;
+          ).catch(() => []),
+          
+          // Signal suggestions (if we have signals)
+          signals.length > 0
+            ? (async () => {
+                const uniqueConceptIds = Array.from(new Set(signals.map(s => s.concept_id).filter((id): id is string => id !== undefined)));
+                const allSuggestions = await getSuggestions(
+                  20,
+                  lastSession?.graph_id,
+                  uniqueConceptIds.length > 0 ? uniqueConceptIds : undefined
+                ).catch(() => []);
+                
+                // Match suggestions to signals by concept_id
+                const matched: Record<string, Suggestion[]> = {};
+                signals.forEach(signal => {
+                  const matchedForConcept = allSuggestions
+                    .filter(s => s.concept_id === signal.concept_id)
+                    .slice(0, 1); // Take first suggestion per concept
+                  if (matchedForConcept.length > 0) {
+                    matched[signal.concept_id] = matchedForConcept;
+                  }
+                });
+                return matched;
+              })().catch(() => ({}))
+            : Promise.resolve({}),
+          
+          // Suggested paths (wait for graphs to resolve first)
+          (async () => {
+            try {
+              const graphsData = await graphsPromise;
+              const pathsGraphId = lastSession?.graph_id || graphsData.graphs?.[0]?.graph_id;
+              if (!pathsGraphId) return [];
+              if (isMounted) {
+                setPathsLoading(true);
               }
-            });
-            setSignalSuggestions(matched);
-          }
-        } catch (err) {
-          console.warn('Failed to load signal suggestions:', err);
-          // Don't fail the whole page if signal suggestions fail
-        }
-
-        // Load suggested paths
-        try {
-          const lastSession = getLastSession();
-          if (lastSession?.graph_id) {
-            setPathsLoading(true);
-            const paths = await getSuggestedPaths(lastSession.graph_id, undefined, 3, activeLens);
-            // Filter out dismissed paths
-            const dismissed = getDismissedPaths(lastSession.graph_id);
-            const filtered = paths.filter(p => !dismissed.includes(p.path_id));
-            setSuggestedPaths(filtered);
-          }
-        } catch (err) {
-          console.warn('Failed to load suggested paths:', err);
-        } finally {
-          setPathsLoading(false);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load dashboard');
-      } finally {
-        // Evaluate reminders
-        try {
-          const uiPrefs = await getUIPreferences();
-          const reminderPrefs: ReminderPreferences = uiPrefs.reminders || {
-            weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-            review_queue: { enabled: false, cadence_days: 3 },
-            finance_stale: { enabled: false, cadence_days: 7 },
-          };
-          
-          // Get proposed relationships count
-          let proposedCount = 0;
-          try {
-            const lastSession = getLastSession();
-            if (lastSession?.graph_id) {
-              const reviewData = await listProposedRelationships(lastSession.graph_id, 'PROPOSED', 1, 0);
-              proposedCount = reviewData.total || 0;
+              const paths = await getSuggestedPaths(pathsGraphId, undefined, 3);
+              // Filter out dismissed paths
+              const dismissed = getDismissedPaths(pathsGraphId);
+              return paths.filter(p => !dismissed.includes(p.path_id));
+            } catch (err) {
+              console.warn('Failed to load suggested paths:', err);
+              return [];
             }
-          } catch (err) {
-            console.warn('Failed to load proposed relationships for reminders:', err);
-          }
+          })(),
           
-          // Check for stale finance snapshots
-          let hasStaleSnapshots = false;
-          try {
-            const trackingList = await listFinanceTracking();
-            if (trackingList && trackingList.length > 0) {
-              const tickers = trackingList.map(t => t.ticker);
-              const snapshots = await getLatestFinanceSnapshots(tickers);
-              // Check if any snapshot is stale (older than 7 days by default)
-              const staleThreshold = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
-              hasStaleSnapshots = snapshots.some(s => {
-                if (!s.snapshot_fetched_at) return true;
-                const age = Date.now() - new Date(s.snapshot_fetched_at).getTime();
-                return age > staleThreshold;
-              });
+          // Reminders evaluation (run in parallel, don't block main content)
+          (async () => {
+            try {
+              const reminderDefaults: ReminderPreferences = {
+                weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
+                review_queue: { enabled: false, cadence_days: 3 },
+                finance_stale: { enabled: false, cadence_days: 7 },
+              };
+              let reminderPrefs = reminderDefaults;
+              try {
+                const uiPrefs = await getUIPreferences();
+                if (uiPrefs?.reminders) {
+                  reminderPrefs = { ...reminderDefaults, ...uiPrefs.reminders };
+                }
+              } catch (err) {
+                console.warn('Failed to load UI preferences for reminders:', err);
+              }
+              
+              // Get proposed relationships count
+              let proposedCount = 0;
+              try {
+                if (lastSession?.graph_id) {
+                  const reviewData = await listProposedRelationships(lastSession.graph_id, 'PROPOSED', 1, 0);
+                  proposedCount = reviewData.total || 0;
+                }
+              } catch (err) {
+                console.warn('Failed to load proposed relationships for reminders:', err);
+              }
+              
+              // Check for stale finance snapshots
+              let hasStaleSnapshots = false;
+              try {
+                if (reminderPrefs.finance_stale?.enabled) {
+                  const trackingList = await listFinanceTracking();
+                  if (trackingList && trackingList.length > 0) {
+                    const tickers = trackingList.map(t => t.ticker);
+                    const snapshots = await getLatestFinanceSnapshots(tickers);
+                    // Check if any snapshot is stale (older than 7 days by default)
+                    const staleThreshold = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+                    hasStaleSnapshots = snapshots.some(s => {
+                      if (!s.snapshot_fetched_at) return true;
+                      const age = Date.now() - new Date(s.snapshot_fetched_at).getTime();
+                      return age > staleThreshold;
+                    });
+                  }
+                }
+              } catch (err) {
+                console.warn('Failed to check finance snapshots for reminders:', err);
+              }
+              
+              const banner = await evaluateReminders(reminderPrefs, proposedCount, hasStaleSnapshots);
+              return banner;
+            } catch (err) {
+              console.warn('Failed to evaluate reminders:', err);
+              return null;
             }
-          } catch (err) {
-            console.warn('Failed to check finance snapshots for reminders:', err);
-          }
+          })(),
           
-          const banner = await evaluateReminders(reminderPrefs, proposedCount, hasStaleSnapshots);
-          setReminderBanner(banner);
-        } catch (err) {
-          console.warn('Failed to evaluate reminders:', err);
+          // Graph quality checks (now truly parallel with other calls)
+          ...pinnedGraphIds.slice(0, 5).map((graphId: string) =>
+            getGraphQuality(graphId)
+              .then(quality => ({ graphId, quality }))
+              .catch(err => {
+                console.warn(`Failed to load quality for graph ${graphId}:`, err);
+                return null;
+              })
+          ),
+        ]);
+        
+        // Process results immediately as they come in
+        if (graphsResult.status === 'fulfilled' && isMounted) {
+          const graphsData = graphsResult.value;
+          setGraphs(graphsData.graphs || []);
+          setActiveGraphId(graphsData.active_graph_id || '');
+          setCached(['home', 'graphs'], graphsData.graphs || []);
         }
         
-        setLoading(false);
+        if (eventsResult.status === 'fulfilled' && isMounted) {
+          setActivityEvents(eventsResult.value);
+          setCached(['home', 'activity'], eventsResult.value);
+        }
+        
+        if (sessionsResult.status === 'fulfilled' && isMounted) {
+          setRecentSessions(sessionsResult.value);
+          setCached(['home', 'recent-sessions'], sessionsResult.value);
+        }
+        
+        if (gapsResult.status === 'fulfilled' && isMounted) {
+          setGaps(gapsResult.value);
+          setCached(['home', 'gaps'], gapsResult.value);
+        }
+        
+        if (suggestionsResult.status === 'fulfilled' && isMounted) {
+          setSuggestions(suggestionsResult.value);
+          setCached(['home', 'suggestions'], suggestionsResult.value);
+        }
+        
+        if (signalSuggestionsResult.status === 'fulfilled' && isMounted) {
+          setSignalSuggestions(signalSuggestionsResult.value);
+        }
+        
+        if (pathsResult.status === 'fulfilled' && isMounted) {
+          const graphsData = await graphsPromise.catch(() => ({ graphs: [] }));
+          const pathsGraphId = lastSession?.graph_id || graphsData.graphs?.[0]?.graph_id;
+          setSuggestedPaths(pathsResult.value);
+          setCached(['home', 'paths', pathsGraphId || ''], pathsResult.value);
+          setCachedPaths(pathsGraphId, pathsResult.value);
+        }
+        
+        if (isMounted) {
+          setPathsLoading(false);
+        }
+        
+        if (remindersResult.status === 'fulfilled' && isMounted) {
+          setReminderBanner(remindersResult.value);
+        }
+        
+        // Process graph quality results (already loaded in parallel above)
+        if (isMounted) {
+          const qualityMap: Record<string, GraphQuality> = {};
+          qualityResults.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+              qualityMap[result.value.graphId] = result.value.quality;
+            }
+          });
+          setGraphQualities(qualityMap);
+          setSecondaryLoaded(true);
+        }
+        
+        // Check for active trail to show resume prompt
+        if (isMounted && !getActiveTrailId()) {
+          try {
+            const trailsResult = await listTrails('active', 1).catch(() => ({ trails: [] }));
+            if (trailsResult.trails && trailsResult.trails.length > 0) {
+              setShowResumePrompt(true);
+            }
+          } catch (err) {
+            // Ignore errors
+          }
+        }
+        
+        // Mark loading as complete
+        if (isMounted) {
+          setLoading(false);
+        }
+      } catch (err) {
+        if (isMounted) {
+          setError(err instanceof Error ? err.message : 'Failed to load dashboard');
+          setLoading(false);
+          setSecondaryLoaded(true);
+        }
       }
     };
 
-    loadData();
-  }, [activeLens]);
+    // Start loading all data immediately - no delays, fully parallelized
+    loadAllData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Sync category prefs from localStorage
   useEffect(() => {
@@ -433,23 +651,11 @@ export default function HomePage() {
   const regularSuggestions = prioritizedSuggestionsRaw
     .filter(s => !qualityTypes.includes(s.type));
   
-  // Lens-based prioritization: sort suggestions based on active lens
-  const prioritizedRegularSuggestions = [...regularSuggestions].sort((a, b) => {
-    if (activeLens === 'LEARNING') {
-      // Prioritize GAP_* type suggestions
-      const aIsGap = a.type?.startsWith('GAP_') || false;
-      const bIsGap = b.type?.startsWith('GAP_') || false;
-      if (aIsGap && !bIsGap) return -1;
-      if (!aIsGap && bIsGap) return 1;
-    } else if (activeLens === 'FINANCE') {
-      // Prioritize finance-related suggestions (check type or concept domain)
-      const aIsFinance = a.type?.includes('FINANCE') || a.concept_domain?.toLowerCase().includes('finance') || false;
-      const bIsFinance = b.type?.includes('FINANCE') || b.concept_domain?.toLowerCase().includes('finance') || false;
-      if (aIsFinance && !bIsFinance) return -1;
-      if (!aIsFinance && bIsFinance) return 1;
-    }
-    return 0; // Keep original order if no prioritization
-  });
+  // Keep original order for suggestions
+  const prioritizedRegularSuggestions = [...regularSuggestions];
+  
+  // Combine quality suggestions (first) with prioritized regular suggestions
+  const prioritizedSuggestions = [...qualitySuggestions, ...prioritizedRegularSuggestions];
   
   const filteredSignalSuggestions: Record<string, Suggestion[]> = {};
   Object.entries(signalSuggestions).forEach(([conceptId, suggestionsList]) => {
@@ -669,7 +875,7 @@ export default function HomePage() {
     const lastSession = getLastSession();
     if (lastSession?.graph_id) {
       try {
-        const paths = await getSuggestedPaths(lastSession.graph_id, undefined, 50, activeLens);
+        const paths = await getSuggestedPaths(lastSession.graph_id, undefined, 50);
         const path = paths.find(p => p.path_id === pathId);
         if (path) {
           setActivePath(path);
@@ -732,7 +938,7 @@ export default function HomePage() {
     if (lastSession?.graph_id) {
       setPathsLoading(true);
       try {
-        const paths = await getSuggestedPaths(lastSession.graph_id, undefined, 3, activeLens);
+        const paths = await getSuggestedPaths(lastSession.graph_id, undefined, 3);
         // Filter out dismissed paths
         const dismissed = getDismissedPaths(lastSession.graph_id);
         const filtered = paths.filter(p => !dismissed.includes(p.path_id));
@@ -757,9 +963,6 @@ export default function HomePage() {
         params.set('select', suggestion.concept_id);
         if (suggestion.graph_id) {
           params.set('graph_id', suggestion.graph_id);
-        }
-        if (activeLens === 'FINANCE') {
-          params.set('tab', 'data');
         }
         router.push(`/?${params.toString()}`);
       } else if (action.href) {
@@ -857,17 +1060,10 @@ export default function HomePage() {
     
     const actionKind = suggestion.action.kind;
     
-    // In Finance lens, show "Open Finance" for OPEN_CONCEPT actions
-    // (we'll route to Finance tab when the concept is opened)
-    const isFinanceLens = activeLens === 'FINANCE';
-    const isLearningLens = activeLens === 'LEARNING';
     const suggestionType = 'type' in suggestion ? suggestion.type : undefined;
     
     switch (actionKind) {
       case 'OPEN_CONCEPT':
-        if (isFinanceLens) return 'Open Finance';
-        if (isLearningLens && suggestionType === 'GAP_DEFINE') return 'Learn';
-        if (isLearningLens) return 'Explore';
         return 'Open';
       case 'OPEN_REVIEW':
         return 'Review';
@@ -882,49 +1078,6 @@ export default function HomePage() {
     }
   };
 
-  // Get top 5 actionable gaps
-  const getTopGaps = (): Array<{ node_id: string; name: string; type: string; domain?: string }> => {
-    if (!gaps) return [];
-    const allGaps: Array<{ node_id: string; name: string; type: string; domain?: string }> = [];
-    
-    gaps.missing_descriptions.slice(0, 2).forEach(item => {
-      allGaps.push({ ...item, type: 'missing_description' });
-    });
-    gaps.low_connectivity.slice(0, 2).forEach(item => {
-      allGaps.push({ ...item, type: 'low_connectivity' });
-    });
-    gaps.high_interest_low_coverage.slice(0, 1).forEach(item => {
-      allGaps.push({ ...item, type: 'high_interest_low_coverage' });
-    });
-    
-    return allGaps.slice(0, 5);
-  };
-
-  const getGapTypeLabel = (type: string): string => {
-    switch (type) {
-      case 'missing_description':
-        return 'Needs definition';
-      case 'low_connectivity':
-        return 'Low connectivity';
-      case 'high_interest_low_coverage':
-        return 'Needs coverage';
-      default:
-        return 'Gap';
-    }
-  };
-
-  const getGapTypeBadgeColor = (type: string): string => {
-    switch (type) {
-      case 'missing_description':
-        return 'rgba(239, 68, 68, 0.1)';
-      case 'low_connectivity':
-        return 'rgba(251, 191, 36, 0.1)';
-      case 'high_interest_low_coverage':
-        return 'rgba(59, 130, 246, 0.1)';
-      default:
-        return 'rgba(156, 163, 175, 0.1)';
-    }
-  };
 
   if (loading) {
     return (
@@ -933,7 +1086,7 @@ export default function HomePage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+        background: 'var(--page-bg)',
       }}>
         <div style={{ fontSize: '18px', color: 'var(--muted)' }}>Loading dashboard...</div>
       </div>
@@ -949,7 +1102,7 @@ export default function HomePage() {
         justifyContent: 'center',
         flexDirection: 'column',
         gap: '16px',
-        background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+        background: 'var(--page-bg)',
       }}>
         <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error}</div>
         <Link href="/" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
@@ -959,15 +1112,90 @@ export default function HomePage() {
     );
   }
 
-  const topGaps = getTopGaps();
   // Use most recent session for Continue card, fall back to localStorage
   const mostRecentSession = recentSessions[0];
   const hasLastSession = mostRecentSession || (lastSession && (lastSession.concept_id || lastSession.graph_id));
 
+  // Transform gaps and suggestions into narrative items
+  const buildNarrativeItems = (): NarrativeItem[] => {
+    const items: NarrativeItem[] = [];
+    
+    // Map suggestions to "takingShape" section
+    prioritizedSuggestions.forEach(suggestion => {
+      const narrative = mapSuggestionToNarrative(suggestion);
+      items.push({
+        ...narrative,
+        recencyWeight: 0.5, // TODO: Calculate from actual recency
+        mentionFrequency: 0.3, // TODO: Calculate from actual mentions
+        centralityDelta: 0.2, // TODO: Calculate from graph centrality
+      });
+    });
+    
+    // Map gaps to appropriate sections
+    if (gaps) {
+      // High interest low coverage -> takingShape
+      gaps.high_interest_low_coverage.slice(0, 3).forEach(gap => {
+        const narrative = mapGapToNarrative({ ...gap, type: 'high_interest_low_coverage' });
+        items.push({
+          id: `gap-${gap.node_id}`,
+          ...narrative,
+          section: 'takingShape',
+          recencyWeight: 0.6,
+          mentionFrequency: 0.4,
+          centralityDelta: 0.3,
+        });
+      });
+      
+      // Missing descriptions -> unsettled
+      gaps.missing_descriptions.slice(0, 3).forEach(gap => {
+        const narrative = mapGapToNarrative({ ...gap, type: 'missing_description' });
+        items.push({
+          id: `gap-${gap.node_id}`,
+          ...narrative,
+          section: 'unsettled',
+          recencyWeight: 0.3,
+          mentionFrequency: 0.2,
+          centralityDelta: 0.1,
+        });
+      });
+      
+      // Low connectivity -> unsettled
+      gaps.low_connectivity.slice(0, 2).forEach(gap => {
+        const narrative = mapGapToNarrative({ ...gap, type: 'low_connectivity' });
+        items.push({
+          id: `gap-${gap.node_id}`,
+          ...narrative,
+          section: 'unsettled',
+          recencyWeight: 0.3,
+          mentionFrequency: 0.2,
+          centralityDelta: 0.1,
+        });
+      });
+    }
+    
+    // Sort by section priority, then by score
+    const sectionOrder: NarrativeSection[] = ['takingShape', 'unsettled'];
+    items.sort((a, b) => {
+      const aSectionIdx = sectionOrder.indexOf(a.section);
+      const bSectionIdx = sectionOrder.indexOf(b.section);
+      if (aSectionIdx !== bSectionIdx) {
+        return aSectionIdx - bSectionIdx;
+      }
+      return calculateNarrativeScore(b) - calculateNarrativeScore(a);
+    });
+    
+    return items;
+  };
+
+  // Build narrative items after early returns
+  const narrativeItems = buildNarrativeItems();
+  const takingShapeItems = narrativeItems.filter(item => item.section === 'takingShape');
+  const unsettledItems = narrativeItems.filter(item => item.section === 'unsettled');
+
   return (
-    <div style={{ 
+    <div className="fade-in" style={{ 
       minHeight: '100vh',
-      background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+      background: 'var(--page-bg)',
       display: 'flex',
     }}>
       <SessionDrawer 
@@ -976,31 +1204,78 @@ export default function HomePage() {
       />
       <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
         <div style={{ maxWidth: '1152px', margin: '0 auto' }}>
-        {/* Header */}
-        <div style={{ marginBottom: '32px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+        {/* Header - More human, conversational */}
+        <div style={{ marginBottom: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
             <div>
-              <h1 style={{ fontSize: '32px', fontWeight: '700', marginBottom: '8px' }}>
-                Home
+              <h1 style={{ fontSize: '36px', fontWeight: '600', marginBottom: '12px', lineHeight: '1.2', color: 'var(--ink)' }}>
+                Welcome back
               </h1>
-              <p style={{ color: 'var(--muted)', fontSize: '16px', margin: 0 }}>
-                Pick up where you left off.
+              <p style={{ color: 'var(--muted)', fontSize: '17px', margin: 0, lineHeight: '1.5', maxWidth: '600px' }}>
+                Here's what's happening across your knowledge graphs. I've been keeping track of what you've been exploring and what might be worth looking into next.
               </p>
             </div>
-            <Link 
-              href="/" 
-              style={{ 
-                color: 'var(--accent)', 
-                textDecoration: 'none', 
-                fontSize: '14px',
-                padding: '8px 16px',
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                background: 'var(--panel)',
-              }}
-            >
-              Open Explorer →
-            </Link>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <button
+                onClick={toggleTheme}
+                style={{
+                  padding: '10px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'var(--panel)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--ink)',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--accent)';
+                  e.currentTarget.style.color = 'white';
+                  e.currentTarget.style.borderColor = 'var(--accent)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'var(--panel)';
+                  e.currentTarget.style.color = 'var(--ink)';
+                  e.currentTarget.style.borderColor = 'var(--border)';
+                }}
+                title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+              >
+                {theme === 'light' ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                  </svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="5"></circle>
+                    <line x1="12" y1="1" x2="12" y2="3"></line>
+                    <line x1="12" y1="21" x2="12" y2="23"></line>
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                    <line x1="1" y1="12" x2="3" y2="12"></line>
+                    <line x1="21" y1="12" x2="23" y2="12"></line>
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                  </svg>
+                )}
+              </button>
+              <Link 
+                href="/" 
+                style={{ 
+                  color: 'var(--accent)', 
+                  textDecoration: 'none', 
+                  fontSize: '14px',
+                  padding: '10px 18px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'var(--panel)',
+                  fontWeight: '500',
+                }}
+              >
+                Open Explorer →
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -1012,394 +1287,571 @@ export default function HomePage() {
           />
         )}
 
-        {/* Resume where you left off */}
+        {/* Pinned Concepts - Thin line under header */}
+        {pinnedConcepts.length > 0 && (
+          <div style={{ 
+            marginBottom: '32px',
+            padding: '12px 16px',
+            background: 'var(--panel)',
+            borderRadius: '8px',
+            border: '1px solid var(--border)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}>
+            <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginRight: '4px' }}>
+              Pinned:
+            </span>
+            {pinnedConcepts.map((concept) => (
+              <button
+                key={concept.id}
+                onClick={() => handleConceptClick(concept.id)}
+                onMouseEnter={() => prefetchConceptData(concept.id, concept.name)}
+                style={{
+                  padding: '4px 10px',
+                  background: 'var(--background)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  color: 'var(--accent)',
+                  cursor: 'pointer',
+                  fontWeight: '500',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--accent)';
+                  e.currentTarget.style.color = 'white';
+                  e.currentTarget.style.borderColor = 'var(--accent)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'var(--background)';
+                  e.currentTarget.style.color = 'var(--accent)';
+                  e.currentTarget.style.borderColor = 'var(--border)';
+                }}
+              >
+                {concept.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Workspaces - Individual blocks in grid layout */}
         {(() => {
-          // Filter sessions: show only those from last 7 days by default
-          const sevenDaysAgo = new Date();
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-          const recentSessionsFiltered = recentSessions.filter(session => {
+          function formatRelativeTime(isoString: string | null | undefined): string {
+            if (!isoString) return 'unknown';
             try {
-              const endDate = new Date(session.end_at);
-              return endDate >= sevenDaysAgo;
+              const date = new Date(isoString);
+              const now = new Date();
+              const diffMs = now.getTime() - date.getTime();
+              const diffMins = Math.floor(diffMs / 60000);
+              const diffHours = Math.floor(diffMs / 3600000);
+              const diffDays = Math.floor(diffMs / 86400000);
+              
+              if (diffMins < 1) return 'just now';
+              if (diffMins < 60) return `${diffMins}m ago`;
+              if (diffHours < 24) return `${diffHours}h ago`;
+              if (diffDays < 7) return `${diffDays}d ago`;
+              const diffWeeks = Math.floor(diffDays / 7);
+              if (diffWeeks < 4) return `${diffWeeks}w ago`;
+              const diffMonths = Math.floor(diffDays / 30);
+              return `${diffMonths}mo ago`;
             } catch {
-              return true; // Include if we can't parse date
+              return 'unknown';
             }
-          });
+          }
           
-          if (recentSessionsFiltered.length === 0) return null;
+          const PINNED_GRAPHS_KEY = 'brainweb:pinnedGraphIds';
+          function getPinnedGraphs(): string[] {
+            if (typeof window === 'undefined') return [];
+            try {
+              const stored = localStorage.getItem(PINNED_GRAPHS_KEY);
+              if (!stored) return [];
+              return JSON.parse(stored);
+            } catch {
+              return [];
+            }
+          }
+          
+          const pinnedGraphIds = getPinnedGraphs();
+          
+          if (graphs.length === 0 && !secondaryLoaded) {
+            return (
+              <div style={{ marginBottom: '40px' }}>
+                <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>Workspaces</h2>
+                <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+                  <SkeletonCard height={200} />
+                  <SkeletonCard height={200} />
+                  <SkeletonCard height={200} />
+                </div>
+              </div>
+            );
+          }
+          
+          if (graphs.length === 0) {
+            return null;
+          }
           
           return (
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-              marginBottom: '24px',
-            }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 16px 0' }}>
-                Resume where you left off
-              </h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {recentSessionsFiltered.slice(0, 5).map((session) => {
-                const graph = graphs.find(g => g.graph_id === session.graph_id);
-                const graphName = graph?.name || session.graph_id || 'Unknown graph';
-                const timeAgo = formatSessionTime(session.end_at);
-                
-                // Build highlights text
-                const highlights: string[] = [];
-                if (session.highlights?.paths?.[0]) {
-                  highlights.push(`Started path: ${session.highlights.paths[0].title || session.highlights.paths[0].path_id}`);
-                }
-                if (session.highlights?.concepts && session.highlights.concepts.length > 0) {
-                  const conceptNames = session.highlights.concepts
-                    .slice(0, 3)
-                    .map(c => c.concept_name || c.concept_id)
-                    .filter(Boolean);
-                  if (conceptNames.length > 0) {
-                    highlights.push(`Explored: ${conceptNames.join(' → ')}`);
-                  }
-                }
-                if (session.highlights?.answers && session.highlights.answers.length > 0 && highlights.length === 0) {
-                  highlights.push(`Asked ${session.highlights.answers.length} question${session.highlights.answers.length > 1 ? 's' : ''}`);
-                }
-                if (highlights.length === 0 && session.summary) {
-                  highlights.push(session.summary);
-                }
-                
-                return (
-                  <div
-                    key={session.session_id}
-                    style={{
-                      padding: '16px',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border)',
-                      background: 'var(--background)',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'flex-start',
-                      gap: '12px',
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '8px', 
-                        marginBottom: '4px' 
-                      }}>
-                        <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
-                          {graphName}
+            <div style={{ marginBottom: '40px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h2 style={{ fontSize: '20px', fontWeight: '600' }}>Workspaces</h2>
+                <Link
+                  href="/control-panel"
+                  style={{
+                    fontSize: '13px',
+                    color: 'var(--accent)',
+                    textDecoration: 'none',
+                    fontWeight: '500',
+                  }}
+                >
+                  Manage all →
+                </Link>
+              </div>
+              <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+                {graphs.slice(0, 6).map((graph, index) => {
+                  const nodes = graph.node_count ?? 0;
+                  const edges = graph.edge_count ?? 0;
+                  const updated = formatRelativeTime(graph.updated_at);
+                  const templateLabel = graph.template_label || (graph.template_id === 'blank' ? 'Blank canvas' : graph.template_id || '');
+                  const templateTags = graph.template_tags || [];
+                  const isPinned = pinnedGraphIds.includes(graph.graph_id);
+                  const isActive = graph.graph_id === activeGraphId;
+                  
+                  return (
+                    <div key={graph.graph_id} style={{ position: 'relative' }}>
+                      <div
+                        style={{
+                          background: 'var(--panel)',
+                          borderRadius: '18px',
+                          padding: '16px',
+                          border: isActive ? '2px solid var(--accent)' : `1px solid ${theme === 'dark' ? 'rgba(148, 163, 184, 0.3)' : 'rgba(148, 163, 184, 0.2)'}`,
+                          boxShadow: theme === 'dark' ? '0 16px 30px rgba(0, 0, 0, 0.4)' : '0 16px 30px rgba(15, 23, 42, 0.08)',
+                          transform: 'translateY(8px)',
+                          opacity: 0,
+                          animation: `floatIn 0.5s ease ${index * 40}ms forwards`,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                        }}
+                        onClick={() => navigateToExplorer({ graphId: graph.graph_id })}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0) scale(1.02)';
+                          e.currentTarget.style.boxShadow = theme === 'dark' ? '0 20px 40px rgba(0, 0, 0, 0.5)' : '0 20px 40px rgba(15, 23, 42, 0.12)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0) scale(1)';
+                          e.currentTarget.style.boxShadow = theme === 'dark' ? '0 16px 30px rgba(0, 0, 0, 0.4)' : '0 16px 30px rgba(15, 23, 42, 0.08)';
+                        }}
+                      >
+                        {/* Graph Cover/Preview - Placeholder for now */}
+                        <div style={{
+                          height: '120px',
+                          background: theme === 'dark' 
+                            ? 'linear-gradient(135deg, #1e293b 0%, #0f172a 50%, #1e293b 100%)'
+                            : 'linear-gradient(135deg, #eef2ff 0%, #fef9f0 50%, #f8fafc 100%)',
+                          borderRadius: '12px',
+                          marginBottom: '12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '12px',
+                          color: 'var(--muted)',
+                          border: '1px solid var(--border)',
+                        }}>
+                          Graph preview
                         </div>
-                        <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
-                          {timeAgo}
+                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
+                              {graph.name || 'Untitled graph'}
+                            </div>
+                            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{graph.graph_id}</div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                            {isActive && (
+                              <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', backgroundColor: theme === 'dark' ? 'rgba(56, 189, 248, 0.2)' : '#ecfeff', color: theme === 'dark' ? '#7dd3fc' : '#0e7490', fontWeight: 600 }}>
+                                Active
+                              </span>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/graphs/${graph.graph_id}`);
+                              }}
+                              style={{
+                                background: 'transparent',
+                                border: 'none',
+                                cursor: 'pointer',
+                                padding: '4px',
+                                fontSize: '16px',
+                                color: 'var(--muted)',
+                              }}
+                              title="Customize workspace"
+                            >
+                              ⚙️
+                            </button>
+                          </div>
+                        </div>
+                        
+                        <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', backgroundColor: theme === 'dark' ? 'rgba(99, 102, 241, 0.2)' : '#eef2ff', color: theme === 'dark' ? '#a5b4fc' : '#4338ca', fontWeight: 600 }}>
+                            {templateLabel}
+                          </span>
+                          {templateTags.slice(0, 2).map((tag) => (
+                            <span
+                              key={tag}
+                              style={{
+                                fontSize: '11px',
+                                padding: '4px 8px',
+                                borderRadius: '999px',
+                                backgroundColor: theme === 'dark' ? 'rgba(30, 41, 59, 0.5)' : '#f8fafc',
+                                color: 'var(--muted)',
+                                border: '1px solid var(--border)',
+                              }}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                        
+                        <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--muted)', minHeight: '40px' }}>
+                          {graph.intent || graph.template_description || 'No intent captured yet.'}
+                        </div>
+                        
+                        <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--muted)' }}>
+                          {nodes} nodes · {edges} edges · updated {updated}
+                        </div>
+                        
+                        <div style={{ marginTop: '14px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigateToExplorer({ graphId: graph.graph_id });
+                            }}
+                            style={{
+                              flex: 1,
+                              padding: '8px 12px',
+                              borderRadius: '999px',
+                              border: 'none',
+                              backgroundColor: theme === 'dark' ? '#1e293b' : '#111827',
+                              color: 'white',
+                              fontSize: '12px',
+                              cursor: 'pointer',
+                              fontWeight: '500',
+                            }}
+                          >
+                            Open workspace
+                          </button>
                         </div>
                       </div>
-                      {highlights.length > 0 && (
-                        <div style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px' }}>
-                          {highlights[0]}
-                        </div>
-                      )}
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-                      <button
-                        onClick={() => handleResumeSession(session)}
-                        style={{
-                          padding: '6px 12px',
-                          fontSize: '13px',
-                          fontWeight: '500',
-                          background: 'var(--accent)',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Resume
-                      </button>
-                      <button
-                        onClick={() => navigateToExplorer({ graphId: session.graph_id })}
-                        style={{
-                          padding: '6px 12px',
-                          fontSize: '13px',
-                          fontWeight: '500',
-                          background: 'transparent',
-                          color: 'var(--accent)',
-                          border: '1px solid var(--border)',
-                          borderRadius: '6px',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Open graph
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
               </div>
+              <style jsx>{`
+                @keyframes floatIn {
+                  to {
+                    transform: translateY(0);
+                    opacity: 1;
+                  }
+                }
+              `}</style>
             </div>
           );
         })()}
 
-        {/* Main Grid */}
+
+
+        {/* Main Content Area - Recent Activity + Continue + Sidebar */}
         <div style={{ 
           display: 'grid', 
-          gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', 
+          gridTemplateColumns: 'minmax(0, 2fr) minmax(300px, 1fr)', 
           gap: '24px',
-        }}
-        className="home-grid"
-        >
-          {/* Left Column */}
+          marginTop: '24px',
+        }}>
+          {/* Main Content - Recent Activity and Continue */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Next Up */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                <h2 style={{ fontSize: '20px', fontWeight: '600', margin: 0 }}>
-                  Next Up
-                </h2>
-                <div style={{ position: 'relative' }} ref={customizePanelRef}>
-                  <button
-                    onClick={() => setShowCustomizePanel(!showCustomizePanel)}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: 'var(--accent)',
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      padding: '4px 8px',
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    Customize
-                  </button>
-                  {showCustomizePanel && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '100%',
-                      right: 0,
-                      marginTop: '8px',
-                      background: 'var(--panel)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      padding: '12px',
-                      boxShadow: 'var(--shadow)',
-                      zIndex: 100,
-                      minWidth: '200px',
-                    }}>
-                      <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px' }}>
-                        Show suggestions for:
-                      </div>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={categoryPrefs.GAPS}
-                          onChange={() => handleToggleCategory('GAPS')}
-                          style={{ cursor: 'pointer' }}
-                        />
-                        <span style={{ fontSize: '12px' }}>Gaps</span>
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={categoryPrefs.REVIEW}
-                          onChange={() => handleToggleCategory('REVIEW')}
-                          style={{ cursor: 'pointer' }}
-                        />
-                        <span style={{ fontSize: '12px' }}>Review</span>
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={categoryPrefs.EVIDENCE_FRESHNESS}
-                          onChange={() => handleToggleCategory('EVIDENCE_FRESHNESS')}
-                          style={{ cursor: 'pointer' }}
-                        />
-                        <span style={{ fontSize: '12px' }}>Evidence freshness</span>
-                      </label>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '16px', margin: '0 0 16px 0' }}>
-                A few high-impact ways to improve your graph.
-              </p>
-              {dismissedMessage && (
-                <div style={{
-                  padding: '8px 12px',
-                  background: 'var(--accent)',
-                  color: 'white',
-                  borderRadius: '6px',
-                  fontSize: '12px',
-                  marginBottom: '12px',
-                }}>
-                  {dismissedMessage}
-                </div>
-              )}
-              {prioritizedSuggestions.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {prioritizedSuggestions.map((suggestion) => {
-                    const fetchState = fetchStates[suggestion.concept_id || ''];
-                    const isLoading = fetchState?.status === 'loading';
-                    const isSuccess = fetchState?.status === 'success';
+          {/* Recent Activity */}
+          {(() => {
+            const recentAdditions = activityEvents
+              .filter(e => {
+                return e.type === 'EVIDENCE_FETCHED' || 
+                       e.type === 'CONCEPT_VIEWED' ||
+                       (e.payload?.source === 'web' || e.payload?.source === 'extension') ||
+                       e.type === 'RESOURCE_OPENED';
+              })
+              .slice(0, 10);
+            
+            if (recentAdditions.length === 0) return null;
+            
+            return (
+            <CollapsibleSection
+                title="Recent activity"
+                subtitle="What you've added and explored across your workspaces"
+              defaultCollapsed={false}
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {recentAdditions.map((event) => {
+                    const eventTime = new Date(event.created_at).getTime();
+                    const graph = graphs.find(g => g.graph_id === event.graph_id);
+                    const graphName = graph?.name || event.graph_id || 'a workspace';
+                    
+                    let actionText = '';
+                    let itemName = event.payload?.concept_name || event.concept_id || 'item';
+                    
+                    if (event.type === 'EVIDENCE_FETCHED') {
+                      const count = event.payload?.addedCount || 0;
+                      actionText = `You added ${count} source${count !== 1 ? 's' : ''} for ${itemName}`;
+                    } else if (event.type === 'CONCEPT_VIEWED') {
+                      actionText = `You explored ${itemName}`;
+                    } else if (event.type === 'RESOURCE_OPENED') {
+                      actionText = `You opened ${itemName}`;
+                    } else if (event.payload?.source === 'web' || event.payload?.source === 'extension') {
+                      actionText = `You added ${itemName}`;
+                    } else {
+                      actionText = `You worked on ${itemName}`;
+                    }
+                    
                     return (
                       <div
-                        key={suggestion.id}
+                        key={event.id}
+                        onClick={() => {
+                          if (event.concept_id && event.graph_id) {
+                            navigateToExplorer({ conceptId: event.concept_id, graphId: event.graph_id });
+                          } else if (event.graph_id) {
+                            navigateToExplorer({ graphId: event.graph_id });
+                          }
+                        }}
                         style={{
-                          padding: '12px',
+                          padding: '12px 16px',
                           borderRadius: '8px',
                           border: '1px solid var(--border)',
+                          background: 'var(--background)',
+                          fontSize: '14px',
+                          color: 'var(--ink)',
+                          lineHeight: '1.5',
+                          cursor: (event.concept_id || event.graph_id) ? 'pointer' : 'default',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (event.concept_id || event.graph_id) {
+                            e.currentTarget.style.background = 'var(--panel)';
+                            e.currentTarget.style.borderColor = 'var(--accent)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'var(--background)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+                          <div style={{ flex: 1 }}>
+                            <span style={{ color: 'var(--ink)', fontWeight: '500' }}>
+                              {actionText}
+                            </span>
+                            {' '}
+                            <span style={{ color: 'var(--muted)', fontSize: '13px' }}>
+                              in <span style={{ fontWeight: '500' }}>{graphName}</span>
+                            </span>
+                          </div>
+                          <span style={{ color: 'var(--muted)', fontSize: '12px', whiteSpace: 'nowrap' }}>
+                            {formatRelativeTime(eventTime)}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </CollapsibleSection>
+            );
+          })()}
+
+          {/* Continue where you left off - Right under Recent Activity */}
+          {(() => {
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+            const recentSessionsFiltered = recentSessions.filter(session => {
+              try {
+                const endDate = new Date(session.end_at);
+                return endDate >= sevenDaysAgo;
+              } catch {
+                return true;
+              }
+            });
+            
+            if (recentSessionsFiltered.length === 0) return null;
+            
+            return (
+              <CollapsibleSection
+                title={SECTION_TITLE.WHERE_YOU_LEFT_OFF}
+                subtitle={`Continue from where you were working — ${recentSessionsFiltered.length} recent session${recentSessionsFiltered.length !== 1 ? 's' : ''}`}
+                defaultCollapsed={false}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {recentSessionsFiltered.slice(0, 5).map((session) => {
+                    const graph = graphs.find(g => g.graph_id === session.graph_id);
+                    const graphName = graph?.name || session.graph_id || 'Unknown workspace';
+                    const timeAgo = formatSessionTime(session.end_at);
+                    
+                    const lastConceptName = session.last_concept_name || session.highlights?.concepts?.[0]?.concept_name;
+                    const lastConceptId = session.last_concept_id || session.highlights?.concepts?.[0]?.concept_id;
+                    
+                    let contextText = '';
+                    if (session.highlights?.paths?.[0]) {
+                      contextText = `Working on path: ${session.highlights.paths[0].title || session.highlights.paths[0].path_id}`;
+                      if (lastConceptName) {
+                        contextText += ` • Last node: ${lastConceptName}`;
+                      }
+                    } else if (lastConceptName) {
+                      contextText = `Editing notes for ${lastConceptName}`;
+                    } else if (session.highlights?.concepts && session.highlights.concepts.length > 0) {
+                      const conceptNames = session.highlights.concepts
+                        .slice(0, 3)
+                        .map(c => c.concept_name || c.concept_id)
+                        .filter(Boolean);
+                      if (conceptNames.length > 0) {
+                        contextText = `Exploring: ${conceptNames.join(' → ')}`;
+                      }
+                    } else if (session.highlights?.answers && session.highlights.answers.length > 0) {
+                      contextText = `Asked ${session.highlights.answers.length} question${session.highlights.answers.length > 1 ? 's' : ''}`;
+                    } else if (session.summary) {
+                      contextText = session.summary;
+                    } else {
+                      contextText = 'Recent session';
+                    }
+                    
+                    return (
+                      <div
+                        key={session.session_id}
+                        style={{
+                          padding: '16px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--background)',
                           display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'flex-start',
                           gap: '12px',
-                          // Muted styling for quality suggestions
-                          opacity: isQualitySuggestion(suggestion) ? 0.85 : 1,
-                          background: isQualitySuggestion(suggestion) ? 'var(--surface)' : 'transparent',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'var(--panel)';
+                          e.currentTarget.style.borderColor = 'var(--accent)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'var(--background)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
                         }}
                       >
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ 
                             display: 'flex', 
                             alignItems: 'center', 
-                            gap: '6px',
-                            marginBottom: '4px' 
-                          }}>
-                            <div style={{ fontSize: '14px', fontWeight: '600' }}>
-                              {suggestion.title}
-                            </div>
-                            {isQualitySuggestion(suggestion) && suggestion.explanation && (
-                              <span
-                                title={suggestion.explanation}
-                                style={{
-                                  cursor: 'help',
-                                  fontSize: '11px',
-                                  color: 'var(--muted)',
-                                  opacity: 0.7,
-                                }}
-                              >
-                                ℹ️
-                              </span>
-                            )}
-                          </div>
-                          <div style={{ 
-                            display: 'inline-block',
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            fontSize: '11px',
-                            background: isQualitySuggestion(suggestion) 
-                              ? 'rgba(156, 163, 175, 0.08)' 
-                              : 'rgba(156, 163, 175, 0.1)',
-                            color: 'var(--muted)',
+                            gap: '8px', 
                             marginBottom: '6px',
+                            flexWrap: 'wrap',
                           }}>
-                            {getSuggestionTypeLabel(suggestion.type)}
-                          </div>
-                          <div style={{ 
-                            fontSize: '13px', 
-                            color: 'var(--muted)', 
-                            marginTop: '4px',
-                            opacity: isQualitySuggestion(suggestion) ? 0.9 : 1,
-                          }}>
-                            {suggestion.explanation || suggestion.rationale}
-                          </div>
-                          {isSuccess && fetchState.addedCount !== undefined && (
-                            <div style={{ fontSize: '12px', color: 'var(--accent)', marginTop: '4px' }}>
-                              Added {fetchState.addedCount} source{fetchState.addedCount !== 1 ? 's' : ''}
+                            <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
+                              {graphName}
                             </div>
-                          )}
-                          {fetchState?.status === 'error' && (
-                            <div style={{ fontSize: '12px', color: 'var(--accent-2)', marginTop: '4px' }}>
-                              {fetchState.error || 'Failed'}
+                            <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                              {timeAgo}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '4px', lineHeight: '1.4' }}>
+                            {contextText}
+                          </div>
+                          {lastConceptName && (
+                            <div style={{ 
+                              marginTop: '8px',
+                              padding: '6px 10px',
+                              background: 'var(--panel)',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              color: 'var(--accent)',
+                              display: 'inline-block',
+                            }}>
+                              📝 {lastConceptName}
                             </div>
                           )}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (isItemSaved('SUGGESTION', suggestion.id)) {
-                                const saved = getSavedItems().find(item => item.suggestion_id === suggestion.id);
-                                if (saved) removeSavedItem(saved.id);
-                              } else {
-                                saveItem({
-                                  kind: 'SUGGESTION',
-                                  title: suggestion.title,
-                                  graph_id: suggestion.graph_id,
-                                  suggestion_id: suggestion.id,
-                                  concept_id: suggestion.concept_id,
-                                });
-                              }
-                              // Force re-render
-                              setSuggestions(prev => [...prev]);
-                            }}
+                            onClick={() => handleResumeSession(session)}
                             style={{
-                              background: 'transparent',
-                              border: 'none',
-                              color: isItemSaved('SUGGESTION', suggestion.id) ? 'var(--accent)' : 'var(--muted)',
-                              cursor: 'pointer',
-                              fontSize: '16px',
-                              padding: '4px 8px',
-                              display: 'flex',
-                              alignItems: 'center',
-                            }}
-                            title={isItemSaved('SUGGESTION', suggestion.id) ? 'Remove from saved' : 'Save for later'}
-                          >
-                            {isItemSaved('SUGGESTION', suggestion.id) ? '🔖' : '🔗'}
-                          </button>
-                          <SuggestionOverflowMenu
-                            suggestion={suggestion}
-                            onDismiss={() => handleDismissSuggestion(suggestion.id, suggestion.type)}
-                            onSnooze1Day={() => handleSnoozeSuggestion(suggestion.id, SNOOZE_DURATIONS.ONE_DAY)}
-                            onSnooze1Week={() => handleSnoozeSuggestion(suggestion.id, SNOOZE_DURATIONS.ONE_WEEK)}
-                          />
-                          <button
-                            onClick={() => handleSuggestionAction(suggestion)}
-                            disabled={isLoading}
-                            style={{
-                              padding: '6px 12px',
-                              background: isLoading ? 'var(--muted)' : 'var(--accent)',
+                              padding: '8px 14px',
+                              fontSize: '13px',
+                              fontWeight: '500',
+                              background: 'var(--accent)',
                               color: 'white',
                               border: 'none',
                               borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: '600',
-                              cursor: isLoading ? 'not-allowed' : 'pointer',
+                              cursor: 'pointer',
                               whiteSpace: 'nowrap',
-                              opacity: isLoading ? 0.6 : 1,
                             }}
                           >
-                            {isLoading ? 'Loading...' : getSuggestionActionLabel(suggestion)}
+                            Continue
+                          </button>
+                          <button
+                            onClick={() => navigateToExplorer({ 
+                              graphId: session.graph_id,
+                              conceptId: lastConceptId,
+                            })}
+                            style={{
+                              padding: '8px 14px',
+                              fontSize: '13px',
+                              fontWeight: '500',
+                              background: 'transparent',
+                              color: 'var(--accent)',
+                              border: '1px solid var(--border)',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Open workspace
                           </button>
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              ) : (
-                <div style={{ color: 'var(--muted)', fontSize: '14px' }}>
-                  No suggestions available
-                </div>
-              )}
-            </div>
+              </CollapsibleSection>
+            );
+          })()}
 
-            {/* Because you recently... */}
-            {recentSignals.length > 0 && (
-              <div style={{
-                background: 'var(--panel)',
-                borderRadius: '12px',
-                padding: '24px',
-                boxShadow: 'var(--shadow)',
-              }}>
-                <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '8px' }}>
-                  Because you recently…
-                </h2>
-                <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '16px', margin: '0 0 16px 0' }}>
-                  A few suggestions based on what you touched last.
-                </p>
+          {/* Unsettled Areas - Collapsed by default */}
+          {unsettledItems.length > 0 && (
+            <CollapsibleSection
+              title={SECTION_TITLE.UNSETTLED_AREAS}
+              subtitle="Areas that could benefit from more exploration"
+              defaultCollapsed={true}
+            >
+              {unsettledItems.map((item) => (
+                <NarrativeCard
+                  key={item.id}
+                  title={item.title}
+                  description={item.description}
+                  tag={item.tag}
+                  primaryAction={item.primaryAction}
+                  secondaryAction={item.secondaryAction}
+                />
+              ))}
+            </CollapsibleSection>
+          )}
+
+          {/* Quiet Background Changes - Optional, stub for now */}
+          {/* TODO: Implement when system actions/ingestion events are available */}
+          
+          {/* Because you recently... */}
+          {recentSignals.length > 0 && (
+            <CollapsibleSection
+              title="Because you recently…"
+              subtitle="A few suggestions based on what you explored"
+              defaultCollapsed={true}
+            >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {recentSignals.slice(0, 6).map((signal, idx) => {
                     const signalSuggestionsForConcept = filteredSignalSuggestions[signal.concept_id] || [];
@@ -1481,7 +1933,7 @@ export default function HomePage() {
                             >
                               {fetchStates[suggestion.concept_id || '']?.status === 'loading' 
                                 ? 'Loading...' 
-                                : getSuggestionActionLabel(suggestion.action.kind)}
+                                : CTA.EXPLORE}
                             </button>
                           </div>
                         ) : signal.type === EXPLORATION_EVENT_TYPES.EVIDENCE_FETCHED ? (
@@ -1499,88 +1951,28 @@ export default function HomePage() {
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            Review Evidence
+                            {CTA.EXPLORE}
                           </button>
                         ) : null}
                       </div>
                     );
                   })}
                 </div>
-              </div>
-            )}
+            </CollapsibleSection>
+          )}
 
-            {/* Continue Card */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                Continue
-              </h2>
-              {hasLastSession ? (
-                <div>
-                  {(mostRecentSession?.last_concept_name || lastSession?.concept_name) && (
-                    <div style={{ marginBottom: '12px' }}>
-                      <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '4px' }}>
-                        Last concept
-                      </div>
-                      <div style={{ fontSize: '16px', fontWeight: '600' }}>
-                        {mostRecentSession?.last_concept_name || lastSession?.concept_name}
-                      </div>
-                    </div>
-                  )}
-                  {(mostRecentSession?.graph_id || lastSession?.graph_name) && (
-                    <div style={{ marginBottom: '16px' }}>
-                      <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '4px' }}>
-                        Graph
-                      </div>
-                      <div style={{ fontSize: '14px' }}>
-                        {lastSession?.graph_name || mostRecentSession?.graph_id}
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-                    <button
-                      onClick={handleResume}
-                      style={{
-                        padding: '10px 20px',
-                        background: 'var(--accent)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Resume
-                    </button>
-                    <button
-                      onClick={handleOpenExplorer}
-                      style={{
-                        padding: '10px 20px',
-                        background: 'transparent',
-                        color: 'var(--accent)',
-                        border: '1px solid var(--accent)',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Open Explorer
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <div style={{ color: 'var(--muted)', fontSize: '14px', marginBottom: '20px' }}>
-                    No recent session
-                  </div>
+            {/* Continue Card - Collapsible */}
+            {hasLastSession && (
+              <CollapsibleSection
+                title="Continue where you left off"
+                subtitle={mostRecentSession?.last_concept_name || lastSession?.concept_name 
+                  ? `Last exploring: ${mostRecentSession?.last_concept_name || lastSession?.concept_name}`
+                  : 'Resume your last session'}
+                defaultCollapsed={false}
+              >
+                <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
                   <button
-                    onClick={handleOpenExplorer}
+                    onClick={handleResume}
                     style={{
                       padding: '10px 20px',
                       background: 'var(--accent)',
@@ -1592,96 +1984,122 @@ export default function HomePage() {
                       cursor: 'pointer',
                     }}
                   >
-                    Start exploring
+                    {CTA.CONTINUE_THINKING}
+                  </button>
+                  <button
+                    onClick={handleOpenExplorer}
+                    style={{
+                      padding: '10px 20px',
+                      background: 'transparent',
+                      color: 'var(--accent)',
+                      border: '1px solid var(--accent)',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Open Explorer
                   </button>
                 </div>
-              )}
-            </div>
-
-            {/* Recent Sessions */}
-            {recentSessions.length > 0 && (
-              <div style={{
-                background: 'var(--panel)',
-                borderRadius: '12px',
-                padding: '24px',
-                boxShadow: 'var(--shadow)',
-              }}>
-                <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                  Recent Sessions
-                </h2>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {recentSessions.slice(0, 5).map((session) => (
-                    <div
-                      key={session.session_id}
-                      style={{
-                        padding: '12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        gap: '12px',
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '4px' }}>
-                          {formatSessionTimeRange(session.start_at, session.end_at)}
-                        </div>
-                        <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>
-                          {session.summary}
-                        </div>
-                        {session.top_concepts.length > 0 && (
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
-                            {session.top_concepts.map((concept) => (
-                              <span
-                                key={concept.concept_id}
-                                style={{
-                                  fontSize: '11px',
-                                  padding: '2px 6px',
-                                  background: 'var(--background)',
-                                  borderRadius: '4px',
-                                  color: 'var(--ink)',
-                                }}
-                              >
-                                {concept.concept_name || concept.concept_id}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => handleResumeSession(session)}
-                        style={{
-                          padding: '8px 16px',
-                          background: 'var(--accent)',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          fontSize: '13px',
-                          fontWeight: '600',
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Resume
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              </CollapsibleSection>
             )}
 
-            {/* Recent Activity */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                Recent Activity
-              </h2>
-              {activityEvents.length > 0 ? (
+            {/* Recent Sessions - Collapsible */}
+            {(recentSessions.length > 0 || !secondaryLoaded) && (
+              <CollapsibleSection
+                title="Recent sessions"
+                subtitle="Your exploration history"
+                defaultCollapsed={true}
+              >
+                {!secondaryLoaded ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {[0, 1, 2].map((idx) => (
+                      <div key={idx} className="skeleton skeleton-card" style={{ padding: '12px', height: '72px' }} />
+                    ))}
+                  </div>
+                ) : recentSessions.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {recentSessions.slice(0, 5).map((session) => (
+                      <div
+                        key={session.session_id}
+                        style={{
+                          padding: '12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '12px',
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '4px' }}>
+                            {formatSessionTimeRange(session.start_at, session.end_at)}
+                          </div>
+                          <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '4px' }}>
+                            {session.summary}
+                          </div>
+                          {session.top_concepts.length > 0 && (
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                              {session.top_concepts.map((concept) => (
+                                <span
+                                  key={concept.concept_id}
+                                  style={{
+                                    fontSize: '11px',
+                                    padding: '2px 6px',
+                                    background: 'var(--background)',
+                                    borderRadius: '4px',
+                                    color: 'var(--ink)',
+                                  }}
+                                >
+                                  {concept.concept_name || concept.concept_id}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleResumeSession(session)}
+                          style={{
+                            padding: '8px 16px',
+                            background: 'var(--accent)',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '6px',
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {CTA.CONTINUE_THINKING}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: 'var(--muted)', fontSize: '14px' }}>
+                    No recent sessions
+                  </div>
+                )}
+              </CollapsibleSection>
+            )}
+
+            {/* Recent Activity - Collapsible */}
+            <CollapsibleSection
+              title="All activity"
+              subtitle="Everything that's happened recently"
+              defaultCollapsed={true}
+            >
+              {!secondaryLoaded ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <SkeletonLine width="60%" />
+                  <SkeletonLine width="72%" />
+                  <SkeletonLine width="54%" />
+                  <SkeletonLine width="68%" />
+                </div>
+              ) : activityEvents.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {activityEvents.slice(0, 20).map((event) => {
                     const eventTime = new Date(event.created_at).getTime();
@@ -1723,12 +2141,33 @@ export default function HomePage() {
                   No recent activity
                 </div>
               )}
-            </div>
+            </CollapsibleSection>
           </div>
+          {/* End Narrative Scroll */}
 
-          {/* Right Column */}
+          {/* Sidebar - Right Column */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Pinned Graphs */}
+            {/* Areas Gaining Momentum - Moved to sidebar */}
+            {takingShapeItems.length > 0 && (
+              <CollapsibleSection
+                title={SECTION_TITLE.WHATS_TAKING_SHAPE}
+                subtitle="Areas gaining momentum — new connections and things to explore"
+                defaultCollapsed={false}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {takingShapeItems.map((item) => (
+                    <NarrativeCard
+                      key={item.id}
+                      title={item.title}
+                      description={item.description}
+                      tag={item.tag}
+                      primaryAction={item.primaryAction}
+                      secondaryAction={item.secondaryAction}
+                    />
+                  ))}
+                </div>
+              </CollapsibleSection>
+            )}
             {(() => {
               const PINNED_GRAPHS_KEY = 'brainweb:pinnedGraphIds';
               function getPinnedGraphs(): string[] {
@@ -1763,58 +2202,145 @@ export default function HomePage() {
                   return 'unknown';
                 }
               }
+              
+              // Show all graphs, prioritize pinned ones
               const pinnedGraphIds = getPinnedGraphs();
+              const allGraphs = graphs.slice(0, 8); // Show up to 8 graphs
               const pinnedGraphs = pinnedGraphIds
                 .slice(0, 5)
                 .map(id => graphs.find(g => g.graph_id === id))
                 .filter((g): g is GraphSummary => !!g);
               
-              if (pinnedGraphs.length === 0) return null;
+              // If no graphs loaded yet, show skeleton
+              if (graphs.length === 0 && !secondaryLoaded) {
+                  return (
+                  <CollapsibleSection
+                    title="Workspaces"
+                    subtitle="Your knowledge graphs"
+                    defaultCollapsed={false}
+                  >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <SkeletonCard height={80} />
+                      <SkeletonCard height={80} />
+                      </div>
+                  </CollapsibleSection>
+                );
+              }
+              
+              // If no graphs, show empty state
+              if (graphs.length === 0) {
+                return (
+                  <CollapsibleSection
+                    title="Workspaces"
+                    subtitle="Your knowledge graphs"
+                    defaultCollapsed={false}
+                  >
+                    <div style={{ color: 'var(--muted)', fontSize: '14px', padding: '16px', textAlign: 'center' }}>
+                      No workspaces yet. Create your first graph to get started.
+                    </div>
+                  </CollapsibleSection>
+                  );
+              }
               
               return (
-                <div style={{
-                  background: 'var(--panel)',
-                  borderRadius: '12px',
-                  padding: '24px',
-                  boxShadow: 'var(--shadow)',
-                }}>
-                  <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                    Graphs
-                  </h2>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {pinnedGraphs.map((graph) => {
+                <CollapsibleSection
+                  title="Workspaces"
+                  subtitle={`${graphs.length} workspace${graphs.length !== 1 ? 's' : ''} — choose one to enter`}
+                  defaultCollapsed={false}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {allGraphs.map((graph) => {
                       const nodes = graph.node_count ?? 0;
                       const edges = graph.edge_count ?? 0;
                       const updated = formatRelativeTime(graph.updated_at);
+                      const templateLabel = graph.template_label || (graph.template_id === 'blank' ? 'Blank canvas' : graph.template_id || '');
+                      const isPinned = pinnedGraphIds.includes(graph.graph_id);
+                      const isActive = graph.graph_id === activeGraphId;
+                      
                       return (
                         <div
                           key={graph.graph_id}
                           style={{
-                            padding: '12px',
-                            borderRadius: '8px',
-                            border: '1px solid var(--border)',
-                            transition: 'background-color 0.1s',
+                            padding: '14px',
+                            borderRadius: '10px',
+                            border: isActive ? '2px solid var(--accent)' : '1px solid var(--border)',
+                            background: isActive ? 'var(--panel)' : 'var(--background)',
+                            transition: 'all 0.2s',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => navigateToExplorer({ graphId: graph.graph_id })}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = 'var(--panel)';
+                            e.currentTarget.style.borderColor = 'var(--accent)';
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = 'var(--shadow)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = isActive ? 'var(--panel)' : 'var(--background)';
+                            e.currentTarget.style.borderColor = isActive ? 'var(--accent)' : 'var(--border)';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = 'none';
                           }}
                         >
-                          <div style={{ marginBottom: '12px' }}>
-                            <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '4px', color: 'var(--ink)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px', color: 'var(--ink)' }}>
                               {graph.name || graph.graph_id}
                             </div>
-                            <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '8px' }}>
-                              {nodes} nodes · {edges} edges · updated {updated}
+                              <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '6px' }}>
+                                {graph.graph_id}
                             </div>
-                            {graphQualities[graph.graph_id] && (
+                            </div>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              {isActive && (
+                                <span style={{ 
+                                  fontSize: '10px', 
+                                  padding: '3px 8px', 
+                                  borderRadius: '999px', 
+                                  backgroundColor: theme === 'dark' ? 'rgba(56, 189, 248, 0.2)' : '#ecfeff', 
+                                  color: theme === 'dark' ? '#7dd3fc' : '#0e7490', 
+                                  fontWeight: '600' 
+                                }}>
+                                  Active
+                                </span>
+                              )}
+                              {isPinned && (
+                                <span style={{ fontSize: '14px' }}>📌</span>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {templateLabel && (
                               <div style={{ marginBottom: '8px' }}>
-                                <GraphHealthBadge quality={graphQualities[graph.graph_id]} />
-                                <span style={{ fontSize: '11px', color: 'var(--muted)', marginLeft: '8px' }}>
-                                  {graphQualities[graph.graph_id].stats.missing_description_pct}% missing descriptions · {graphQualities[graph.graph_id].stats.stale_evidence_pct}% stale
+                              <span style={{ 
+                                fontSize: '10px', 
+                                padding: '4px 8px', 
+                                borderRadius: '999px', 
+                                backgroundColor: theme === 'dark' ? 'rgba(99, 102, 241, 0.2)' : '#eef2ff', 
+                                color: theme === 'dark' ? '#a5b4fc' : '#4338ca', 
+                                fontWeight: '600' 
+                              }}>
+                                {templateLabel}
                                 </span>
                               </div>
                             )}
+                          
+                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '10px' }}>
+                            {nodes} nodes · {edges} edges · updated {updated}
                           </div>
+                          
+                          {graphQualities[graph.graph_id] && (
+                            <div style={{ marginBottom: '10px' }}>
+                              <GraphHealthBadge quality={graphQualities[graph.graph_id]} />
+                            </div>
+                          )}
+                          
                           <div style={{ display: 'flex', gap: '8px' }}>
                             <button
-                              onClick={() => navigateToExplorer({ graphId: graph.graph_id })}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigateToExplorer({ graphId: graph.graph_id });
+                              }}
                               style={{
                                 flex: 1,
                                 padding: '8px 12px',
@@ -1822,197 +2348,75 @@ export default function HomePage() {
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '6px',
-                                fontSize: '13px',
+                                fontSize: '12px',
                                 fontWeight: '500',
                                 cursor: 'pointer',
                               }}
                             >
-                              Open
+                              Enter workspace
                             </button>
                             <button
-                              onClick={() => router.push(`/graphs/${graph.graph_id}`)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/graphs/${graph.graph_id}`);
+                              }}
                               style={{
-                                flex: 1,
                                 padding: '8px 12px',
                                 background: 'transparent',
                                 color: 'var(--accent)',
-                                border: '1px solid var(--accent)',
+                                border: '1px solid var(--border)',
                                 borderRadius: '6px',
-                                fontSize: '13px',
+                                fontSize: '12px',
                                 fontWeight: '500',
                                 cursor: 'pointer',
                               }}
+                              title="Customize workspace"
                             >
-                              Browse
+                              ⚙️
                             </button>
                           </div>
                         </div>
                       );
                     })}
+                    
+                    {graphs.length > 8 && (
+                      <button
+                        onClick={() => router.push('/control-panel')}
+                        style={{
+                          padding: '12px',
+                          background: 'transparent',
+                          color: 'var(--accent)',
+                          border: '1px dashed var(--border)',
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          cursor: 'pointer',
+                          textAlign: 'center',
+                        }}
+                      >
+                        View all {graphs.length} workspaces →
+                      </button>
+                    )}
                   </div>
-                </div>
+                </CollapsibleSection>
               );
             })()}
             
-            {/* Gaps to Resolve */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                Gaps to Resolve
-              </h2>
-              {topGaps.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {topGaps.map((gap) => (
-                    <div
-                      key={gap.node_id}
-                      style={{
-                        padding: '12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '4px' }}>
-                            {gap.name}
-                          </div>
-                          <div style={{ 
-                            display: 'inline-block',
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            fontSize: '11px',
-                            background: getGapTypeBadgeColor(gap.type),
-                            color: 'var(--muted)',
-                            marginTop: '4px',
-                          }}>
-                            {getGapTypeLabel(gap.type)}
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                        <button
-                          onClick={() => handleGapOpen(gap.node_id)}
-                          style={{
-                            padding: '6px 12px',
-                            background: 'transparent',
-                            color: 'var(--accent)',
-                            border: '1px solid var(--accent)',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Open
-                        </button>
-                        <button
-                          onClick={() => handleGapAsk(gap.name)}
-                          style={{
-                            padding: '6px 12px',
-                            background: 'var(--accent)',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Ask
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ color: 'var(--muted)', fontSize: '14px' }}>
-                  {gaps ? 'No gaps to resolve' : 'Loading gaps...'}
-                </div>
-              )}
-            </div>
 
-            {/* Pinned */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                Pinned
-              </h2>
-              {pinnedConcepts.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {pinnedConcepts.map((concept) => (
-                    <div
-                      key={concept.id}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '8px 12px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border)',
-                      }}
-                    >
-                      <div
-                        onClick={() => handleConceptClick(concept.id)}
-                        style={{
-                          fontSize: '14px',
-                          cursor: 'pointer',
-                          color: 'var(--accent)',
-                          flex: 1,
-                        }}
-                      >
-                        {concept.name}
-                      </div>
-                      <button
-                        onClick={() => handleTogglePin(concept)}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          color: 'var(--muted)',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                          padding: '4px 8px',
-                        }}
-                        title="Unpin"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ color: 'var(--muted)', fontSize: '14px' }}>
-                  No pinned items
-                </div>
-              )}
-              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
-                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
-                  Answers (Coming soon)
-                </div>
-              </div>
-            </div>
 
-            {/* Recently Viewed */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>
-                Recently Viewed
-              </h2>
+            {/* Recently Viewed - Collapsible */}
+            <CollapsibleSection
+              title="Recently viewed"
+              subtitle="Concepts you've explored"
+              defaultCollapsed={true}
+            >
               {recentViews.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {recentViews.map((view) => (
                     <div
                       key={view.id}
                       onClick={() => handleConceptClick(view.id)}
+                      onMouseEnter={() => prefetchConceptData(view.id, view.name)}
                       style={{
                         padding: '8px 12px',
                         borderRadius: '6px',
@@ -2037,7 +2441,7 @@ export default function HomePage() {
                   No recent views
                 </div>
               )}
-            </div>
+            </CollapsibleSection>
 
             {/* Continue Block */}
             <ContinueBlock 
@@ -2045,17 +2449,13 @@ export default function HomePage() {
               onPathResume={handlePathResume}
             />
 
-            {/* Suggested Paths */}
-            <div style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              boxShadow: 'var(--shadow)',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h2 style={{ fontSize: '20px', fontWeight: '600', margin: 0 }}>
-                  Suggested Paths
-                </h2>
+            {/* Suggested Paths - Collapsible */}
+            <CollapsibleSection
+              title="Suggested paths"
+              subtitle="Exploration paths you might find interesting"
+              defaultCollapsed={true}
+            >
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
                 <button
                   onClick={handleRegeneratePaths}
                   disabled={pathsLoading}
@@ -2076,9 +2476,10 @@ export default function HomePage() {
                   <span style={{ fontSize: '14px' }}>↻</span>
                 </button>
               </div>
-              {pathsLoading ? (
-                <div style={{ color: 'var(--muted)', fontSize: '14px' }}>
-                  Loading paths...
+              {pathsLoading || !secondaryLoaded ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div className="skeleton skeleton-card" style={{ padding: '12px', height: '88px' }} />
+                  <div className="skeleton skeleton-card" style={{ padding: '12px', height: '88px' }} />
                 </div>
               ) : suggestedPaths.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -2195,7 +2596,7 @@ export default function HomePage() {
                   No suggested paths available
                 </div>
               )}
-            </div>
+            </CollapsibleSection>
           </div>
         </div>
         </div>
@@ -2208,7 +2609,45 @@ export default function HomePage() {
           graphId={getLastSession()?.graph_id}
         />
       )}
+      
+      {/* Trail Sidebar */}
+      <TrailSidebar
+        trailId={activeTrailId}
+        onClose={() => {
+          setActiveTrailIdState(null);
+          clearActiveTrailId();
+        }}
+        onStepClick={(step: TrailStep) => {
+          if (step.kind === 'page' && step.ref_id) {
+            window.open(step.ref_id, '_blank');
+          } else if (step.kind === 'quote' && step.ref_id) {
+            // TODO: Open quote view or scroll to quote on page
+            console.log('Quote clicked:', step.ref_id);
+          } else if (step.kind === 'concept' && step.ref_id) {
+            router.push(`/?select=${step.ref_id}`);
+          } else if (step.kind === 'claim' && step.ref_id) {
+            // TODO: Open claim view
+            console.log('Claim clicked:', step.ref_id);
+          } else if (step.kind === 'search' && step.ref_id) {
+            // TODO: Show search results
+            console.log('Search clicked:', step.ref_id);
+          }
+        }}
+      />
+      
+      {/* Resume Thinking Prompt */}
+      {showResumePrompt && (
+        <ResumeThinkingPrompt
+          onResume={(trailId: string) => {
+            setActiveTrailIdState(trailId);
+            setActiveTrailId(trailId);
+            setShowResumePrompt(false);
+          }}
+          onDismiss={() => {
+            setShowResumePrompt(false);
+          }}
+        />
+      )}
     </div>
   );
 }
-

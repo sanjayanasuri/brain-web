@@ -1,8 +1,11 @@
 
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
+from pathlib import Path
+import os
+from datetime import datetime
 
 # Import the script modules as Python modules, not as CLI scripts
 from scripts import import_csv_to_neo4j, export_csv_from_neo4j
@@ -38,19 +41,31 @@ def run_import():
     """
     try:
         import_csv_to_neo4j.main()
+        # Invalidate graph overview cache so changes are immediately visible
+        from cache_utils import invalidate_cache_pattern
+        invalidate_cache_pattern("graph_overview")
         return {"status": "ok", "action": "import", "detail": "CSV import completed"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/export")
-def run_export():
+def run_export(per_graph: bool = Query(True, description="Also export separate CSV files for each graph")):
     """
     Admin-only endpoint: export current Neo4j graph to CSV.
+    
+    Args:
+        per_graph: If True (default), exports separate CSV files for each graph
+                  (e.g., nodes_G{graph_id}.csv) in addition to the combined files.
     """
     try:
-        export_csv_from_neo4j.main()
-        return {"status": "ok", "action": "export", "detail": "CSV export completed"}
+        export_csv_from_neo4j.main(graph_id=None, export_per_graph=per_graph)
+        return {
+            "status": "ok",
+            "action": "export",
+            "per_graph": per_graph,
+            "detail": "CSV export completed" + (" (including per-graph files)" if per_graph else "")
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -408,3 +423,233 @@ def update_notion_config_endpoint(config: NotionConfig, session=Depends(get_neo4
     Sets which databases should be synced and whether to enable auto-sync.
     """
     return update_notion_config(session, config)
+
+
+@router.get("/graph-files/preview/{filename}")
+def preview_graph_file(filename: str, lines: int = Query(10, ge=1, le=50, description="Number of lines to preview")):
+    """
+    Preview the first few lines of a CSV file.
+    
+    Args:
+        filename: Name of the CSV file to preview
+        lines: Number of lines to return (default: 10, max: 50)
+    
+    Returns:
+        Dictionary with:
+        - filename: File name
+        - total_lines: Total number of lines in file (approximate)
+        - preview_lines: List of lines (first N lines)
+        - headers: CSV headers if available
+    """
+    try:
+        BASE_DIR = Path(__file__).resolve().parent
+        GRAPH_DIR = BASE_DIR.parent / "graph"
+        file_path = GRAPH_DIR / filename
+        
+        # Security: ensure file is in graph directory and is CSV
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+        if file_path.suffix.lower() != '.csv':
+            raise HTTPException(status_code=400, detail="Only CSV files can be previewed")
+        if not str(file_path.resolve()).startswith(str(GRAPH_DIR.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        import csv
+        preview_lines = []
+        headers = None
+        total_lines = 0
+        
+        with file_path.open('r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for i, row in enumerate(reader):
+                total_lines += 1
+                if i == 0:
+                    headers = row
+                if i < lines:
+                    preview_lines.append(row)
+        
+        return {
+            "filename": filename,
+            "total_lines": total_lines,
+            "preview_lines": preview_lines,
+            "headers": headers,
+            "previewed_lines": len(preview_lines)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to preview file: {str(e)}")
+
+
+@router.get("/graph-files/download/{filename}")
+def download_graph_file(filename: str):
+    """
+    Download a CSV file from the graph directory.
+    
+    Args:
+        filename: Name of the CSV file to download
+    
+    Returns:
+        FileResponse with the CSV file
+    """
+    from fastapi.responses import FileResponse
+    
+    try:
+        BASE_DIR = Path(__file__).resolve().parent
+        GRAPH_DIR = BASE_DIR.parent / "graph"
+        file_path = GRAPH_DIR / filename
+        
+        # Security checks
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+        if file_path.suffix.lower() != '.csv':
+            raise HTTPException(status_code=400, detail="Only CSV files can be downloaded")
+        if not str(file_path.resolve()).startswith(str(GRAPH_DIR.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type='text/csv',
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download file: {str(e)}")
+
+
+@router.get("/graph-files")
+def list_graph_files():
+    """
+    List all files in the graph directory with metadata.
+    Useful for development/debugging to see which CSV files make up the knowledge graph.
+    
+    Returns:
+        List of file objects with:
+        - name: File name
+        - path: Relative path from project root
+        - size: File size in bytes
+        - size_formatted: Human-readable file size
+        - modified: Last modified timestamp (ISO format)
+        - modified_formatted: Human-readable last modified time
+        - type: File type (csv, etc.)
+        - description: Description of what the file contains
+    """
+    try:
+        # Get graph directory path (same logic as export script)
+        BASE_DIR = Path(__file__).resolve().parent  # /backend
+        GRAPH_DIR = BASE_DIR.parent / "graph"       # /graph
+        
+        if not GRAPH_DIR.exists():
+            return {
+                "status": "error",
+                "message": f"Graph directory not found: {GRAPH_DIR}",
+                "files": []
+            }
+        
+        files = []
+        
+        # File descriptions mapping
+        file_descriptions = {
+            "nodes_semantic.csv": "All concept nodes from all graphs (combined)",
+            "edges_semantic.csv": "All relationships from all graphs (combined)",
+            "lecture_covers_export.csv": "Lecture-to-concept coverage mappings",
+            "lecture_covers_L001.csv": "Lecture L001 coverage mappings",
+            "lectures.csv": "Lecture metadata",
+            "demo_nodes.csv": "Demo dataset - concept nodes",
+            "demo_edges.csv": "Demo dataset - relationships",
+        }
+        
+        # Helper to extract graph_id from per-graph filenames
+        def get_graph_id_from_filename(filename: str) -> Optional[str]:
+            """Extract graph_id from filenames like nodes_G0F87FFD7.csv"""
+            import re
+            match = re.match(r'^(nodes|edges)_G([A-Z0-9]+)\.csv$', filename)
+            if match:
+                return match.group(2)
+            return None
+        
+        # Helper to get graph name from graph_id
+        def get_graph_name(graph_id: str) -> Optional[str]:
+            """Get graph name from graph_id"""
+            try:
+                from services_branch_explorer import list_graphs, get_driver
+                driver = get_driver()
+                with driver.session() as session:
+                    graphs = list_graphs(session)
+                    for graph in graphs:
+                        if graph.get("graph_id") == graph_id:
+                            return graph.get("name")
+            except Exception:
+                pass
+            return None
+        
+        # Scan directory for CSV files
+        for file_path in sorted(GRAPH_DIR.iterdir()):
+            if not file_path.is_file():
+                continue
+            
+            # Only show CSV files
+            if file_path.suffix.lower() != '.csv':
+                continue
+            
+            stat = file_path.stat()
+            size = stat.st_size
+            modified = datetime.fromtimestamp(stat.st_mtime)
+            
+            # Format file size
+            if size < 1024:
+                size_formatted = f"{size} B"
+            elif size < 1024 * 1024:
+                size_formatted = f"{size / 1024:.1f} KB"
+            else:
+                size_formatted = f"{size / (1024 * 1024):.1f} MB"
+            
+            # Format modified time
+            modified_formatted = modified.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Check if file was recently modified (within last hour)
+            time_since_modified = datetime.now() - modified
+            recently_changed = time_since_modified.total_seconds() < 3600  # 1 hour
+            
+            file_name = file_path.name
+            description = file_descriptions.get(file_name, "Graph data file")
+            
+            # Check if this is a per-graph file
+            graph_id = get_graph_id_from_filename(file_name)
+            graph_name = None
+            if graph_id:
+                graph_name = get_graph_name(graph_id)
+                if graph_name:
+                    description = f"Nodes for graph: {graph_name} (graph_id: {graph_id})" if file_name.startswith("nodes_") else f"Edges for graph: {graph_name} (graph_id: {graph_id})"
+                else:
+                    description = f"Nodes for graph_id: {graph_id}" if file_name.startswith("nodes_") else f"Edges for graph_id: {graph_id}"
+            
+            files.append({
+                "name": file_name,
+                "path": str(file_path.relative_to(BASE_DIR.parent)),  # Relative to project root
+                "size": size,
+                "size_formatted": size_formatted,
+                "modified": modified.isoformat(),
+                "modified_formatted": modified_formatted,
+                "type": "csv",
+                "description": description,
+                "graph_id": graph_id,
+                "graph_name": graph_name,
+                "recently_changed": recently_changed
+            })
+        
+        # Sort files: recently changed first, then by modified time (newest first)
+        files.sort(key=lambda f: (not f.get("recently_changed", False), f["modified"]), reverse=True)
+        
+        return {
+            "status": "ok",
+            "graph_dir": str(GRAPH_DIR),
+            "files": files,
+            "total_files": len(files),
+            "total_size": sum(f["size"] for f in files),
+            "total_size_formatted": format(sum(f["size"] for f in files) / (1024 * 1024), ".1f") + " MB" if sum(f["size"] for f in files) > 1024 * 1024 else format(sum(f["size"] for f in files) / 1024, ".1f") + " KB"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list graph files: {str(e)}")

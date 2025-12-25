@@ -95,10 +95,18 @@ def _normalize_concept_from_db(record_data: Dict[str, Any]) -> Concept:
     if "last_updated_by_run_id" not in data:
         data["last_updated_by_run_id"] = None
     
+    # Ensure aliases is a list (default to empty)
+    if "aliases" not in data or data["aliases"] is None:
+        data["aliases"] = []
+    
     return Concept(**data)
 
 
 def get_concept_by_name(session: Session, name: str, include_archived: bool = False) -> Optional[Concept]:
+    """
+    Find a concept by name (exact match) or by alias (normalized match).
+    Phase 2: Now checks both name and aliases field.
+    """
     ensure_graph_scoping_initialized(session)
     graph_id, branch_id = get_active_graph_context(session)
     where_clauses = [
@@ -107,10 +115,18 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
     if not include_archived:
         where_clauses.append("COALESCE(c.archived, false) = false")
     
+    # Normalize name for matching
+    normalized_name = name.lower().strip()
+    
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
-    MATCH (c:Concept {{name: $name}})-[:BELONGS_TO]->(g)
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE {' AND '.join(where_clauses)}
+      AND (
+        c.name = $name
+        OR toLower(trim(c.name)) = $normalized_name
+        OR $normalized_name IN [alias IN COALESCE(c.aliases, []) | toLower(trim(alias))]
+      )
     RETURN c.node_id AS node_id,
            c.name AS name,
            c.domain AS domain,
@@ -121,11 +137,12 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
            c.lecture_key AS lecture_key,
            c.url_slug AS url_slug,
            COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
            c.created_by AS created_by,
            c.last_updated_by AS last_updated_by
     LIMIT 1
     """
-    result = session.run(query, name=name, graph_id=graph_id, branch_id=branch_id)
+    result = session.run(query, name=name, normalized_name=normalized_name, graph_id=graph_id, branch_id=branch_id)
     record = result.single()
     if not record:
         return None
@@ -155,6 +172,7 @@ def get_concept_by_id(session: Session, node_id: str, include_archived: bool = F
            c.lecture_key AS lecture_key,
            c.url_slug AS url_slug,
            COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
            c.created_by AS created_by,
            c.last_updated_by AS last_updated_by
     LIMIT 1
@@ -239,10 +257,12 @@ def create_concept(session: Session, payload: ConceptCreate) -> Concept:
            c.lecture_key AS lecture_key,
            c.url_slug AS url_slug,
            COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
            c.created_by AS created_by,
            c.last_updated_by AS last_updated_by,
            c.created_by_run_id AS created_by_run_id,
-           c.last_updated_by_run_id AS last_updated_by_run_id
+           c.last_updated_by_run_id AS last_updated_by_run_id,
+           c.graph_id AS graph_id
     """
     params = {
         "node_id": node_id,
@@ -295,6 +315,10 @@ def update_concept(session: Session, node_id: str, update: Dict[str, Any]) -> Co
         set_clauses.append("c.type = $type")
         params["type"] = update["type"]
     
+    if update.get("aliases") is not None:
+        set_clauses.append("c.aliases = $aliases")
+        params["aliases"] = update["aliases"]
+    
     if not set_clauses:
         # No updates provided, just return the current concept
         return get_concept_by_id(session, node_id)
@@ -317,6 +341,7 @@ def update_concept(session: Session, node_id: str, update: Dict[str, Any]) -> Co
            c.lecture_key AS lecture_key,
            c.url_slug AS url_slug,
            COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
            c.created_by AS created_by,
            c.last_updated_by AS last_updated_by
     """
@@ -850,6 +875,7 @@ def get_all_concepts(session: Session) -> List[Concept]:
            c.lecture_key AS lecture_key,
            c.url_slug AS url_slug,
            COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
            c.created_by AS created_by,
            c.last_updated_by AS last_updated_by
     ORDER BY c.node_id
@@ -912,7 +938,27 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     }
     
     # Get top nodes by degree (most connected)
+    # Also include nodes with 0 degree to ensure isolated nodes are visible
+    # Debug: First check if GraphSpace exists and count nodes
+    debug_query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    RETURN count(c) AS total_nodes, count(DISTINCT c.on_branches) AS branch_variants
+    """
+    debug_result = session.run(debug_query, graph_id=graph_id)
+    debug_data = debug_result.single()
+    if debug_data:
+        total_nodes = debug_data.get("total_nodes", 0)
+        branch_variants = debug_data.get("branch_variants", 0)
+        # Log for debugging (can be removed later)
+        import sys
+        print(f"[DEBUG] Graph {graph_id}: {total_nodes} total nodes, branch_id={branch_id}, branch_variants={branch_variants}", file=sys.stderr)
+    
+    # Query strategy: Ensure isolated nodes (degree = 0) are ALWAYS included
+    # This is critical for graphs like personal finance where nodes may not have relationships yet
+    # We use a UNION to get both connected nodes AND isolated nodes separately
     query = f"""
+    // First part: Get connected nodes (degree > 0), ordered by degree
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
@@ -922,8 +968,38 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
       AND $branch_id IN COALESCE(n.on_branches, [])
       AND {edge_visibility_clause}
     WITH c, count(DISTINCT r) AS degree
-    ORDER BY degree DESC
+    WHERE degree > 0
+    ORDER BY degree DESC, c.node_id ASC
     LIMIT $limit_nodes
+    RETURN c.node_id AS node_id,
+           c.name AS name,
+           c.domain AS domain,
+           c.type AS type,
+           c.description AS description,
+           c.tags AS tags,
+           c.notes_key AS notes_key,
+           c.lecture_key AS lecture_key,
+           c.url_slug AS url_slug,
+           COALESCE(c.lecture_sources, []) AS lecture_sources,
+           c.created_by AS created_by,
+           c.last_updated_by AS last_updated_by
+    
+    UNION
+    
+    // Second part: Get ALL isolated nodes (degree = 0) - always include these
+    // Use a simpler approach: get all nodes, then filter out those that have relationships
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    WHERE $branch_id IN COALESCE(c.on_branches, [])
+      AND COALESCE(c.is_merged, false) = false
+    WITH c
+    OPTIONAL MATCH (c)-[r]-(n:Concept)-[:BELONGS_TO]->(g)
+    WHERE $branch_id IN COALESCE(r.on_branches, [])
+      AND $branch_id IN COALESCE(n.on_branches, [])
+      AND {edge_visibility_clause}
+    WITH c, count(DISTINCT r) AS degree
+    WHERE degree = 0
+    ORDER BY c.node_id ASC
     RETURN c.node_id AS node_id,
            c.name AS name,
            c.domain AS domain,
@@ -940,6 +1016,31 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     result = session.run(query, **params)
     nodes = [_normalize_concept_from_db({k: v for k, v in record.data().items() if k != "degree"}) for record in result]
     node_ids = {node.node_id for node in nodes}
+    
+    # Enhanced debugging for isolated nodes issue
+    import sys
+    print(f"[DEBUG] Query returned {len(nodes)} nodes for graph_id={graph_id}, branch_id={branch_id}", file=sys.stderr)
+    if len(nodes) == 0:
+        # Check if nodes exist at all
+        check_query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
+        RETURN count(c) AS total_nodes,
+               collect(c.node_id)[0..5] AS sample_node_ids,
+               collect(c.on_branches)[0..5] AS sample_branches
+        """
+        check_result = session.run(check_query, graph_id=graph_id)
+        check_data = check_result.single()
+        if check_data:
+            total = check_data.get("total_nodes", 0)
+            sample_ids = check_data.get("sample_node_ids", [])
+            sample_branches = check_data.get("sample_branches", [])
+            print(f"[DEBUG] Graph {graph_id} has {total} total nodes", file=sys.stderr)
+            print(f"[DEBUG] Sample node_ids: {sample_ids}", file=sys.stderr)
+            print(f"[DEBUG] Sample on_branches: {sample_branches}", file=sys.stderr)
+            print(f"[DEBUG] Query branch_id filter: {branch_id}", file=sys.stderr)
+    else:
+        print(f"[DEBUG] Found nodes: {[n.node_id for n in nodes[:5]]}", file=sys.stderr)
     
     # Get edges among the selected nodes
     if len(node_ids) > 0:
@@ -2493,6 +2594,178 @@ def link_claim_mentions(
     )
 
 
+def upsert_quote(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    quote_id: str,
+    text: str,
+    anchor: Dict[str, Any],
+    source_doc_id: str,
+    user_note: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    captured_at: Optional[int] = None
+) -> dict:
+    """
+    Create or update a Quote node and link it to SourceDocument.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        branch_id: Branch ID for scoping
+        quote_id: Unique quote identifier
+        text: Quote text content
+        anchor: Anchor data (dict, stored as Neo4j map, not JSON string)
+        source_doc_id: SourceDocument doc_id
+        user_note: Optional user annotation
+        tags: Optional tags list (stored as list[str], not JSON string)
+        captured_at: Optional capture timestamp (defaults to now, Unix timestamp in ms)
+    
+    Returns:
+        dict with quote_id, text, and captured_at
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    if captured_at is None:
+        captured_at = int(datetime.utcnow().timestamp() * 1000)  # milliseconds
+    
+    # Store anchor as Neo4j map (not JSON string)
+    # Store tags as list[str] (not JSON string)
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MERGE (q:Quote {graph_id: $graph_id, quote_id: $quote_id})
+    ON CREATE SET
+        q.text = $text,
+        q.anchor = $anchor,
+        q.captured_at = $captured_at,
+        q.user_note = $user_note,
+        q.tags = $tags,
+        q.on_branches = [$branch_id],
+        q.created_at = timestamp()
+    ON MATCH SET
+        q.text = $text,
+        q.anchor = $anchor,
+        q.user_note = $user_note,
+        q.tags = $tags,
+        q.on_branches = CASE
+            WHEN q.on_branches IS NULL THEN [$branch_id]
+            WHEN $branch_id IN q.on_branches THEN q.on_branches
+            ELSE q.on_branches + $branch_id
+        END,
+        q.updated_at = timestamp()
+    MERGE (q)-[:BELONGS_TO]->(g)
+    WITH q, g
+    MATCH (d:SourceDocument {graph_id: $graph_id, doc_id: $source_doc_id})
+    MERGE (q)-[:QUOTED_FROM]->(d)
+    RETURN q.quote_id AS quote_id,
+           q.text AS text,
+           q.captured_at AS captured_at
+    """
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        quote_id=quote_id,
+        text=text,
+        anchor=anchor,  # Pass as dict, Neo4j driver will convert to map
+        source_doc_id=source_doc_id,
+        user_note=user_note,
+        tags=tags,  # Pass as list, Neo4j driver will convert to list
+        captured_at=captured_at
+    )
+    record = result.single()
+    if not record:
+        raise ValueError(f"Failed to create/update Quote {quote_id}")
+    return record.data()
+
+
+def link_concept_has_quote(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    concept_id: str,
+    quote_id: str
+) -> None:
+    """
+    Create (Concept)-[:HAS_QUOTE]->(Quote) relationship.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        branch_id: Branch ID for scoping
+        concept_id: Concept node_id
+        quote_id: Quote quote_id
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    query = """
+    MATCH (c:Concept {graph_id: $graph_id, node_id: $concept_id})
+    MATCH (q:Quote {graph_id: $graph_id, quote_id: $quote_id})
+    WHERE $branch_id IN COALESCE(c.on_branches, [])
+      AND $branch_id IN COALESCE(q.on_branches, [])
+    MERGE (c)-[:HAS_QUOTE]->(q)
+    """
+    session.run(query, graph_id=graph_id, branch_id=branch_id, concept_id=concept_id, quote_id=quote_id)
+
+
+def link_concept_supported_by_claim(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    concept_id: str,
+    claim_id: str
+) -> None:
+    """
+    Create (Concept)-[:SUPPORTED_BY]->(Claim) relationship.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        branch_id: Branch ID for scoping
+        concept_id: Concept node_id
+        claim_id: Claim claim_id
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    query = """
+    MATCH (c:Concept {graph_id: $graph_id, node_id: $concept_id})
+    MATCH (cl:Claim {graph_id: $graph_id, claim_id: $claim_id})
+    WHERE $branch_id IN COALESCE(c.on_branches, [])
+      AND $branch_id IN COALESCE(cl.on_branches, [])
+    MERGE (c)-[:SUPPORTED_BY]->(cl)
+    """
+    session.run(query, graph_id=graph_id, branch_id=branch_id, concept_id=concept_id, claim_id=claim_id)
+
+
+def link_claim_evidenced_by_quote(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    claim_id: str,
+    quote_id: str
+) -> None:
+    """
+    Create (Claim)-[:EVIDENCED_BY]->(Quote) relationship.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        branch_id: Branch ID for scoping
+        claim_id: Claim claim_id
+        quote_id: Quote quote_id
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    query = """
+    MATCH (cl:Claim {graph_id: $graph_id, claim_id: $claim_id})
+    MATCH (q:Quote {graph_id: $graph_id, quote_id: $quote_id})
+    WHERE $branch_id IN COALESCE(cl.on_branches, [])
+      AND $branch_id IN COALESCE(q.on_branches, [])
+    MERGE (cl)-[:EVIDENCED_BY]->(q)
+    """
+    session.run(query, graph_id=graph_id, branch_id=branch_id, claim_id=claim_id, quote_id=quote_id)
+
+
 def upsert_community(
     session: Session,
     graph_id: str,
@@ -3404,3 +3677,188 @@ def set_merge_candidate_status(
             updated_count += 1
     
     return updated_count
+
+
+def get_cross_graph_instances(session: Session, node_id: str) -> Dict[str, Any]:
+    """
+    Find all instances of a concept across all graphs by matching the concept name.
+    Returns instances from all graphs where a concept with the same name exists.
+    
+    Args:
+        session: Neo4j session
+        node_id: The node_id of the concept to find cross-graph instances for
+    
+    Returns:
+        Dict with concept_name and list of instances across graphs
+    """
+    # First, get the concept name from the given node_id
+    query_get_name = """
+    MATCH (c:Concept {node_id: $node_id})
+    RETURN c.name AS name
+    LIMIT 1
+    """
+    result = session.run(query_get_name, node_id=node_id)
+    record = result.single()
+    if not record:
+        return {"concept_name": "", "instances": [], "total_instances": 0}
+    
+    concept_name = record["name"]
+    
+    # Now find all instances with the same name across all graphs
+    query_find_instances = """
+    MATCH (c:Concept {name: $concept_name})
+    MATCH (c)-[:BELONGS_TO]->(g:GraphSpace)
+    RETURN c.node_id AS node_id,
+           c.name AS name,
+           c.domain AS domain,
+           c.type AS type,
+           c.description AS description,
+           c.graph_id AS graph_id,
+           g.name AS graph_name,
+           c.created_by AS created_by,
+           c.last_updated_by AS last_updated_by
+    ORDER BY g.name, c.node_id
+    """
+    
+    result = session.run(query_find_instances, concept_name=concept_name)
+    instances = []
+    for record in result:
+        instances.append({
+            "node_id": record["node_id"],
+            "name": record["name"],
+            "domain": record["domain"],
+            "type": record["type"],
+            "description": record["description"],
+            "graph_id": record["graph_id"],
+            "graph_name": record["graph_name"] or record["graph_id"],
+            "created_by": record["created_by"],
+            "last_updated_by": record["last_updated_by"],
+        })
+    
+    return {
+        "concept_name": concept_name,
+        "instances": instances,
+        "total_instances": len(instances)
+    }
+
+
+def link_cross_graph_instances(
+    session: Session,
+    source_node_id: str,
+    target_node_id: str,
+    link_type: str = "user_linked",
+    linked_by: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create a bidirectional CROSS_GRAPH_LINK relationship between two concept instances
+    in different graphs. This allows users to explicitly link related concepts across graphs.
+    
+    Args:
+        session: Neo4j session
+        source_node_id: Node ID of first concept instance
+        target_node_id: Node ID of second concept instance
+        link_type: Type of link ("user_linked", "manual_merge", "auto_detected")
+        linked_by: User identifier who created the link
+    
+    Returns:
+        Dict with link information
+    """
+    from datetime import datetime
+    
+    # Verify both nodes exist and are in different graphs
+    query_verify = """
+    MATCH (c1:Concept {node_id: $source_node_id})
+    MATCH (c2:Concept {node_id: $target_node_id})
+    RETURN c1.graph_id AS source_graph_id,
+           c2.graph_id AS target_graph_id,
+           c1.name AS source_name,
+           c2.name AS target_name
+    """
+    result = session.run(query_verify, source_node_id=source_node_id, target_node_id=target_node_id)
+    record = result.single()
+    
+    if not record:
+        raise ValueError("One or both concepts not found")
+    
+    if record["source_graph_id"] == record["target_graph_id"]:
+        raise ValueError("Cannot link concepts in the same graph")
+    
+    if record["source_name"] != record["target_name"]:
+        raise ValueError("Cannot link concepts with different names")
+    
+    # Create bidirectional CROSS_GRAPH_LINK relationship
+    query_link = """
+    MATCH (c1:Concept {node_id: $source_node_id})
+    MATCH (c2:Concept {node_id: $target_node_id})
+    MERGE (c1)-[r:CROSS_GRAPH_LINK]-(c2)
+    SET r.link_type = $link_type,
+        r.linked_at = $linked_at,
+        r.linked_by = $linked_by
+    RETURN r
+    """
+    
+    linked_at = datetime.utcnow().isoformat()
+    session.run(
+        query_link,
+        source_node_id=source_node_id,
+        target_node_id=target_node_id,
+        link_type=link_type,
+        linked_at=linked_at,
+        linked_by=linked_by or "system"
+    )
+    
+    return {
+        "source_node_id": source_node_id,
+        "target_node_id": target_node_id,
+        "source_graph_id": record["source_graph_id"],
+        "target_graph_id": record["target_graph_id"],
+        "link_type": link_type,
+        "linked_at": linked_at,
+        "linked_by": linked_by or "system"
+    }
+
+
+def get_linked_cross_graph_instances(session: Session, node_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all cross-graph instances that are explicitly linked via CROSS_GRAPH_LINK relationships.
+    
+    Args:
+        session: Neo4j session
+        node_id: Node ID to find linked instances for
+    
+    Returns:
+        List of linked instances with link metadata
+    """
+    query = """
+    MATCH (c:Concept {node_id: $node_id})-[r:CROSS_GRAPH_LINK]-(linked:Concept)
+    MATCH (linked)-[:BELONGS_TO]->(g:GraphSpace)
+    RETURN linked.node_id AS node_id,
+           linked.name AS name,
+           linked.domain AS domain,
+           linked.type AS type,
+           linked.description AS description,
+           linked.graph_id AS graph_id,
+           g.name AS graph_name,
+           r.link_type AS link_type,
+           r.linked_at AS linked_at,
+           r.linked_by AS linked_by
+    ORDER BY g.name
+    """
+    
+    result = session.run(query, node_id=node_id)
+    instances = []
+    for record in result:
+        instances.append({
+            "node_id": record["node_id"],
+            "name": record["name"],
+            "domain": record["domain"],
+            "type": record["type"],
+            "description": record["description"],
+            "graph_id": record["graph_id"],
+            "graph_name": record["graph_name"] or record["graph_id"],
+            "link_type": record["link_type"],
+            "linked_at": record["linked_at"],
+            "linked_by": record["linked_by"],
+        })
+    
+    return instances

@@ -23,19 +23,23 @@ export default function GapsViewPage() {
     async function loadGaps() {
       try {
         setLoading(true);
-        const data = await getGapsOverview(20);
-        setGaps(data);
+        // Load gaps and graphs in parallel
+        const [gapsData, graphsData] = await Promise.allSettled([
+          getGapsOverview(20),
+          listGraphs(),
+        ]);
         
-        // Load graph quality for summary
-        try {
-          const graphsData = await listGraphs();
-          const activeGraphId = graphsData.active_graph_id;
-          if (activeGraphId) {
-            const quality = await getGraphQuality(activeGraphId);
-            setGraphQuality(quality);
-          }
-        } catch (err) {
-          console.warn('Failed to load graph quality:', err);
+        if (gapsData.status === 'fulfilled') {
+          setGaps(gapsData.value);
+        } else {
+          setError(gapsData.reason instanceof Error ? gapsData.reason.message : 'Failed to load gaps');
+        }
+        
+        // Load graph quality in parallel with gaps (if we have active graph)
+        if (graphsData.status === 'fulfilled' && graphsData.value.active_graph_id) {
+          getGraphQuality(graphsData.value.active_graph_id)
+            .then(quality => setGraphQuality(quality))
+            .catch(err => console.warn('Failed to load graph quality:', err));
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load gaps');

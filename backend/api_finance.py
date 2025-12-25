@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from db_neo4j import get_neo4j_session
-from services_browser_use import execute_skill
+from services_browser_use import execute_skill, BrowserUseAPIError
 from services_resources import create_resource, link_resource_to_concept
 from services_graph import create_concept, get_concept_by_name
 from models import ConceptCreate, Resource
@@ -395,14 +395,27 @@ def discover_companies(req: FinanceDiscoverRequest, session=Depends(get_neo4j_se
     if not DISCOVERY_SKILL_ID:
         raise HTTPException(status_code=500, detail="BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID not configured")
 
-    skill_out = execute_skill(
-        DISCOVERY_SKILL_ID,
-        parameters={
-            "domain_query": req.domain_query,
-            "limit": req.limit,
-            "filters": req.filters,
-        },
-    )
+    try:
+        skill_out = execute_skill(
+            DISCOVERY_SKILL_ID,
+            parameters={
+                "domain_query": req.domain_query,
+                "limit": req.limit,
+                "filters": req.filters,
+            },
+        )
+    except BrowserUseAPIError as e:
+        # Preserve HTTP status code from Browser Use API
+        status_code = 502 if not e.status_code or e.status_code >= 500 else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Failed to execute Browser Use skill: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to execute Browser Use skill: {str(e)}"
+        )
 
     resource = create_resource(
         session=session,
@@ -470,6 +483,18 @@ def track_company(
         )
         latency_ms = int((time.time() - start_time) * 1000)
         logger.info(f"Browser Use skill execution succeeded in {latency_ms}ms for ticker {req.ticker}")
+    except BrowserUseAPIError as e:
+        latency_ms = int((time.time() - start_time) * 1000)
+        error_msg = str(e)
+        logger.error(
+            f"Browser Use skill execution failed after {latency_ms}ms for ticker {req.ticker}: {error_msg}"
+        )
+        # Preserve HTTP status code from Browser Use API
+        status_code = 502 if not e.status_code or e.status_code >= 500 else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Browser Use skill execution failed: {error_msg}"
+        )
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         error_msg = str(e)
@@ -580,6 +605,18 @@ def fetch_snapshot(
         )
         latency_ms = int((time.time() - start_time) * 1000)
         logger.info(f"Browser Use skill execution succeeded in {latency_ms}ms for ticker {req.ticker}")
+    except BrowserUseAPIError as e:
+        latency_ms = int((time.time() - start_time) * 1000)
+        error_msg = str(e)
+        logger.error(
+            f"Browser Use skill execution failed after {latency_ms}ms for ticker {req.ticker}: {error_msg}"
+        )
+        # Preserve HTTP status code from Browser Use API
+        status_code = 502 if not e.status_code or e.status_code >= 500 else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Browser Use skill execution failed: {error_msg}"
+        )
     except Exception as e:
         latency_ms = int((time.time() - start_time) * 1000)
         error_msg = str(e)

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+import hashlib
 from models import (
     AIChatRequest, AIChatResponse,
     SemanticSearchRequest, SemanticSearchResponse,
@@ -12,6 +13,7 @@ from services_graphrag import semantic_search_communities, retrieve_graphrag_con
 from services_graph import get_evidence_subgraph
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 from verticals.base import RetrievalRequest
+from cache_utils import get_cached, set_cached
 from typing import List, Optional
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -92,7 +94,28 @@ def graphrag_context_endpoint(
     Returns formatted context text and debug information.
     
     Supports vertical-specific retrieval (e.g., finance) with lens routing.
+    Cached for 5 minutes to improve performance for repeated queries.
     """
+    # Build cache key from query parameters
+    # Use a hash of the message to keep cache keys reasonable length
+    message_hash = hashlib.md5(payload.message.encode()).hexdigest()[:8]
+    cache_key = (
+        "graphrag_context",
+        payload.graph_id or "",
+        payload.branch_id or "",
+        message_hash,
+        payload.vertical or "general",
+        payload.lens or "",
+        payload.recency_days or 0,
+        payload.evidence_strictness or "medium",
+        payload.include_proposed_edges if payload.include_proposed_edges is not None else True,
+    )
+    
+    # Try cache first (5 minute TTL for expensive GraphRAG operations)
+    cached_result = get_cached(*cache_key, ttl_seconds=300)
+    if cached_result is not None:
+        return GraphRAGContextResponse(**cached_result)
+    
     # Build RetrievalRequest
     req = RetrievalRequest(
         graph_id=payload.graph_id,
@@ -108,7 +131,7 @@ def graphrag_context_endpoint(
     # Route to vertical-specific retrieval or fallback to classic
     if req.vertical == "finance":
         result = retrieve_context(req, session)
-        return GraphRAGContextResponse(
+        response = GraphRAGContextResponse(
             context_text=result.context_text,
             debug={
                 "communities": len(result.meta.get("communities", [])),
@@ -135,10 +158,14 @@ def graphrag_context_endpoint(
             "edges": len(context["edges"]),
         }
         
-        return GraphRAGContextResponse(
+        response = GraphRAGContextResponse(
             context_text=context["context_text"],
             debug=debug
         )
+    
+    # Cache the result
+    set_cached(cache_key[0], response.dict(), *cache_key[1:], ttl_seconds=300)
+    return response
 
 
 @router.post("/evidence-subgraph")

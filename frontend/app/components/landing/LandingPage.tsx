@@ -11,26 +11,17 @@ interface LandingPageProps {
 export default function LandingPage({ onEnter, userName = 'User' }: LandingPageProps) {
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedFocusAreas, setSelectedFocusAreas] = useState<Set<string>>(new Set());
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [focusText, setFocusText] = useState('');
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const [showExistingFocus, setShowExistingFocus] = useState(false);
 
   useEffect(() => {
     async function loadFocusAreas() {
       try {
         const areas = await getFocusAreas();
         setFocusAreas(areas);
-        // Pre-select active focus areas
-        const activeIds = new Set(areas.filter(a => a.active).map(a => a.id));
-        setSelectedFocusAreas(activeIds);
-        
-        // Populate textarea with active focus areas
-        const activeAreas = areas.filter(a => a.active);
-        if (activeAreas.length > 0) {
-          setFocusText(activeAreas.map(a => a.name).join('\n'));
-        }
       } catch (err) {
         console.error('Failed to load focus areas:', err);
       } finally {
@@ -43,15 +34,6 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
   const handleToggleFocus = async (focusId: string, currentActive: boolean) => {
     try {
       await setFocusAreaActive(focusId, !currentActive);
-      setSelectedFocusAreas(prev => {
-        const next = new Set(prev);
-        if (!currentActive) {
-          next.add(focusId);
-        } else {
-          next.delete(focusId);
-        }
-        return next;
-      });
       // Update local state
       setFocusAreas(prev => prev.map(fa => 
         fa.id === focusId ? { ...fa, active: !currentActive } : fa
@@ -80,7 +62,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
         }
       }
       setFocusAreas(prev => prev.map(fa => ({ ...fa, active: false })));
-      setSelectedFocusAreas(new Set());
+      setFocusText('');
       setLastSaved('All focus areas cleared');
       return;
     }
@@ -140,9 +122,6 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
       setFocusAreas(updatedAreas);
       
       // Update selected set
-      const activeIds = new Set(updatedAreas.filter(a => a.active).map(a => a.id));
-      setSelectedFocusAreas(activeIds);
-      
       // Update textarea to reflect saved state (in case names were normalized)
       const activeNames = updatedAreas.filter(a => a.active).map(a => a.name);
       setFocusText(activeNames.join('\n'));
@@ -159,15 +138,9 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
   };
 
   const handleEnter = async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/a01a33f1-d489-4279-a9af-9a81bd1c1f3e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LandingPage.tsx:161',message:'LandingPage handleEnter: called',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     setIsTransitioning(true);
     // Small delay for fade effect
     setTimeout(() => {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/a01a33f1-d489-4279-a9af-9a81bd1c1f3e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LandingPage.tsx:165',message:'LandingPage handleEnter: calling onEnter',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       onEnter();
     }, 300);
   };
@@ -315,62 +288,70 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
             </span>
           </div>
           
-          {focusAreas.length > 0 && (
+          {focusAreas.some(area => area.active) && (
             <div style={{
               marginTop: '20px',
               paddingTop: '20px',
               borderTop: '1px solid #d8e2f1',
             }}>
-              <p style={{
-                fontSize: '13px',
-                color: '#6b7280',
-                marginBottom: '12px',
-                fontWeight: '500',
-              }}>
-                Existing focus areas (click to toggle):
-              </p>
-              <div style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: '8px',
-              }}>
-                {focusAreas.map(area => (
-                  <button
-                    key={area.id}
-                    onClick={() => handleToggleFocus(area.id, area.active)}
-                    style={{
-                      padding: '8px 14px',
-                      border: area.active 
-                        ? '2px solid #118ab2' 
-                        : '2px solid #d8e2f1',
-                      borderRadius: '6px',
-                      background: area.active
-                        ? 'rgba(17, 138, 178, 0.08)'
-                        : 'white',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      color: '#0f172a',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!area.active) {
-                        e.currentTarget.style.borderColor = '#118ab2';
-                        e.currentTarget.style.background = 'rgba(17, 138, 178, 0.04)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!area.active) {
-                        e.currentTarget.style.borderColor = '#d8e2f1';
-                        e.currentTarget.style.background = 'white';
-                      }
-                    }}
-                  >
-                    {area.active && '✓ '}
-                    {area.name}
-                  </button>
-                ))}
-              </div>
+              <button
+                onClick={() => setShowExistingFocus(prev => !prev)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0,
+                  color: '#118ab2',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                }}
+              >
+                {showExistingFocus ? 'Hide previous focus areas' : 'Show previous focus areas'}
+              </button>
+              {showExistingFocus && (
+                <>
+                  <p style={{
+                    fontSize: '13px',
+                    color: '#6b7280',
+                    marginBottom: '12px',
+                    marginTop: '12px',
+                    fontWeight: '500',
+                  }}>
+                    Active focus areas (click to toggle):
+                  </p>
+                  <div style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                  }}>
+                    {focusAreas.filter(area => area.active).map(area => (
+                      <button
+                        key={area.id}
+                        onClick={() => handleToggleFocus(area.id, area.active)}
+                        style={{
+                          padding: '8px 14px',
+                          border: '2px solid #118ab2',
+                          borderRadius: '6px',
+                          background: 'rgba(17, 138, 178, 0.08)',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          color: '#0f172a',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(17, 138, 178, 0.12)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(17, 138, 178, 0.08)';
+                        }}
+                      >
+                        ✓ {area.name}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

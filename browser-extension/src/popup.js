@@ -95,6 +95,71 @@ async function refreshQueue() {
   queueEl.textContent = formatQueue(resp.queue);
 }
 
+async function checkActiveTrail(apiBase) {
+  try {
+    const res = await fetch(`${apiBase}/trails?status=active&limit=1`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.trails?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function formatRelativeTime(timestamp) {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (minutes > 0) return `${minutes}m ago`;
+  return 'Just now';
+}
+
+async function showResumePrompt(apiBase, trail) {
+  const promptEl = document.getElementById("resumePrompt");
+  const titleEl = document.getElementById("resumeTrailTitle");
+  const timeEl = document.getElementById("resumeTrailTime");
+  const resumeBtn = document.getElementById("resumeBtn");
+  const archiveBtn = document.getElementById("archiveBtn");
+
+  if (!trail) {
+    promptEl.style.display = "none";
+    return;
+  }
+
+  titleEl.textContent = trail.title;
+  timeEl.textContent = `Last touched ${formatRelativeTime(trail.updated_at)}`;
+  promptEl.style.display = "block";
+
+  resumeBtn.onclick = async () => {
+    try {
+      await fetch(`${apiBase}/trails/${trail.trail_id}/resume`, { method: "POST" });
+      // Store active trail ID
+      await chrome.storage.local.set({ activeTrailId: trail.trail_id });
+      promptEl.style.display = "none";
+    } catch (error) {
+      console.error("Failed to resume trail:", error);
+      alert("Failed to resume trail. Please try again.");
+    }
+  };
+
+  archiveBtn.onclick = async () => {
+    try {
+      await fetch(`${apiBase}/trails/${trail.trail_id}/archive`, { method: "POST" });
+      await chrome.storage.local.remove("activeTrailId");
+      promptEl.style.display = "none";
+    } catch (error) {
+      console.error("Failed to archive trail:", error);
+      alert("Failed to archive trail. Please try again.");
+    }
+  };
+}
+
 async function main() {
   const statusEl = document.getElementById("status");
   const pageTitleEl = document.getElementById("pageTitle");
@@ -110,6 +175,12 @@ async function main() {
 
   pageTitleEl.textContent = tab?.title || "Untitled";
   pageUrlEl.textContent = tab?.url || "No URL";
+
+  // Check for active trail
+  const activeTrail = await checkActiveTrail(apiBase);
+  if (activeTrail) {
+    await showResumePrompt(apiBase, activeTrail);
+  }
 
   // Connectivity status
   try {

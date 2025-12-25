@@ -32,19 +32,7 @@ export default function ReviewPage() {
   const [editingRelType, setEditingRelType] = useState<string>('');
 
   useEffect(() => {
-    async function loadGraphs() {
-      try {
-        const data = await listGraphs();
-        setGraphId(data.active_graph_id || 'demo');
-      } catch (err) {
-        setGraphId('demo');
-      }
-    }
-    loadGraphs();
-  }, []);
-
-  useEffect(() => {
-    // Read query params
+    // Read query params first (faster than API call)
     const statusParam = searchParams.get('status');
     const runIdParam = searchParams.get('ingestion_run_id');
     const graphIdParam = searchParams.get('graph_id');
@@ -56,7 +44,19 @@ export default function ReviewPage() {
       setIngestionRunId(runIdParam);
     }
     if (graphIdParam) {
+      // If graphId is in URL, use it immediately (no need to wait for API)
       setGraphId(graphIdParam);
+    } else {
+      // Only load graphs if graphId not in URL params
+      async function loadGraphs() {
+        try {
+          const data = await listGraphs();
+          setGraphId(data.active_graph_id || 'demo');
+        } catch (err) {
+          setGraphId('demo');
+        }
+      }
+      loadGraphs();
     }
   }, [searchParams]);
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getNotionConfig, updateNotionConfig, NotionConfig } from '../api-client';
 import NotionSyncManager from '../components/notion/NotionSyncManager';
+import GraphFilesViewer from '../components/graph-files/GraphFilesViewer';
 
 export default function SourceManagementPage() {
   const [loading, setLoading] = useState(true);
@@ -165,6 +166,11 @@ export default function SourceManagementPage() {
         {/* Notion Sync & Indexing */}
         <section className="control-card">
           <NotionSyncManager />
+        </section>
+
+        {/* Graph Data Files */}
+        <section className="control-card">
+          <GraphFilesViewer />
         </section>
       </div>
     </div>

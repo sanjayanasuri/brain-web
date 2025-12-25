@@ -9,6 +9,21 @@
   --accent-2: #ef476f;
   --panel: rgba(255, 255, 255, 0.82);
   --shadow: 0 18px 60px rgba(15, 23, 42, 0.12);
+  --page-bg: linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%);
+  --background: #ffffff;
+}
+
+:root.dark {
+  --ink: #f1f5f9;
+  --muted: #94a3b8;
+  --surface: #1e293b;
+  --border: #334155;
+  --accent: #38bdf8;
+  --accent-2: #f87171;
+  --panel: rgba(30, 41, 59, 0.85);
+  --shadow: 0 18px 60px rgba(0, 0, 0, 0.4);
+  --page-bg: linear-gradient(180deg, #0f172a 0%, #1e293b 60%, #0f172a 100%);
+  --background: #1e293b;
 }
 
 * {
@@ -33,6 +48,14 @@ body {
   -moz-osx-font-smoothing: grayscale;
   padding: 0;
   margin: 0;
+  /* Prevent text size adjustment on iOS */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+:root.dark body {
+  background: linear-gradient(180deg, #0f172a 0%, #1e293b 60%, #0f172a 100%);
 }
 
 a {
@@ -47,6 +70,13 @@ a {
   background: radial-gradient(circle at 20% 20%, rgba(17, 138, 178, 0.08), transparent 25%),
     radial-gradient(circle at 80% 10%, rgba(239, 71, 111, 0.08), transparent 22%),
     linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.4) 100%);
+  transition: background 0.3s ease;
+}
+
+:root.dark .app-shell {
+  background: radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.12), transparent 25%),
+    radial-gradient(circle at 80% 10%, rgba(248, 113, 113, 0.12), transparent 22%),
+    linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, rgba(30, 41, 59, 0.4) 100%);
 }
 
 .graph-pane {
@@ -283,6 +313,12 @@ a {
   padding: 0 10px;
   font-size: 12px;
   color: var(--ink);
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+
+:root.dark .explorer-toolbar__select {
+  border: 1px solid rgba(148, 163, 184, 0.20);
+  background: rgba(30, 41, 59, 0.75);
 }
 
 .explorer-toolbar__buttons {
@@ -364,6 +400,13 @@ a {
   border-radius: 20px;
   box-shadow: var(--shadow);
   overflow: hidden;
+  transition: background 0.3s ease;
+}
+
+:root.dark .graph-canvas {
+  background: radial-gradient(circle at 30% 20%, rgba(56, 189, 248, 0.12), transparent 40%),
+    radial-gradient(circle at 70% 30%, rgba(248, 113, 113, 0.12), transparent 40%),
+    linear-gradient(145deg, #1e293b 0%, #0f172a 50%, #1e293b 100%);
 }
 
 .focus-hint {
@@ -380,6 +423,14 @@ a {
   backdrop-filter: blur(10px);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.10);
   pointer-events: none;
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+
+:root.dark .focus-hint {
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.20);
+  color: rgba(241, 245, 249, 0.82);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
 }
 
 .graph-mini-map {
@@ -460,6 +511,11 @@ a {
   box-shadow: var(--shadow);
   pointer-events: none;
   min-width: 200px;
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+:root.dark .node-tag {
+  background: rgba(30, 41, 59, 0.95);
 }
 
 .node-tag__title {
@@ -684,6 +740,54 @@ a {
   background: linear-gradient(145deg, #eef6ff, #fdf7ec);
   color: var(--ink);
   font-weight: 700;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+:root.dark .loader {
+  background: linear-gradient(145deg, #1e293b, #0f172a);
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(110deg, rgba(17, 24, 39, 0.06) 8%, rgba(17, 24, 39, 0.12) 18%, rgba(17, 24, 39, 0.06) 33%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+}
+
+.skeleton-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.fade-in {
+  animation: fade-in 220ms ease-out;
+}
+
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -60% 0;
+  }
+  100% {
+    background-position: 120% 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .loader__ring {
@@ -714,6 +818,7 @@ button {
   }
 }
 
+/* Mobile and tablet responsive styles */
 @media (max-width: 900px) {
   .graph-header {
     flex-direction: column;
@@ -723,6 +828,186 @@ button {
   }
   .chat-bubble {
     max-width: 100%;
+  }
+  
+  /* Improve touch targets for mobile */
+  button, .pill, .chip, .explorer-btn {
+    min-height: 44px; /* iOS recommended touch target size */
+    min-width: 44px;
+  }
+  
+  /* Adjust padding for mobile */
+  .graph-pane {
+    padding: 12px 14px 10px;
+  }
+  
+  .node-card {
+    width: calc(100% - 36px);
+    max-width: 100%;
+    right: 18px;
+    left: 18px;
+  }
+  
+  .chat-pane {
+    padding: 8px 12px 10px;
+  }
+  
+  .chat-input {
+    font-size: 16px; /* Prevent zoom on iOS */
+    min-height: 48px;
+  }
+  
+  .title {
+    font-size: 18px;
+  }
+  
+  .subtitle {
+    font-size: 11px;
+  }
+}
+
+/* iPhone and small mobile devices */
+@media (max-width: 480px) {
+  .graph-pane {
+    padding: 10px 12px 8px;
+    gap: 8px;
+  }
+  
+  .title {
+    font-size: 16px;
+  }
+  
+  .subtitle {
+    font-size: 10px;
+  }
+  
+  .stat-pill {
+    min-width: 60px;
+    padding: 6px 10px;
+  }
+  
+  .stat-value {
+    font-size: 14px;
+  }
+  
+  .stat-label {
+    font-size: 11px;
+  }
+  
+  .graph-controls {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  
+  .node-card {
+    padding: 12px 14px;
+    border-radius: 12px;
+  }
+  
+  .node-card__header h3 {
+    font-size: 16px;
+  }
+  
+  .chat-pane {
+    padding: 8px 10px 8px;
+    min-height: 35vh;
+  }
+  
+  .chat-pane--expanded {
+    min-height: 50vh !important;
+  }
+  
+  .chat-pane--maximized {
+    min-height: 80vh !important;
+  }
+  
+  .chat-header h2 {
+    font-size: 16px;
+  }
+  
+  .chat-text {
+    font-size: 14px;
+  }
+  
+  .chat-input {
+    font-size: 16px; /* Prevent zoom on iOS */
+    padding: 10px 12px;
+    min-height: 48px;
+  }
+  
+  .send-btn {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+  
+  .explorer-toolbar {
+    padding: 8px 10px;
+  }
+  
+  .explorer-toolbar__row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  
+  .explorer-toolbar__group {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .explorer-toolbar__group--right {
+    margin-left: 0;
+  }
+  
+  .explorer-stat {
+    min-width: 60px;
+    padding: 4px 8px;
+  }
+  
+  .explorer-stat__value {
+    font-size: 13px;
+  }
+  
+  .explorer-stat__label {
+    font-size: 10px;
+  }
+  
+  /* Stack chips vertically on very small screens */
+  .chips {
+    flex-direction: column;
+    gap: 6px;
+  }
+  
+  .chip {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  /* Improve spacing for mobile */
+  .home-grid {
+    gap: 16px;
+  }
+  
+  /* Ensure all inputs are at least 16px to prevent iOS zoom */
+  input[type="text"],
+  input[type="search"],
+  input[type="email"],
+  input[type="tel"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  
+  /* Improve touch scrolling on iOS */
+  .chat-stream,
+  .resource-list {
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Better spacing for suggestion cards on mobile */
+  .suggestion-card {
+    padding: 12px !important;
+    margin-bottom: 10px !important;
   }
 }
 

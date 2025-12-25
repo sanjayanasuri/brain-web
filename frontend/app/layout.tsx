@@ -1,12 +1,28 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import TopBarWrapper from './components/topbar/TopBarWrapper';
 import { SidebarProvider } from './components/context-providers/SidebarContext';
-import { LensProvider } from './components/context-providers/LensContext';
+import QueryProvider from './components/context-providers/QueryProvider';
+import { ThemeProvider } from './components/context-providers/ThemeProvider';
+import RouteTransition from './components/ui/RouteTransition';
 
 export const metadata: Metadata = {
   title: 'Brain Web - Knowledge Graph Explorer',
   description: 'Interactive exploration of your personal knowledge graph',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Brain Web',
+  },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+  themeColor: '#3b82f6',
 };
 
 export default function RootLayout({
@@ -17,13 +33,15 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <SidebarProvider>
-          <LensProvider>
-            <TopBarWrapper>{children}</TopBarWrapper>
-          </LensProvider>
-        </SidebarProvider>
+        <ThemeProvider>
+          <QueryProvider>
+            <RouteTransition />
+            <SidebarProvider>
+              <TopBarWrapper>{children}</TopBarWrapper>
+            </SidebarProvider>
+          </QueryProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
 }
-

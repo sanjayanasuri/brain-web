@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import React from 'react';
 import type { BranchSummary, GraphSummary } from '../../api-client';
+import SearchBox from '../topbar/SearchBox';
 
 type Props = {
   demoMode: boolean;
@@ -35,9 +36,9 @@ type Props = {
   overviewMeta?: { node_count?: number; sampled?: boolean } | null;
   loadingNeighbors?: string | null;
 
-  showLectureIngest: boolean;
-  onToggleLectureIngest: () => void;
-  lecturePopover?: React.ReactNode;
+  showContentIngest: boolean;
+  onToggleContentIngest: () => void;
+  contentIngestPopover?: React.ReactNode;
 
   showControls: boolean;
   onToggleControls: () => void;
@@ -76,9 +77,9 @@ export default function ExplorerToolbar(props: Props) {
     domainsCount,
     overviewMeta,
     loadingNeighbors,
-    showLectureIngest,
-    onToggleLectureIngest,
-    lecturePopover,
+    showContentIngest,
+    onToggleContentIngest,
+    contentIngestPopover,
     showControls,
     onToggleControls,
     focusMode,
@@ -91,57 +92,31 @@ export default function ExplorerToolbar(props: Props) {
 
   return (
     <div className="explorer-toolbar">
-      <div className="explorer-toolbar__row">
-        {/* Group 1: Meta & profile */}
-        <div className="explorer-toolbar__group">
-          <div className="explorer-toolbar__field">
-            <label className="explorer-toolbar__label">Graph</label>
-            <select
-              value={activeGraphId}
-              disabled={demoMode}
-              onChange={(e) => {
-                const next = e.target.value;
-                if (next === '__new__') {
-                  onRequestCreateGraph();
-                  return;
-                }
-                onSelectGraph(next);
-              }}
-              className="explorer-toolbar__select"
-              title="Switch graphs"
-            >
-              {graphs.map((g, idx) => (
-                <option key={g.graph_id} value={g.graph_id}>
-                  {idx < 9 ? `${idx + 1}. ` : ''}
-                  {g.name || g.graph_id}
-                </option>
-              ))}
-              {demoMode ? null : <option value="__new__">+ Create new…</option>}
-            </select>
-          </div>
-
-          <div className="explorer-toolbar__buttons">
-            <Link href="/home" className="pill pill--ghost explorer-btn explorer-btn--ghost">
-              Home
-            </Link>
-            <Link href="/profile-customization" className="pill pill--ghost explorer-btn explorer-btn--ghost">
-              Profile
-            </Link>
-            <Link href="/source-management" className="pill pill--ghost explorer-btn explorer-btn--ghost">
-              Sources
-            </Link>
-            <Link href="/gaps" className="pill pill--ghost explorer-btn explorer-btn--ghost">
-              Gaps
-            </Link>
-            {canFocus && (
-              <button
-                type="button"
-                className="pill pill--ghost explorer-btn explorer-btn--ghost"
-                onClick={onFocus}
-                title="Center camera on selected node"
-              >
-                Focus
-              </button>
+      <div className="explorer-toolbar__row" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        {/* Left: Stats (moved from right) */}
+        <div className="explorer-toolbar__group" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+          <div className="explorer-toolbar__stats">
+            <div className="explorer-stat">
+              <div className="explorer-stat__label">Nodes</div>
+              <div className="explorer-stat__value">{nodesCount}</div>
+            </div>
+            <div className="explorer-stat">
+              <div className="explorer-stat__label">Links</div>
+              <div className="explorer-stat__value">{linksCount}</div>
+            </div>
+            <div className="explorer-stat">
+              <div className="explorer-stat__label">Domains</div>
+              <div className="explorer-stat__value">{domainsCount}</div>
+            </div>
+            {overviewMeta?.sampled && (
+              <div className="explorer-stat" style={{ fontSize: '11px', opacity: 0.7 }} title={`Overview loaded (${overviewMeta.node_count || '?'} total nodes)`}>
+                Overview
+              </div>
+            )}
+            {loadingNeighbors && (
+              <div className="explorer-stat" style={{ fontSize: '11px', opacity: 0.7 }}>
+                Loading neighbors...
+              </div>
             )}
           </div>
 
@@ -179,108 +154,40 @@ export default function ExplorerToolbar(props: Props) {
           )}
         </div>
 
-        <div className="explorer-toolbar__divider" />
-
-        {/* Group 2: Branch controls (PRIMARY) */}
-        <div className="explorer-toolbar__group">
-          <div className="explorer-toolbar__field">
-            <label className="explorer-toolbar__label">Branch</label>
-            <select
-              value={activeBranchId}
-              disabled={demoMode}
-              onChange={(e) => onSelectBranch(e.target.value)}
-              className="explorer-toolbar__select"
-              title="Switch branches"
-            >
-              {branches.map((b) => (
-                <option key={b.branch_id} value={b.branch_id}>
-                  {b.name || b.branch_id}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {demoMode ? (
-            <div className="explorer-toolbar__buttons">
-              <span className="pill pill--ghost" title="Demo mode - Full functionality enabled">
-                Demo Mode
-              </span>
-            </div>
-          ) : (
-            <div className="explorer-toolbar__buttons">
-            <button
-              type="button"
-              className={`pill explorer-btn explorer-btn--primary ${canFork ? '' : 'explorer-btn--disabled'}`}
-              onClick={onFork}
-              disabled={!canFork}
-              title="Fork a branch from the selected node"
-            >
-              Fork
-            </button>
-            <button
-              type="button"
-              className={`pill explorer-btn explorer-btn--primary ${canCompare ? '' : 'explorer-btn--disabled'}`}
-              onClick={onCompare}
-              disabled={!canCompare}
-              title="Compare this branch to another"
-            >
-              Compare
-            </button>
-            <button type="button" className="pill explorer-btn explorer-btn--primary" onClick={onSaveState} title="Save snapshot">
-              Save State
-            </button>
-            <button
-              type="button"
-              className="pill explorer-btn explorer-btn--primary"
-              onClick={onRestore}
-              title="Restore snapshot (creates a new branch)"
-            >
-              Restore
-            </button>
-            </div>
-          )}
+        {/* Center: Search box */}
+        <div style={{ flex: 1, maxWidth: '600px', margin: '0 auto', minWidth: 0 }}>
+          <SearchBox
+            activeGraphId={activeGraphId}
+            graphs={graphs}
+            placeholder="Search or type a command…"
+          />
         </div>
 
-        <div className="explorer-toolbar__divider" />
-
-        {/* Group 3: Stats & creation */}
-        <div className="explorer-toolbar__group explorer-toolbar__group--right">
-          <div className="explorer-toolbar__stats">
-            <div className="explorer-stat">
-              <div className="explorer-stat__label">Nodes</div>
-              <div className="explorer-stat__value">{nodesCount}</div>
-            </div>
-            <div className="explorer-stat">
-              <div className="explorer-stat__label">Links</div>
-              <div className="explorer-stat__value">{linksCount}</div>
-            </div>
-            <div className="explorer-stat">
-              <div className="explorer-stat__label">Domains</div>
-              <div className="explorer-stat__value">{domainsCount}</div>
-            </div>
-            {overviewMeta?.sampled && (
-              <div className="explorer-stat" style={{ fontSize: '11px', opacity: 0.7 }} title={`Overview loaded (${overviewMeta.node_count || '?'} total nodes)`}>
-                Overview
-              </div>
+        {/* Right: Controls */}
+        <div className="explorer-toolbar__group explorer-toolbar__group--right" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+          <div className="explorer-toolbar__buttons" style={{ display: 'flex', gap: '6px' }}>
+            {canFocus && (
+              <button
+                type="button"
+                className="pill pill--ghost explorer-btn explorer-btn--ghost"
+                onClick={onFocus}
+                title="Center camera on selected node"
+              >
+                Focus
+              </button>
             )}
-            {loadingNeighbors && (
-              <div className="explorer-stat" style={{ fontSize: '11px', opacity: 0.7 }}>
-                Loading neighbors...
-              </div>
-            )}
-          </div>
-
-          <div className="explorer-toolbar__buttons">
             {demoMode ? null : (
               <div style={{ position: 'relative' }}>
                 <button
                   type="button"
-                  className={`pill explorer-btn explorer-btn--ghost ${showLectureIngest ? 'pill--active' : ''}`}
-                  onClick={onToggleLectureIngest}
+                  className={`pill explorer-btn explorer-btn--ghost ${showContentIngest ? 'pill--active' : ''}`}
+                  onClick={onToggleContentIngest}
+                  aria-label={showContentIngest ? 'Hide add content panel' : 'Show add content panel'}
+                  title={showContentIngest ? 'Hide add content panel' : 'Show add content panel'}
                 >
-                  {showLectureIngest ? '−' : '+'} Add Content
+                  {showContentIngest ? '−' : '+'} Add Content
                 </button>
-                {showLectureIngest && lecturePopover}
+                {showContentIngest && contentIngestPopover}
               </div>
             )}
 

@@ -33,6 +33,7 @@ from services_graph import (
     upsert_claim,
     link_claim_mentions,
     get_all_concepts,
+    upsert_quote,
 )
 from services_lecture_ingestion import chunk_text
 from services_claims import extract_claims_from_chunk
@@ -59,16 +60,19 @@ class WebIngestRequest(BaseModel):
     capture_mode: str = "reader"  # "selection" | "reader" | "full"
     text: str  # extracted body text from extension
     selection_text: Optional[str] = None
+    anchor: Optional[Dict[str, Any]] = None  # Text-quote anchor for selections
     domain: Optional[str] = "General"
     tags: List[str] = []
     note: Optional[str] = None
     metadata: Dict[str, Any] = {}
+    trail_id: Optional[str] = None  # Phase 4: Optional trail to append steps to
 
 
 class WebIngestResponse(BaseModel):
     """Response from web ingestion endpoint."""
     status: str  # "INGESTED" | "SKIPPED" | "FAILED"
     artifact_id: str  # doc_id from SourceDocument
+    quote_id: Optional[str] = None  # quote_id if Quote was created
     run_id: Optional[str] = None
     chunks_created: int = 0
     claims_created: int = 0
@@ -207,6 +211,34 @@ def ingest_web(
             errors=errors,
         )
     
+    # Step 6.5: Create Quote node if selection mode
+    quote_id = None
+    if payload.capture_mode == "selection" and payload.selection_text and payload.anchor:
+        try:
+            # Compute deterministic quote_id: QUOTE_ + sha256(url + "\n" + exact + "\n" + prefix + "\n" + suffix)[:16].upper()
+            anchor_exact = payload.anchor.get("exact", payload.selection_text)
+            anchor_prefix = payload.anchor.get("prefix", "") or ""
+            anchor_suffix = payload.anchor.get("suffix", "") or ""
+            quote_hash_input = f"{payload.url}\n{anchor_exact}\n{anchor_prefix}\n{anchor_suffix}"
+            quote_hash = hashlib.sha256(quote_hash_input.encode('utf-8')).hexdigest()[:16].upper()
+            quote_id = f"QUOTE_{quote_hash}"
+            
+            upsert_quote(
+                session=session,
+                graph_id=graph_id,
+                branch_id=branch_id,
+                quote_id=quote_id,
+                text=payload.selection_text,
+                anchor=payload.anchor,
+                source_doc_id=artifact_id,
+                user_note=payload.note,
+                tags=payload.tags if payload.tags else None,
+            )
+        except Exception as e:
+            error_msg = f"Failed to create Quote: {str(e)}"
+            errors.append(error_msg)
+            # Continue with chunking even if quote creation fails
+    
     # Step 7: Check idempotency
     existing_doc = get_source_document(session, graph_id, artifact_id)
     if existing_doc:
@@ -235,6 +267,7 @@ def ingest_web(
             return WebIngestResponse(
                 status="SKIPPED",
                 artifact_id=artifact_id,
+                quote_id=quote_id,
                 run_id=run_id,
                 chunks_created=0,
                 claims_created=0,
@@ -395,11 +428,43 @@ def ingest_web(
         errors=errors if errors else None,
     )
     
-    # Step 13: Return response
+    # Step 13: Append to trail if trail_id provided (Phase 4)
+    if payload.trail_id:
+        try:
+            from services_trails import append_step
+            # Append page step
+            append_step(
+                session=session,
+                graph_id=graph_id,
+                branch_id=branch_id,
+                trail_id=payload.trail_id,
+                kind="page",
+                ref_id=payload.url,
+                title=payload.title,
+                note=payload.note,
+                meta={"capture_mode": payload.capture_mode, "domain": payload.domain}
+            )
+            # If selection capture produced a quote, also append quote step
+            if quote_id:
+                append_step(
+                    session=session,
+                    graph_id=graph_id,
+                    branch_id=branch_id,
+                    trail_id=payload.trail_id,
+                    kind="quote",
+                    ref_id=quote_id,
+                    title=payload.selection_text[:100] if payload.selection_text else None,
+                )
+        except Exception as e:
+            # Log but don't fail ingestion if trail append fails
+            errors.append(f"Failed to append to trail: {str(e)}")
+    
+    # Step 14: Return response
     response_status = "INGESTED" if chunks_created > 0 else "FAILED"
     return WebIngestResponse(
         status=response_status,
         artifact_id=artifact_id,
+        quote_id=quote_id,
         run_id=run_id,
         chunks_created=chunks_created,
         claims_created=claims_created,

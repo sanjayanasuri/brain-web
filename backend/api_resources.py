@@ -27,7 +27,7 @@ from services_resource_ai import (
     summarize_pdf_text,
     extract_concepts_from_text,
 )
-from services_browser_use import execute_skill
+from services_browser_use import execute_skill, BrowserUseAPIError
 from config import BROWSER_USE_CONFUSION_SKILL_ID
 from pydantic import BaseModel
 
@@ -201,6 +201,23 @@ def fetch_confusions(
                 "sources": req.sources,
                 "limit": req.limit,
             },
+        )
+    except BrowserUseAPIError as e:
+        # Preserve the HTTP status code from Browser Use API if available
+        # Map 4xx errors to 400 (Bad Request) and 5xx to 502 (Bad Gateway)
+        if e.status_code:
+            if 400 <= e.status_code < 500:
+                status_code = 400  # Bad Request
+            elif 500 <= e.status_code < 600:
+                status_code = 502  # Bad Gateway
+            else:
+                status_code = 500
+        else:
+            status_code = 500
+        
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Failed to execute Browser Use skill: {str(e)}"
         )
     except Exception as e:
         raise HTTPException(

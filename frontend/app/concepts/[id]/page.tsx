@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { 
   getConcept, 
   getNeighborsWithRelationships,
@@ -31,64 +32,68 @@ export default function ConceptBoardPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const conceptId = params?.id ?? '';
+  const queryClient = useQueryClient();
 
-  const [concept, setConcept] = useState<Concept | null>(null);
-  const [neighbors, setNeighbors] = useState<NeighborWithRelationship[]>([]);
-  const [segments, setSegments] = useState<LectureSegment[]>([]);
-  const [resources, setResources] = useState<Resource[]>([]);
-  const [claims, setClaims] = useState<Claim[]>([]);
-  const [sources, setSources] = useState<Source[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [editedDescription, setEditedDescription] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'claims' | 'sources'>('overview');
-  const [conceptQuality, setConceptQuality] = useState<ConceptQuality | null>(null);
 
-  useEffect(() => {
-    if (!conceptId) {
-      setError('No concept ID provided');
-      setLoading(false);
-      return;
-    }
+  const conceptQuery = useQuery<Concept>({
+    queryKey: ['concept', conceptId],
+    queryFn: () => getConcept(conceptId),
+    enabled: !!conceptId,
+  });
 
-    async function loadData() {
-      try {
-        setLoading(true);
-        const [conceptData, neighborsData, resourcesData, claimsData, sourcesData] = await Promise.all([
-          getConcept(conceptId),
-          getNeighborsWithRelationships(conceptId).catch(() => []),
-          getResourcesForConcept(conceptId).catch(() => []),
-          getClaimsForConcept(conceptId).catch(() => []),
-          getSourcesForConcept(conceptId).catch(() => []),
-        ]);
-        
-        setConcept(conceptData);
-        setEditedDescription(conceptData.description || '');
-        setNeighbors(neighborsData as NeighborWithRelationship[]);
-        setResources(resourcesData);
-        setClaims(claimsData);
-        setSources(sourcesData);
-        
-        // Load segments by concept name
-        if (conceptData.name) {
-          const segmentsData = await getSegmentsByConcept(conceptData.name).catch(() => []);
-          setSegments(segmentsData);
-        }
-        
-        // Load quality indicators
-        const qualityData = await getConceptQuality(conceptId).catch(() => null);
-        setConceptQuality(qualityData);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load concept');
-      } finally {
-        setLoading(false);
-      }
-    }
+  const neighborsQuery = useQuery<NeighborWithRelationship[]>({
+    queryKey: ['concept', conceptId, 'neighbors-with-relationships'],
+    queryFn: async () => (await getNeighborsWithRelationships(conceptId)) as NeighborWithRelationship[],
+    enabled: !!conceptId,
+  });
 
-    loadData();
-  }, [conceptId]);
+  const resourcesQuery = useQuery<Resource[]>({
+    queryKey: ['concept', conceptId, 'resources'],
+    queryFn: () => getResourcesForConcept(conceptId),
+    enabled: !!conceptId,
+  });
+
+  const claimsQuery = useQuery<Claim[]>({
+    queryKey: ['concept', conceptId, 'claims'],
+    queryFn: () => getClaimsForConcept(conceptId),
+    enabled: !!conceptId,
+  });
+
+  const sourcesQuery = useQuery<Source[]>({
+    queryKey: ['concept', conceptId, 'sources'],
+    queryFn: () => getSourcesForConcept(conceptId),
+    enabled: !!conceptId,
+  });
+
+  const conceptName = conceptQuery.data?.name ?? '';
+
+  const segmentsQuery = useQuery<LectureSegment[]>({
+    queryKey: ['concept', conceptId, 'segments', conceptName],
+    queryFn: () => getSegmentsByConcept(conceptName),
+    enabled: Boolean(conceptName),
+  });
+
+  const qualityQuery = useQuery<ConceptQuality>({
+    queryKey: ['concept', conceptId, 'quality'],
+    queryFn: () => getConceptQuality(conceptId),
+    enabled: !!conceptId,
+  });
+
+  const concept = conceptQuery.data ?? null;
+  const neighbors = neighborsQuery.data ?? [];
+  const segments = segmentsQuery.data ?? [];
+  const resources = resourcesQuery.data ?? [];
+  const claims = claimsQuery.data ?? [];
+  const sources = sourcesQuery.data ?? [];
+  const conceptQuality = qualityQuery.data ?? null;
+  const loading = conceptQuery.isLoading;
+  const loadError =
+    conceptQuery.error instanceof Error ? conceptQuery.error.message : conceptQuery.error ? 'Failed to load concept' : null;
 
   // Reset edit state when concept changes
   useEffect(() => {
@@ -113,7 +118,7 @@ export default function ConceptBoardPage() {
       const updated = await updateConcept(concept.node_id, {
         description: editedDescription,
       });
-      setConcept(updated);
+      queryClient.setQueryData(['concept', concept.node_id], updated);
       setIsEditingDescription(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update description');
@@ -127,6 +132,14 @@ export default function ConceptBoardPage() {
     setIsEditingDescription(false);
   };
 
+  if (!conceptId) {
+    return (
+      <div style={{ padding: '40px', textAlign: 'center' }}>
+        <div style={{ fontSize: '18px', color: 'var(--muted)' }}>No concept ID provided.</div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div style={{ padding: '40px', textAlign: 'center' }}>
@@ -135,10 +148,10 @@ export default function ConceptBoardPage() {
     );
   }
 
-  if (error || !concept) {
+  if (error || loadError || !concept) {
     return (
       <div style={{ padding: '40px', textAlign: 'center' }}>
-        <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error || 'Concept not found'}</div>
+        <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error || loadError || 'Concept not found'}</div>
         <Link href="/" style={{ marginTop: '20px', display: 'inline-block', color: 'var(--accent)' }}>
           ← Back to Graph
         </Link>

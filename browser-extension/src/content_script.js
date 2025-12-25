@@ -39,6 +39,114 @@ function getSelectionText() {
   }
 }
 
+function getCssSelector(element) {
+  if (!element || element === document.body) return null;
+  
+  try {
+    if (element.id) {
+      return `#${element.id}`;
+    }
+    
+    if (element.className && typeof element.className === 'string') {
+      const classes = element.className.trim().split(/\s+/).filter(c => c).slice(0, 3).join('.');
+      if (classes) {
+        const tag = element.tagName.toLowerCase();
+        return `${tag}.${classes}`;
+      }
+    }
+    
+    const tag = element.tagName.toLowerCase();
+    if (element.parentElement) {
+      const siblings = Array.from(element.parentElement.children).filter(el => el.tagName === element.tagName);
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(element) + 1;
+        return `${tag}:nth-of-type(${index})`;
+      }
+    }
+    
+    return tag;
+  } catch {
+    return null;
+  }
+}
+
+function getSelectionWithTextQuoteAnchor() {
+  try {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    
+    const range = sel.getRangeAt(0);
+    const exact = cleanText(range.toString());
+    if (!exact) return null;
+    
+    // Get container element for prefix/suffix extraction
+    let container = range.commonAncestorContainer;
+    if (container.nodeType === Node.TEXT_NODE) {
+      container = container.parentElement;
+    }
+    if (!container) return null;
+    
+    // Get full text content of container
+    const containerText = container.textContent || "";
+    const containerLength = containerText.length;
+    
+    // Find the selection start/end within container text
+    // This is approximate - we search for the exact text near the range boundaries
+    const startOffset = range.startOffset;
+    const endOffset = range.endOffset;
+    
+    let prefix = "";
+    let suffix = "";
+    
+    try {
+      // Get prefix: up to 64 chars before selection start
+      if (range.startContainer.nodeType === Node.TEXT_NODE) {
+        const startText = range.startContainer.textContent || "";
+        const beforeStart = startText.substring(Math.max(0, startOffset - 64), startOffset);
+        prefix = beforeStart;
+      } else {
+        // Fallback: try to get text before selection in container
+        const beforeRange = range.cloneRange();
+        beforeRange.setStart(container, 0);
+        beforeRange.setEnd(range.startContainer, range.startOffset);
+        prefix = cleanText(beforeRange.toString()).slice(-64);
+      }
+    } catch (e) {
+      // Prefix extraction failed, leave empty
+    }
+    
+    try {
+      // Get suffix: up to 64 chars after selection end
+      if (range.endContainer.nodeType === Node.TEXT_NODE) {
+        const endText = range.endContainer.textContent || "";
+        const afterEnd = endText.substring(endOffset, Math.min(endText.length, endOffset + 64));
+        suffix = afterEnd;
+      } else {
+        // Fallback: try to get text after selection in container
+        const afterRange = range.cloneRange();
+        afterRange.setStart(range.endContainer, range.endOffset);
+        afterRange.setEnd(container, container.childNodes.length);
+        suffix = cleanText(afterRange.toString()).slice(0, 64);
+      }
+    } catch (e) {
+      // Suffix extraction failed, leave empty
+    }
+    
+    // Get selector hint (best-effort CSS selector)
+    const selectorHint = getCssSelector(container);
+    
+    return {
+      type: "text_quote",
+      exact: exact,
+      prefix: prefix || null,
+      suffix: suffix || null,
+      selector_hint: selectorHint || null
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 function removeNoiseNodes(root) {
   const selectors = [
     "script","style","noscript","svg","canvas",
@@ -154,11 +262,13 @@ function buildResponse({ mode }) {
   }
 
   if (mode === "selection") {
+    const anchor = getSelectionWithTextQuoteAnchor();
     return {
       ok: true,
       mode_used: "selection",
       selection_text: selection || null,
       text: selection || "",
+      anchor: anchor || null,
       meta: { ...meta, is_pdf: pdf }
     };
   }

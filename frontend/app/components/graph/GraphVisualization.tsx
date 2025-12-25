@@ -4,24 +4,24 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { forceCollide } from 'd3-force';
+import { forceCollide, forceCenter } from 'd3-force';
 import ExplorerToolbar from './ExplorerToolbar';
 import GraphMiniMap from './GraphMiniMap';
 import ContextPanel, { type ContextPanelTab } from '../context/ContextPanel';
 import SessionDrawer from '../navigation/SessionDrawer';
+import { GraphProvider, useGraph, type VisualGraph } from './GraphContext';
+import { useChatState, type ChatMessage } from './hooks/useChatState';
+import { useGraphFilters } from './hooks/useGraphFilters';
+import { getPlugin, getPluginForDomain } from './plugins/pluginRegistry';
+import './plugins/lecturePlugin'; // Register lecture plugin
+import { useUIState } from './hooks/useUIState';
 import type { Concept, GraphData, Resource, GraphSummary, BranchSummary } from '../../api-client';
 import type { EvidenceItem } from '../../types/evidence';
 import { normalizeEvidence } from '../../types/evidence';
 import { useEvidenceNavigation } from '../../hooks/useEvidenceNavigation';
-import { isFinanceSnapshotResource, getSnapshotAsOf, getFreshnessBadge, formatSnapshotDate, getConfidenceDisplay } from '../../utils/financeSnapshot';
-import TrackedCompaniesPanel from '../finance/TrackedCompaniesPanel';
 import { computeFreshness } from '../../utils/freshness';
 import { formatConfidence } from '../../utils/confidence';
 import {
-  ingestLecture,
-  type LectureIngestResult,
-  getLectureSegments,
-  type LectureSegment,
   getResourcesForConcept,
   uploadResourceForConcept,
   fetchConfusionsForConcept,
@@ -42,26 +42,26 @@ import {
   createSnapshot,
   listSnapshots,
   restoreSnapshot,
-  fetchFinanceSnapshot,
-  getFinanceTracking,
-  setFinanceTracking,
-  listFinanceTracking,
-  getLatestFinanceSnapshots,
-  type FinanceTrackingConfig,
-  type LatestSnapshotMetadata,
   getGraphOverview,
   getGraphNeighbors,
 } from '../../api-client';
 import { fetchEvidenceForConcept } from '../../lib/evidenceFetch';
 import { setLastSession, getLastSession, pushRecentConceptView, trackConceptViewed, trackEvent } from '../../lib/sessionState';
 import { logEvent } from '../../lib/eventsClient';
-import { useLens } from '../context-providers/LensContext';
+import { 
+  createChatSession, 
+  addMessageToSession, 
+  getCurrentSession, 
+  getCurrentSessionId,
+  setCurrentSessionId,
+  getChatSession,
+  type ChatSession 
+} from '../../lib/chatSessions';
 import StyleFeedbackForm from '../ui/StyleFeedbackForm';
 
 // Activity Event Types
 type ActivityEventType = 
   | 'RESOURCE_ATTACHED'
-  | 'FINANCE_SNAPSHOT'
   | 'NODE_CREATED'
   | 'NODE_UPDATED'
   | 'RELATIONSHIP_ADDED'
@@ -165,93 +165,48 @@ function deriveActivityEvents(
   
   // Derive events from resources
   for (const res of resources) {
-    // Check if it's a finance snapshot
-    if (isFinanceSnapshotResource(res) && res.metadata?.identity) {
-      const asOf = getSnapshotAsOf(res);
-      const meta = res.metadata;
-      const size = meta.size || {};
-      const price = meta.price || {};
-      const confidence = size.confidence || price.confidence;
-      
-      // Build detail string
-      const details: string[] = [];
-      if (size.market_cap) {
-        const marketCap = typeof size.market_cap === 'number' 
-          ? `$${(size.market_cap / 1e9).toFixed(2)}B`
-          : String(size.market_cap);
-        details.push(`Market cap: ${marketCap}`);
+    // Regular resource attached
+    // Try to get created_at from resource.created_at or metadata
+    let timestamp: Date | null = null;
+    if (res.created_at) {
+      const date = new Date(res.created_at);
+      if (!isNaN(date.getTime())) {
+        timestamp = date;
       }
-      if (price.price) {
-        const priceVal = typeof price.price === 'number'
-          ? `$${price.price.toFixed(2)}`
-          : String(price.price);
-        details.push(`Price: ${priceVal}`);
-      }
-      if (confidence !== undefined) {
-        const confDisplay = getConfidenceDisplay(confidence);
-        if (confDisplay) {
-          details.push(`Confidence: ${confDisplay}`);
-        }
-      }
-      
-      events.push({
-        id: `finance-${res.resource_id}`,
-        type: 'FINANCE_SNAPSHOT',
-        title: 'Finance snapshot fetched',
-        timestamp: asOf,
-        detail: details.length > 0 ? details.join(', ') : undefined,
-        resource_id: res.resource_id,
-        url: res.url,
-        source_badge: 'browser_use',
-        action: {
-          label: 'View evidence',
-          onClick: () => onViewEvidence(res.resource_id),
-        },
-      });
-    } else {
-      // Regular resource attached
-      // Try to get created_at from resource.created_at or metadata
-      let timestamp: Date | null = null;
-      if (res.created_at) {
-        const date = new Date(res.created_at);
+    } else if (res.metadata?.created_at) {
+      const ts = res.metadata.created_at;
+      if (typeof ts === 'string') {
+        const date = new Date(ts);
+        // If invalid date, set to null
         if (!isNaN(date.getTime())) {
           timestamp = date;
         }
-      } else if (res.metadata?.created_at) {
-        const ts = res.metadata.created_at;
-        if (typeof ts === 'string') {
-          const date = new Date(ts);
-          // If invalid date, set to null
-          if (!isNaN(date.getTime())) {
-            timestamp = date;
-          }
-        } else if (typeof ts === 'number') {
-          const date = new Date(ts);
-          // If invalid date, set to null
-          if (!isNaN(date.getTime())) {
-            timestamp = date;
-          }
+      } else if (typeof ts === 'number') {
+        const date = new Date(ts);
+        // If invalid date, set to null
+        if (!isNaN(date.getTime())) {
+          timestamp = date;
         }
       }
-      
-      const title = res.title || res.kind || 'Resource';
-      const caption = res.caption ? (res.caption.length > 100 ? res.caption.substring(0, 100) + '...' : res.caption) : undefined;
-      
-      events.push({
-        id: `resource-${res.resource_id}`,
-        type: 'RESOURCE_ATTACHED',
-        title: `Resource attached: ${title}`,
-        timestamp,
-        detail: caption,
-        resource_id: res.resource_id,
-        url: res.url,
-        source_badge: res.source || undefined,
-        action: {
-          label: 'View evidence',
-          onClick: () => onViewEvidence(res.resource_id),
-        },
-      });
     }
+    
+    const title = res.title || res.kind || 'Resource';
+    const caption = res.caption ? (res.caption.length > 100 ? res.caption.substring(0, 100) + '...' : res.caption) : undefined;
+    
+    events.push({
+      id: `resource-${res.resource_id}`,
+      type: 'RESOURCE_ATTACHED',
+      title: `Resource attached: ${title}`,
+      timestamp,
+      detail: caption,
+      resource_id: res.resource_id,
+      url: res.url,
+      source_badge: res.source || undefined,
+      action: {
+        label: 'View evidence',
+        onClick: () => onViewEvidence(res.resource_id),
+      },
+    });
   }
   
   // Derive events from node fields
@@ -431,7 +386,7 @@ ForceGraph2DWithRef.displayName = 'ForceGraph2DWithRef';
 // Export as ForceGraph2D for use in the component
 const ForceGraph2D = ForceGraph2DWithRef;
 
-type ChatMessage = { role: 'user' | 'system'; text: string };
+// ChatMessage is now imported from useChatState hook
 type VisualNode = Concept & { domain: string; type: string };
 type VisualLink = { 
   source: VisualNode; 
@@ -478,7 +433,7 @@ function toRgba(hex: string, alpha: number) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// Content import form component
+// Content import form component (generic, works with any domain plugin)
 function ContentImportForm({
   onIngest,
   isLoading,
@@ -487,7 +442,7 @@ function ContentImportForm({
 }: {
   onIngest: (title: string, text: string, domain?: string) => void;
   isLoading: boolean;
-  result: LectureIngestResult | null;
+  result: any | null;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState('');
@@ -610,13 +565,19 @@ function ContentImportForm({
   );
 }
 
-export default function GraphVisualization() {
+function GraphVisualizationInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { activeLens } = useLens();
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/a01a33f1-d489-4279-a9af-9a81bd1c1f3e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'GraphVisualization.tsx:276',message:'GraphVisualization component render',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
+  
+  // Use GraphContext for shared graph state
+  const graph = useGraph();
+  const { graphData, setGraphData, selectedNode, setSelectedNode, graphs, setGraphs, activeGraphId, setActiveGraphId, branches, setBranches, activeBranchId, setActiveBranchId, focusAreas, setFocusAreas, loading, setLoading, error, setError, loadingNeighbors, setLoadingNeighbors, overviewMeta, setOverviewMeta, neighborCache, clearNeighborCache, selectedDomains, setSelectedDomains, expandedNodes, setExpandedNodes, collapsedGroups, setCollapsedGroups, focusedNodeId, setFocusedNodeId, domainBubbles, setDomainBubbles, highlightedConceptIds, setHighlightedConceptIds, highlightedRelationshipIds, setHighlightedRelationshipIds, tempNodes, setTempNodes } = graph;
+  
+  // Use custom hooks for state management
+  const chat = useChatState();
+  const filters = useGraphFilters();
+  const ui = useUIState();
+  
   // Suppress React ref warning for LoadableComponent (Next.js dynamic import limitation)
   useEffect(() => {
     if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
@@ -637,42 +598,39 @@ export default function GraphVisualization() {
     }
   }, []);
 
-  const [graphData, setGraphData] = useState<VisualGraph>({ nodes: [], links: [] });
-  const [selectedNode, setSelectedNode] = useState<Concept | null>(null);
-  const [graphs, setGraphs] = useState<GraphSummary[]>([]);
-  const [activeGraphId, setActiveGraphId] = useState<string>('default');
-  const [branches, setBranches] = useState<BranchSummary[]>([]);
-  const [activeBranchId, setActiveBranchId] = useState<string>('main');
-  const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
+  // Auto-scroll chat to bottom when history changes or new message arrives
+  useEffect(() => {
+    if (chatStreamRef.current) {
+      // Small delay to ensure DOM is updated
+      setTimeout(() => {
+        if (chatStreamRef.current) {
+          chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+        }
+      }, 100);
+    }
+  }, [chat.state.chatHistory.length, chat.state.chatAnswer, chat.state.chatHistory]);
+  
+  // Clear transient chatAnswer if it's already in history (prevents duplicate display)
+  useEffect(() => {
+    if (chat.state.chatAnswer && chat.state.answerId) {
+      const answerInHistory = chat.state.chatHistory.some(msg => 
+        msg.answerId === chat.state.answerId && msg.answer && msg.answer.trim()
+      );
+      if (answerInHistory) {
+        // Answer is in history, clear transient state
+        chat.actions.setChatAnswer(null);
+        chat.actions.setAnswerId(null);
+      }
+    }
+  }, [chat.state.chatHistory, chat.state.chatAnswer, chat.state.answerId, chat.actions]);
+
+  // Remaining state that hasn't been moved to hooks yet
   const [compareOtherBranchId, setCompareOtherBranchId] = useState<string>('');
   const [branchCompare, setBranchCompare] = useState<any>(null);
   const [branchCompareLLM, setBranchCompareLLM] = useState<any>(null);
-  const [showGraphModal, setShowGraphModal] = useState(false);
-  const [newGraphName, setNewGraphName] = useState('');
-  const [graphSwitchError, setGraphSwitchError] = useState<string | null>(null);
-  const [graphSwitchBanner, setGraphSwitchBanner] = useState<{ message: string; graphName: string } | null>(null);
-  const [conceptNotFoundBanner, setConceptNotFoundBanner] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [linkingMode, setLinkingMode] = useState<{ source: Concept | null; predicate: string } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [loadingNeighbors, setLoadingNeighbors] = useState<string | null>(null); // concept_id being loaded
-  const [overviewMeta, setOverviewMeta] = useState<{ node_count?: number; sampled?: boolean } | null>(null);
-  const neighborCacheRef = useRef<Map<string, { nodes: Concept[]; edges: any[] }>>(new Map());
-  const [searchTerm, setSearchTerm] = useState('');
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [teachingStyle, setTeachingStyle] = useState<TeachingStyleProfile | null>(null);
   const [domainSpread, setDomainSpread] = useState(1.2);
   const [bubbleSpacing, setBubbleSpacing] = useState(1);
-  const [showControls, setShowControls] = useState(false);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, string[]>>({});
-  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
-  const [currentZoom, setCurrentZoom] = useState(1);
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [zoomTransform, setZoomTransform] = useState<{ k: number; x: number; y: number }>({ k: 1, x: 0, y: 0 });
-  const [graphViewport, setGraphViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const [focusMode, setFocusMode] = useState(false);
   const lastAutoSnapshotAtRef = useRef<number>(0);
   // Debounce concept view logging (10s)
   const lastConceptViewLogRef = useRef<{ conceptId: string; timestamp: number } | null>(null);
@@ -688,76 +646,16 @@ export default function GraphVisualization() {
     zoom_after?: number;
     error?: string;
   } | null>(null);
-  const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set());
-  const [selectedPosition, setSelectedPosition] = useState<{ x: number; y: number } | null>(null);
-  const [tempNodes, setTempNodes] = useState<TempNode[]>([]);
-  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
-  const [highlightRunId, setHighlightRunId] = useState<string | null>(null);
   const [runChanges, setRunChanges] = useState<any>(null);
-  const [highlightedConceptIds, setHighlightedConceptIds] = useState<Set<string>>(new Set());
-  const [highlightedRelationshipIds, setHighlightedRelationshipIds] = useState<Set<string>>(new Set());
-  const [chatAnswer, setChatAnswer] = useState<string | null>(null);
-  const [answerId, setAnswerId] = useState<string | null>(null);
-  const [answerSections, setAnswerSections] = useState<Array<{
-    id: string;
-    heading?: string;
-    text: string;
-    supporting_evidence_ids: string[];
-  }> | null>(null);
-  const [expandedEvidenceSections, setExpandedEvidenceSections] = useState<Set<string>>(new Set());
-  const [lastQuestion, setLastQuestion] = useState<string>('');
-  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
-  const [usedNodes, setUsedNodes] = useState<Concept[]>([]);
-  const [suggestedActions, setSuggestedActions] = useState<Array<{type: string; source?: string; target?: string; concept?: string; domain?: string; label: string}>>([]);
-  const [retrievalMeta, setRetrievalMeta] = useState<{
-    communities: number;
-    claims: number;
-    concepts: number;
-    edges: number;
-    sourceBreakdown?: Record<string, number>;
-    claimIds?: string[];
-    communityIds?: string[];
-    topClaims?: Array<{
-      claim_id: string;
-      text: string;
-      confidence?: number;
-      source_id?: string;
-      published_at?: string;
-    }>;
-  } | null>(null);
-  const [showingEvidence, setShowingEvidence] = useState(false);
-  const [evidenceNodeIds, setEvidenceNodeIds] = useState<Set<string>>(new Set());
-  const [evidenceLinkIds, setEvidenceLinkIds] = useState<Set<string>>(new Set());
-  const [activeEvidenceSectionId, setActiveEvidenceSectionId] = useState<string | null>(null);
-  const [showRetrievalDetails, setShowRetrievalDetails] = useState(false);
-  const [showEvidencePreview, setShowEvidencePreview] = useState(false);
-  const [isChatLoading, setIsChatLoading] = useState(false);
-  const [loadingStage, setLoadingStage] = useState<string>('');
-  const [isEditingAnswer, setIsEditingAnswer] = useState(false);
-  const [editedAnswer, setEditedAnswer] = useState<string>('');
-  const [isChatExpanded, setIsChatExpanded] = useState(false);
-  const [isChatMaximized, setIsChatMaximized] = useState(false);
-  const [chatMode, setChatMode] = useState<'Ask' | 'Explore Paths' | 'Summaries' | 'Gaps'>('Ask');
   const [chatContentHeight, setChatContentHeight] = useState(0);
-  const [financeLensEnabled, setFinanceLensEnabled] = useState(false);
-  const [selectedTicker, setSelectedTicker] = useState<string>('');
-  const [financeLens, setFinanceLens] = useState<string>('general');
-  const [domainBubbles, setDomainBubbles] = useState<DomainBubble[]>([]);
-  const [showLectureIngest, setShowLectureIngest] = useState(false);
-  const [lectureIngestLoading, setLectureIngestLoading] = useState(false);
-  const [lectureIngestResult, setLectureIngestResult] = useState<LectureIngestResult | null>(null);
-  const [showSegments, setShowSegments] = useState(false);
-  const [lectureSegments, setLectureSegments] = useState<LectureSegment[] | null>(null);
-  const [segmentsLoading, setSegmentsLoading] = useState(false);
+  const [contentIngestResult, setContentIngestResult] = useState<any | null>(null);
   const [selectedResources, setSelectedResources] = useState<Resource[]>([]);
   const [isResourceLoading, setIsResourceLoading] = useState(false);
-  const [evidenceUsed, setEvidenceUsed] = useState<EvidenceItem[]>([]);
   const [expandedEvidenceItems, setExpandedEvidenceItems] = useState<Set<string>>(new Set());
   const [showAllEvidence, setShowAllEvidence] = useState(false);
   const [navigatingEvidenceId, setNavigatingEvidenceId] = useState<string | null>(null);
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [isFetchingConfusions, setIsFetchingConfusions] = useState(false);
-  const [nodePanelTab, setNodePanelTab] = useState<ContextPanelTab>('overview');
   // Fetch Evidence state (per concept to avoid state leaks when switching nodes)
   const [fetchEvidenceState, setFetchEvidenceState] = useState<{
     conceptId: string;
@@ -772,34 +670,12 @@ export default function GraphVisualization() {
   const [evidenceSearch, setEvidenceSearch] = useState('');
   // Expanded resource details
   const [expandedResources, setExpandedResources] = useState<Set<string>>(new Set());
-  // Finance tab: selected snapshot resource ID
-  const [financeSelectedResourceId, setFinanceSelectedResourceId] = useState<string | null>(null);
-  // Finance tab: show all news toggle
-  const [showAllNews, setShowAllNews] = useState(false);
-  // Finance tab: tracking state
-  const [financeTracking, setFinanceTrackingState] = useState<FinanceTrackingConfig | null>(null);
-  const [isLoadingTracking, setIsLoadingTracking] = useState(false);
-  const [isFetchingSnapshot, setIsFetchingSnapshot] = useState(false);
-  // Track all enabled tickers for graph indicators
-  const [trackedTickers, setTrackedTickers] = useState<Set<string>>(new Set());
-  // Tracked companies panel state
-  const [trackedCompaniesList, setTrackedCompaniesList] = useState<FinanceTrackingConfig[]>([]);
-  const [latestSnapshots, setLatestSnapshots] = useState<Record<string, LatestSnapshotMetadata>>({});
-  const [refreshingTickers, setRefreshingTickers] = useState<Set<string>>(new Set());
-  // Graph filters
-  const [filterStatusAccepted, setFilterStatusAccepted] = useState(true);
-  const [filterStatusProposed, setFilterStatusProposed] = useState(true);
-  const [filterStatusRejected, setFilterStatusRejected] = useState(false);
-  const [filterConfidenceThreshold, setFilterConfidenceThreshold] = useState(0.0);
-  const [filterSources, setFilterSources] = useState<Set<string>>(new Set(['SEC', 'IR', 'NEWS']));
-  const [hoveredLink, setHoveredLink] = useState<VisualLink | null>(null);
-  const [hoveredLinkPosition, setHoveredLinkPosition] = useState<{ x: number; y: number } | null>(null);
-  const [showFilters, setShowFilters] = useState(false);
-  const [sourceLayer, setSourceLayer] = useState<'concepts' | 'evidence' | 'snapshots'>('concepts');
   const chatStreamRef = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<ForceGraphRef | null>(null);
   const layoutRef = useRef<HTMLDivElement | null>(null);
   const graphCanvasRef = useRef<HTMLDivElement | null>(null);
+  const neighborCacheRef = useRef<Map<string, { nodes: Concept[]; edges: any[] }>>(new Map());
+  const loadingNeighborsRef = useRef<string | null>(null);
   const normalize = useCallback((name: string) => name.trim().toLowerCase(), []);
 
   // Auto-highlight evidence setting (localStorage)
@@ -840,7 +716,7 @@ export default function GraphVisualization() {
     const el = graphCanvasRef.current;
     const update = () => {
       const rect = el.getBoundingClientRect();
-      setGraphViewport({ width: rect.width, height: rect.height });
+      ui.actions.setGraphViewport({ width: rect.width, height: rect.height });
     };
     update();
     const ro = new ResizeObserver(update);
@@ -926,70 +802,88 @@ export default function GraphVisualization() {
       return;
     }
     
-    // Fetch neighbors
+    // Fetch neighbors with timeout protection
+    loadingNeighborsRef.current = conceptId;
     setLoadingNeighbors(conceptId);
+    const timeoutId = setTimeout(() => {
+      // If still loading after 10 seconds, clear the loading state to prevent UI lock
+      if (loadingNeighborsRef.current === conceptId) {
+        console.warn('Neighbor loading timeout for concept:', conceptId);
+        loadingNeighborsRef.current = null;
+        setLoadingNeighbors(null);
+      }
+    }, 10000); // 10 second timeout
+    
     try {
       const result = await getGraphNeighbors(activeGraphId, conceptId, 1, 80);
       
-      // Cache the result
-      neighborCacheRef.current.set(cacheKey, {
-        nodes: result.nodes,
-        edges: result.edges,
-      });
-      
-      // Merge into graph data
-      setGraphData(prev => {
-        const existingNodeIds = new Set(prev.nodes.map(n => n.node_id));
-        const existingEdgeKeys = new Set(
-          prev.links.map(l => `${l.source.node_id || l.source}->${l.target.node_id || l.target}:${l.predicate}`)
-        );
+      // Only process result if we're still loading for this concept (user didn't switch nodes)
+      if (loadingNeighborsRef.current === conceptId) {
+        // Cache the result
+        neighborCacheRef.current.set(cacheKey, {
+          nodes: result.nodes,
+          edges: result.edges,
+        });
         
-        const newNodes = result.nodes.filter(n => !existingNodeIds.has(n.node_id));
-        const newLinks = result.edges
-          .map(e => {
-            const sourceNode = prev.nodes.find(n => n.node_id === e.source_id) || result.nodes.find(n => n.node_id === e.source_id);
-            const targetNode = prev.nodes.find(n => n.node_id === e.target_id) || result.nodes.find(n => n.node_id === e.target_id);
-            if (!sourceNode || !targetNode) return null;
-            const edgeKey = `${e.source_id}->${e.target_id}:${e.predicate}`;
-            if (existingEdgeKeys.has(edgeKey)) return null;
-            return {
-              source: sourceNode,
-              target: targetNode,
-              predicate: e.predicate,
-              relationship_status: e.status,
-              relationship_confidence: e.confidence,
-              relationship_method: e.method,
-              rationale: e.rationale,
-              relationship_source_id: e.relationship_source_id,
-              relationship_chunk_id: e.chunk_id,
-            } as any;
-          })
-          .filter((link): link is any => link !== null);
-        
-        if (newNodes.length === 0 && newLinks.length === 0) return prev;
-        
-        return {
-          nodes: [...prev.nodes, ...newNodes],
-          links: [...prev.links, ...newLinks],
-        };
-      });
+        // Merge into graph data
+        setGraphData(prev => {
+          const existingNodeIds = new Set(prev.nodes.map(n => n.node_id));
+          const existingEdgeKeys = new Set(
+            prev.links.map(l => `${l.source.node_id || l.source}->${l.target.node_id || l.target}:${l.predicate}`)
+          );
+          
+          const newNodes = result.nodes.filter(n => !existingNodeIds.has(n.node_id));
+          const newLinks = result.edges
+            .map(e => {
+              const sourceNode = prev.nodes.find(n => n.node_id === e.source_id) || result.nodes.find(n => n.node_id === e.source_id);
+              const targetNode = prev.nodes.find(n => n.node_id === e.target_id) || result.nodes.find(n => n.node_id === e.target_id);
+              if (!sourceNode || !targetNode) return null;
+              const edgeKey = `${e.source_id}->${e.target_id}:${e.predicate}`;
+              if (existingEdgeKeys.has(edgeKey)) return null;
+              return {
+                source: sourceNode,
+                target: targetNode,
+                predicate: e.predicate,
+                relationship_status: e.status,
+                relationship_confidence: e.confidence,
+                relationship_method: e.method,
+                rationale: e.rationale,
+                relationship_source_id: e.relationship_source_id,
+                relationship_chunk_id: e.chunk_id,
+              } as any;
+            })
+            .filter((link): link is any => link !== null);
+          
+          if (newNodes.length === 0 && newLinks.length === 0) return prev;
+          
+          return {
+            nodes: [...prev.nodes, ...newNodes],
+            links: [...prev.links, ...newLinks],
+          };
+        });
+      }
     } catch (err) {
       console.error('Failed to expand neighbors:', err);
     } finally {
-      setLoadingNeighbors(null);
+      clearTimeout(timeoutId);
+      // Only clear if we're still loading for this specific concept
+      if (loadingNeighborsRef.current === conceptId) {
+        loadingNeighborsRef.current = null;
+        setLoadingNeighbors(null);
+      }
     }
   }, [activeGraphId]);
 
   // Extract evidence highlight logic into reusable functions
   const clearEvidenceHighlight = useCallback(() => {
-    setShowingEvidence(false);
-    setEvidenceNodeIds(new Set());
-    setEvidenceLinkIds(new Set());
-    setActiveEvidenceSectionId(null);
+    chat.actions.setShowingEvidence(false);
+    chat.actions.setEvidenceNodeIds(new Set());
+    chat.actions.setEvidenceLinkIds(new Set());
+    chat.actions.setActiveEvidenceSectionId(null);
     if (graphRef.current?.refresh) {
       graphRef.current.refresh();
     }
-  }, []);
+  }, [chat.actions]);
 
   type RetrievalMetaType = {
     communities: number;
@@ -1043,9 +937,9 @@ export default function GraphVisualization() {
             `${e.source_id}-${e.target_id}-${e.predicate}` as string
           ));
           
-          setEvidenceNodeIds(nodeIds);
-          setEvidenceLinkIds(linkIds);
-          setShowingEvidence(true);
+          chat.actions.setEvidenceNodeIds(nodeIds);
+          chat.actions.setEvidenceLinkIds(linkIds);
+          chat.actions.setShowingEvidence(true);
           
           // Ensure evidence nodes are visible
           nodeIds.forEach(nodeId => {
@@ -1122,9 +1016,9 @@ export default function GraphVisualization() {
         }
       });
 
-      setEvidenceNodeIds(nodeIds);
-      setEvidenceLinkIds(linkIds);
-      setShowingEvidence(true);
+      chat.actions.setEvidenceNodeIds(nodeIds);
+      chat.actions.setEvidenceLinkIds(linkIds);
+      chat.actions.setShowingEvidence(true);
 
       // Ensure evidence nodes are visible
       nodeIds.forEach(nodeId => {
@@ -1181,7 +1075,7 @@ export default function GraphVisualization() {
     }
 
     // Set active section
-    setActiveEvidenceSectionId(sectionId);
+    chat.actions.setActiveEvidenceSectionId(sectionId);
 
     // Apply highlighting using existing logic
     await applyEvidenceHighlight(sectionEvidence, retrievalMeta);
@@ -1204,7 +1098,7 @@ export default function GraphVisualization() {
           const centerY = nodes.reduce((sum, n) => sum + ((n as any).y || 0), 0) / nodes.length;
           
           // Gently center (don't hard reset zoom)
-          const currentZoom = zoomTransform.k || zoomLevel || 1;
+          const currentZoom = ui.state.zoomTransform?.k || ui.state.zoomLevel || 1;
           if (currentZoom < 1.5) {
             // Only adjust if zoomed out - gently zoom in
             graphRef.current.zoomToFit(400, 50);
@@ -1215,7 +1109,7 @@ export default function GraphVisualization() {
         }
       }
     }
-  }, [applyEvidenceHighlight, graphData.nodes, zoomTransform, zoomLevel]);
+  }, [applyEvidenceHighlight, graphData.nodes, ui.state.zoomTransform, ui.state.zoomLevel]);
 
   const ensureConcept = useCallback(
     async (name: string, inherit?: { domain?: string; type?: string }) => {
@@ -1223,7 +1117,13 @@ export default function GraphVisualization() {
         return await resolveConceptByName(name);
       } catch {
         const api = await import('../../api-client');
+        
+        // CRITICAL: Set the active graph context in backend before creating concept
+        // This ensures the node is created in the correct graph/workspace
+        await api.selectGraph(activeGraphId);
+        
         const concept = await api.createConcept({
+          graph_id: activeGraphId, // Explicitly specify which graph to add to
           name,
           domain: inherit?.domain || 'general',
           type: inherit?.type || 'concept',
@@ -1231,7 +1131,7 @@ export default function GraphVisualization() {
         return concept;
       }
     },
-    [resolveConceptByName],
+    [resolveConceptByName, activeGraphId],
   );
 
   const serializeGraph = useCallback(
@@ -1274,55 +1174,96 @@ export default function GraphVisualization() {
 
   const convertGraphData = useCallback(
     (data: GraphData, temps: TempNode[] = tempNodes): VisualGraph => {
-      const nodes: VisualNode[] = [
-        ...data.nodes.map(node => ({
+      // Optimize: pre-allocate arrays and use efficient map operations
+      const nodes: VisualNode[] = new Array(data.nodes.length + temps.length);
+      let idx = 0;
+      
+      // Process nodes efficiently
+      // For isolated nodes (no links), add initial positioning to ensure they're visible
+      const hasLinks = data.links.length > 0;
+      const centerX = typeof window !== 'undefined' ? window.innerWidth / 2 : 400;
+      const centerY = typeof window !== 'undefined' ? window.innerHeight / 2 : 300;
+      
+      for (let i = 0; i < data.nodes.length; i++) {
+        const node = data.nodes[i];
+        const nodeData: VisualNode = {
           ...node,
           domain: node.domain || 'general',
           type: node.type || 'concept',
-        })),
-        ...temps,
-      ];
-
-      const nodeMap = new Map<string, VisualNode>();
-      nodes.forEach(node => nodeMap.set(node.node_id, node));
-
-      const links: VisualLink[] = data.links
-        .map(link => {
-          const sourceId = typeof link.source === 'string' ? link.source : (link.source as any).node_id;
-          const targetId = typeof link.target === 'string' ? link.target : (link.target as any).node_id;
-          const sourceNode = nodeMap.get(sourceId);
-          const targetNode = nodeMap.get(targetId);
-          if (!sourceNode || !targetNode) {
-            // Debug: log missing nodes
-            if (process.env.NODE_ENV === 'development') {
-              console.warn(`[Graph] Missing node for link: source=${sourceId}, target=${targetId}`);
-            }
-            return null;
-          }
-          return { 
-            source: sourceNode, 
-            target: targetNode, 
-            predicate: link.predicate,
-            relationship_status: (link as any).relationship_status,
-            relationship_confidence: (link as any).relationship_confidence,
-            relationship_method: (link as any).relationship_method,
-            source_type: (link as any).source_type || (() => {
-              // Try to derive source_type from relationship_source_id or method
-              const sourceId = (link as any).relationship_source_id;
-              if (sourceId) {
-                // Pattern matching: SEC filings, IR pages, News articles
-                if (sourceId.includes('SEC') || sourceId.includes('edgar')) return 'SEC';
-                if (sourceId.includes('IR') || sourceId.includes('investor')) return 'IR';
-                if (sourceId.includes('NEWS') || sourceId.includes('news')) return 'NEWS';
-              }
-              return undefined;
-            })(),
-            rationale: (link as any).rationale,
-          } as VisualLink;
-        })
-        .filter((link): link is VisualLink => link !== null);
+        };
+        
+        // If no links exist, position nodes in a circle around center to make them visible
+        if (!hasLinks && (nodeData.x === undefined || nodeData.y === undefined)) {
+          const angle = (i / data.nodes.length) * Math.PI * 2;
+          const radius = 100; // Distance from center
+          nodeData.x = centerX + Math.cos(angle) * radius;
+          nodeData.y = centerY + Math.sin(angle) * radius;
+        }
+        
+        nodes[idx++] = nodeData;
+      }
       
-      // Debug: log link conversion stats
+      // Add temp nodes
+      for (let i = 0; i < temps.length; i++) {
+        nodes[idx++] = temps[i];
+      }
+
+      // Build node map efficiently
+      const nodeMap = new Map<string, VisualNode>();
+      for (let i = 0; i < nodes.length; i++) {
+        nodeMap.set(nodes[i].node_id, nodes[i]);
+      }
+
+      // Process links efficiently - pre-allocate array
+      const links: VisualLink[] = [];
+      const linkSet = new Set<string>(); // Track processed links to avoid duplicates
+      
+      for (let i = 0; i < data.links.length; i++) {
+        const link = data.links[i];
+        const sourceId = typeof link.source === 'string' ? link.source : (link.source as any).node_id;
+        const targetId = typeof link.target === 'string' ? link.target : (link.target as any).node_id;
+        
+        // Skip if already processed
+        const linkKey = `${sourceId}-${targetId}-${link.predicate}`;
+        if (linkSet.has(linkKey)) continue;
+        linkSet.add(linkKey);
+        
+        const sourceNode = nodeMap.get(sourceId);
+        const targetNode = nodeMap.get(targetId);
+        if (!sourceNode || !targetNode) {
+          // Skip missing nodes silently in production
+          if (process.env.NODE_ENV === 'development') {
+            console.warn(`[Graph] Missing node for link: source=${sourceId}, target=${targetId}`);
+          }
+          continue;
+        }
+        
+        // Derive source_type efficiently
+        let sourceType = (link as any).source_type;
+        if (!sourceType && (link as any).relationship_source_id) {
+          const sourceId = (link as any).relationship_source_id;
+          if (sourceId.includes('SEC') || sourceId.includes('edgar')) {
+            sourceType = 'SEC';
+          } else if (sourceId.includes('IR') || sourceId.includes('investor')) {
+            sourceType = 'IR';
+          } else if (sourceId.includes('NEWS') || sourceId.includes('news')) {
+            sourceType = 'NEWS';
+          }
+        }
+        
+        links.push({
+          source: sourceNode,
+          target: targetNode,
+          predicate: link.predicate,
+          relationship_status: (link as any).relationship_status,
+          relationship_confidence: (link as any).relationship_confidence,
+          relationship_method: (link as any).relationship_method,
+          source_type: sourceType,
+          rationale: (link as any).rationale,
+        } as VisualLink);
+      }
+      
+      // Debug: log link conversion stats (only in dev)
       if (process.env.NODE_ENV === 'development') {
         console.log(`[Graph] Converted ${links.length} links from ${data.links.length} raw links`);
       }
@@ -1350,20 +1291,43 @@ export default function GraphVisualization() {
     return map;
   }, [uniqueDomains]);
 
-  const loadGraph = useCallback(async () => {
+  const loadGraph = useCallback(async (graphId?: string) => {
+    const targetGraphId = graphId || activeGraphId;
+    // Don't block UI - set loading but continue rendering
     setLoading(true);
     setError(null);
     try {
-      // Use overview endpoint for fast initial loading
-      const data = await getGraphOverview(activeGraphId, 300, 600);
+      // Use overview endpoint with smaller initial load for faster rendering
+      const data = await getGraphOverview(targetGraphId, 200, 400);
+      
+      // Debug logging
+      console.log('[Graph] Loaded data:', {
+        nodes: data.nodes?.length || 0,
+        links: data.links?.length || 0,
+        meta: data.meta,
+        sampleNodes: data.nodes?.slice(0, 3).map(n => ({ id: n.node_id, name: n.name, domain: n.domain }))
+      });
+      
+      // Process data immediately but set state asynchronously to avoid blocking
       const converted = convertGraphData(data, tempNodes);
-      setGraphData(converted);
-      setOverviewMeta(data.meta || null);
+      
+      console.log('[Graph] Converted data:', {
+        nodes: converted.nodes.length,
+        links: converted.links.length,
+        sampleNodes: converted.nodes.slice(0, 3).map(n => ({ id: n.node_id, name: n.name, domain: n.domain, x: n.x, y: n.y }))
+      });
+      
+      // Use requestAnimationFrame to batch state updates and avoid blocking
+      requestAnimationFrame(() => {
+        setGraphData(converted);
+        setOverviewMeta(data.meta || null);
+        setLoading(false);
+      });
+      
       // Clear cache when switching graphs
       neighborCacheRef.current.clear();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load graph');
-    } finally {
       setLoading(false);
     }
   }, [convertGraphData, tempNodes, activeGraphId]);
@@ -1377,9 +1341,9 @@ export default function GraphVisualization() {
         setActiveGraphId(data.active_graph_id || 'default');
       }
       setActiveBranchId(data.active_branch_id || 'main');
-      setGraphSwitchError(null);
+      ui.actions.setGraphSwitchError(null);
     } catch (err) {
-      setGraphSwitchError(err instanceof Error ? err.message : 'Failed to load graphs');
+      ui.actions.setGraphSwitchError(err instanceof Error ? err.message : 'Failed to load graphs');
     }
   }, []);
 
@@ -1420,32 +1384,50 @@ export default function GraphVisualization() {
       const status = link.relationship_status || 'ACCEPTED';
       
       // Status filter
-      if (status === 'ACCEPTED' && !filterStatusAccepted) return false;
-      if (status === 'PROPOSED' && !filterStatusProposed) return false;
-      if (status === 'REJECTED' && !filterStatusRejected) return false;
+      if (status === 'ACCEPTED' && !filters.state.filterStatusAccepted) return false;
+      if (status === 'PROPOSED' && !filters.state.filterStatusProposed) return false;
+      if (status === 'REJECTED' && !filters.state.filterStatusRejected) return false;
       
       // Confidence filter
       const confidence = link.relationship_confidence ?? 1.0;
-      if (confidence < filterConfidenceThreshold) return false;
+      if (confidence < filters.state.filterConfidenceThreshold) return false;
       
       // Source filter (if source_type is available)
-      if (link.source_type && filterSources.size > 0 && !filterSources.has(link.source_type)) {
+      if (link.source_type && filters.state.filterSources.size > 0 && !filters.state.filterSources.has(link.source_type)) {
         return false;
       }
       
       return true;
     });
     
-    // Keep only nodes that are connected by filtered links
+    // Keep nodes that are connected by filtered links OR are isolated (no links)
+    // This ensures isolated nodes (like finance nodes) are always visible
     const connectedNodeIds = new Set<string>();
     filteredLinks.forEach(link => {
       connectedNodeIds.add(link.source.node_id);
       connectedNodeIds.add(link.target.node_id);
     });
-    filteredNodes = filteredNodes.filter(n => connectedNodeIds.has(n.node_id));
+    
+    // If there are no links at all, keep all nodes (they're all isolated)
+    // Otherwise, keep nodes that are either connected OR have no links in the original graph
+    if (filteredLinks.length === 0 && graphData.links.length === 0) {
+      // All nodes are isolated - keep them all
+      // filteredNodes already contains the right nodes from domain filtering
+    } else {
+      // Keep connected nodes OR isolated nodes (nodes with no links in original graph)
+      const originalNodeIdsWithLinks = new Set<string>();
+      graphData.links.forEach(link => {
+        originalNodeIdsWithLinks.add(link.source.node_id);
+        originalNodeIdsWithLinks.add(link.target.node_id);
+      });
+      
+      filteredNodes = filteredNodes.filter(n => 
+        connectedNodeIds.has(n.node_id) || !originalNodeIdsWithLinks.has(n.node_id)
+      );
+    }
     
     return { nodes: filteredNodes, links: filteredLinks };
-  }, [graphData, selectedDomains, filterStatusAccepted, filterStatusProposed, filterStatusRejected, filterConfidenceThreshold, filterSources]);
+  }, [graphData, selectedDomains, filters.state.filterStatusAccepted, filters.state.filterStatusProposed, filters.state.filterStatusRejected, filters.state.filterConfidenceThreshold, filters.state.filterSources]);
 
   const { displayGraph, hiddenCounts } = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1572,9 +1554,49 @@ export default function GraphVisualization() {
     return { degreeById: degree, highDegreeThreshold: threshold, selectedNeighborhoodIds: neighborhood };
   }, [displayGraph.links, selectedNode?.node_id]);
 
+  const connectionsForSelected = useMemo(() => {
+    if (!selectedNode?.node_id) return [];
+    const selectedId = selectedNode.node_id;
+    const items: Array<{
+      node_id: string;
+      name: string;
+      predicate: string;
+      isOutgoing: boolean;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const link of displayGraph.links) {
+      const sourceId = link.source.node_id;
+      const targetId = link.target.node_id;
+      let neighbor: VisualNode | null = null;
+      let isOutgoing = false;
+
+      if (sourceId === selectedId) {
+        neighbor = link.target;
+        isOutgoing = true;
+      } else if (targetId === selectedId) {
+        neighbor = link.source;
+        isOutgoing = false;
+      }
+
+      if (!neighbor) continue;
+      const key = `${neighbor.node_id}:${link.predicate}:${isOutgoing ? 'out' : 'in'}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        node_id: neighbor.node_id,
+        name: neighbor.name,
+        predicate: link.predicate,
+        isOutgoing,
+      });
+    }
+
+    return items;
+  }, [displayGraph.links, selectedNode?.node_id]);
+
   // Focus Mode: when enabled and a node is selected, gently center + zoom in a bit more.
   useEffect(() => {
-    if (!focusMode) return;
+    if (!ui.state.focusMode) return;
     if (!selectedNode?.node_id) return;
     const fg = graphRef.current;
     if (!fg) return;
@@ -1589,7 +1611,112 @@ export default function GraphVisualization() {
     } catch {
       // ignore (non-critical UX enhancement)
     }
-  }, [focusMode, selectedNode?.node_id]);
+  }, [ui.state.focusMode, selectedNode?.node_id]);
+
+  // Handle select parameter when graph is already loaded (not switching graphs)
+  // Extract select param to prevent infinite loops (searchParams object changes on every render)
+  const selectParamRef = useRef<string | null>(null);
+  const currentSelectParam = searchParams?.get('select') || null;
+  if (selectParamRef.current !== currentSelectParam) {
+    selectParamRef.current = currentSelectParam;
+  }
+  const conceptIdParam = selectParamRef.current;
+
+  useEffect(() => {
+    if (!conceptIdParam) return;
+    if (!graphData.nodes.length) return; // Wait for graph to load
+    if (selectedNode?.node_id === conceptIdParam) return; // Already selected
+    
+    // Check if we already loaded resources for this concept
+    if (resourceCacheRef.current.has(conceptIdParam) && selectedResources.length > 0 && selectedNode?.node_id === conceptIdParam) {
+      return; // Already loaded
+    }
+    
+    // Check if concept is in the loaded graph
+    const conceptInGraph = graphData.nodes.find((n: any) => n.node_id === conceptIdParam);
+    if (conceptInGraph) {
+      // Concept is in graph, select it
+      setSelectedNode(conceptInGraph);
+      updateSelectedPosition(conceptInGraph);
+      
+      // Load resources for the concept (only if not cached)
+      if (!resourceCacheRef.current.has(conceptIdParam)) {
+        import('../../api-client').then((api) => {
+          api.getResourcesForConcept(conceptIdParam).then((resources) => {
+            setSelectedResources(resources);
+            resourceCacheRef.current.set(conceptIdParam, resources);
+          }).catch((err) => {
+            console.warn('Failed to load resources for concept:', err);
+          });
+        });
+      } else {
+        // Use cached resources
+        setSelectedResources(resourceCacheRef.current.get(conceptIdParam)!);
+      }
+      
+      // Center on the node
+      setTimeout(() => {
+        if (graphRef.current && conceptInGraph) {
+          if (typeof conceptInGraph.x === 'number' && typeof conceptInGraph.y === 'number') {
+            graphRef.current.centerAt(conceptInGraph.x, conceptInGraph.y, 800);
+            graphRef.current.zoom(2.0, 800);
+          }
+        }
+      }, 100);
+    } else {
+      // Concept not in graph, try to fetch it from API
+      import('../../api-client').then((api) => {
+        api.getConcept(conceptIdParam).then((concept) => {
+          // Add concept to graph if it exists but wasn't loaded
+          setGraphData(prev => {
+            const exists = prev.nodes.some(n => n.node_id === concept.node_id);
+            if (!exists) {
+              // Add the concept to the graph
+              const visualNode: Concept & { domain: string; type: string; x?: number; y?: number } = {
+                ...concept,
+                domain: concept.domain || 'general',
+                type: 'concept',
+              };
+              return { ...prev, nodes: [...prev.nodes, visualNode] };
+            }
+            return prev;
+          });
+          
+          // Select the concept
+          setSelectedNode(concept);
+          updateSelectedPosition(concept);
+          
+          // Load resources (only if not cached)
+          if (!resourceCacheRef.current.has(conceptIdParam)) {
+            api.getResourcesForConcept(conceptIdParam).then((resources) => {
+              setSelectedResources(resources);
+              resourceCacheRef.current.set(conceptIdParam, resources);
+            }).catch((err) => {
+              console.warn('Failed to load resources for concept:', err);
+            });
+          } else {
+            setSelectedResources(resourceCacheRef.current.get(conceptIdParam)!);
+          }
+          
+          // Center on the node
+          setTimeout(() => {
+            if (graphRef.current && concept) {
+              const graphData = graphRef.current.graphData();
+              const nodeInGraph = graphData?.nodes?.find((n: any) => n.node_id === concept.node_id);
+              if (nodeInGraph && typeof nodeInGraph.x === 'number' && typeof nodeInGraph.y === 'number') {
+                graphRef.current.centerAt(nodeInGraph.x, nodeInGraph.y, 800);
+                graphRef.current.zoom(2.0, 800);
+              } else {
+                graphRef.current.zoomToFit(800, 50);
+              }
+            }
+          }, 300);
+        }).catch(() => {
+          ui.actions.setConceptNotFoundBanner(conceptIdParam);
+        });
+      });
+    }
+  }, [conceptIdParam, graphData.nodes.length, selectedNode?.node_id, updateSelectedPosition]);
 
   // Get activeGraphId from URL > sessionState > default
   const getActiveGraphId = useCallback((): string => {
@@ -1604,23 +1731,23 @@ export default function GraphVisualization() {
 
   // Auto-dismiss switch banner after 3 seconds
   useEffect(() => {
-    if (graphSwitchBanner) {
+    if (ui.state.graphSwitchBanner) {
       const timer = setTimeout(() => {
-        setGraphSwitchBanner(null);
+        ui.actions.setGraphSwitchBanner(null);
       }, 3000);
       return () => clearTimeout(timer);
     }
-  }, [graphSwitchBanner]);
+  }, [ui.state.graphSwitchBanner]);
 
   // Auto-dismiss concept not found banner after 5 seconds
   useEffect(() => {
-    if (conceptNotFoundBanner) {
+    if (ui.state.conceptNotFoundBanner) {
       const timer = setTimeout(() => {
-        setConceptNotFoundBanner(null);
+        ui.actions.setConceptNotFoundBanner(null);
       }, 5000);
       return () => clearTimeout(timer);
     }
-  }, [conceptNotFoundBanner]);
+  }, [ui.state.conceptNotFoundBanner]);
 
   // Track if initial load has happened to prevent infinite loops
   const hasInitializedRef = useRef(false);
@@ -1630,31 +1757,44 @@ export default function GraphVisualization() {
   useEffect(() => {
     if (hasInitializedRef.current) return;
     
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/a01a33f1-d489-4279-a9af-9a81bd1c1f3e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'GraphVisualization.tsx:823',message:'Component mount: starting data load',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    
     hasInitializedRef.current = true;
     const targetGraphId = getActiveGraphId();
     lastGraphIdRef.current = targetGraphId;
     
-    // Initial load
-    loadGraph();
-    refreshGraphs();
-    refreshBranches();
-    refreshFocusAreas();
-    
-    // Load teaching style
-    async function loadTeachingStyle() {
+    // Load all data in parallel for faster initial load
+    // Don't block UI - start loading immediately but don't wait
+    async function loadInitialData() {
       try {
-        const style = await getTeachingStyle();
-        setTeachingStyle(style);
+        // First, refresh graphs to get the correct activeGraphId
+        await refreshGraphs();
+        
+        // Load graph in background (non-blocking)
+        // Other data can load in parallel
+        loadGraph(targetGraphId).catch(err => {
+          console.error('Error loading graph:', err);
+        });
+        
+        // Load other data in parallel (non-blocking)
+        Promise.all([
+          refreshBranches(),
+          refreshFocusAreas(),
+          (async () => {
+            try {
+              const style = await getTeachingStyle();
+              setTeachingStyle(style);
+            } catch (err) {
+              // Silently fail - teaching style is optional
+              console.warn('Failed to load teaching style:', err);
+            }
+          })(),
+        ]).catch(err => {
+          console.error('Error loading initial data:', err);
+        });
       } catch (err) {
-        // Silently fail - teaching style is optional
-        console.warn('Failed to load teaching style:', err);
+        console.error('Error loading initial data:', err);
       }
     }
-    loadTeachingStyle();
+    loadInitialData();
   }, []); // Empty deps - only run on mount
 
   // Extract graph_id from URL for stable dependency
@@ -1675,23 +1815,71 @@ export default function GraphVisualization() {
         setSelectedNode(null);
         refreshGraphs(true); // Preserve the graph we just switched to
         refreshBranches();
-        loadGraph().then(() => {
+        loadGraph(targetGraphId).then(() => {
           // After graph loads, try to select concept_id if present
           const conceptIdParam = searchParams?.get('select');
           if (conceptIdParam) {
-            const { getAllGraphData } = require('../../api-client');
-            getAllGraphData().then((data: any) => {
-              const conceptExists = data.nodes?.some((n: any) => n.node_id === conceptIdParam);
-              if (conceptExists) {
-                const concept = data.nodes.find((n: any) => n.node_id === conceptIdParam);
-                if (concept) {
-                  setSelectedNode(concept);
+            // Use getConcept API to fetch full concept data
+            import('../../api-client').then((api) => {
+              api.getConcept(conceptIdParam).then((concept) => {
+                // Set the selected node - this will automatically open the context panel
+                setSelectedNode(concept);
+                updateSelectedPosition(concept);
+                
+                // Load resources for the concept
+                api.getResourcesForConcept(conceptIdParam).then((resources) => {
+                  setSelectedResources(resources);
+                  resourceCacheRef.current.set(conceptIdParam, resources);
+                }).catch((err) => {
+                  console.warn('Failed to load resources for concept:', err);
+                });
+                
+                // Center on the node after a short delay to ensure graph is rendered
+                setTimeout(() => {
+                  if (graphRef.current && concept) {
+                    const graphData = graphRef.current.graphData();
+                    const nodeInGraph = graphData?.nodes?.find((n: any) => n.node_id === concept.node_id);
+                    if (nodeInGraph && typeof nodeInGraph.x === 'number' && typeof nodeInGraph.y === 'number') {
+                      graphRef.current.centerAt(nodeInGraph.x, nodeInGraph.y, 800);
+                      graphRef.current.zoom(2.0, 800);
+                    } else {
+                      // If node not in graph yet, try to zoom to fit
+                      graphRef.current.zoomToFit(800, 50);
+                    }
+                  }
+                }, 300);
+              }).catch(() => {
+                // Concept not found - try to find it in the loaded graph data
+                const graphData = graphRef.current?.graphData();
+                const conceptInGraph = graphData?.nodes?.find((n: any) => n.node_id === conceptIdParam);
+                if (conceptInGraph) {
+                  setSelectedNode(conceptInGraph);
+                  updateSelectedPosition(conceptInGraph);
+                  
+                  // Load resources (only if not cached)
+                  if (!resourceCacheRef.current.has(conceptIdParam)) {
+                    import('../../api-client').then((api) => {
+                      api.getResourcesForConcept(conceptIdParam).then((resources) => {
+                        setSelectedResources(resources);
+                        resourceCacheRef.current.set(conceptIdParam, resources);
+                      }).catch(() => {});
+                    });
+                  } else {
+                    setSelectedResources(resourceCacheRef.current.get(conceptIdParam)!);
+                  }
+                  
+                  setTimeout(() => {
+                    if (graphRef.current && conceptInGraph) {
+                      if (typeof conceptInGraph.x === 'number' && typeof conceptInGraph.y === 'number') {
+                        graphRef.current.centerAt(conceptInGraph.x, conceptInGraph.y, 800);
+                        graphRef.current.zoom(2.0, 800);
+                      }
+                    }
+                  }, 300);
+                } else {
+                  ui.actions.setConceptNotFoundBanner(conceptIdParam);
                 }
-              } else {
-                setConceptNotFoundBanner(conceptIdParam);
-              }
-            }).catch(() => {
-              setConceptNotFoundBanner(conceptIdParam);
+              });
             });
           }
         });
@@ -1702,12 +1890,12 @@ export default function GraphVisualization() {
         setTimeout(() => {
           listGraphs().then((data) => {
             const graph = data.graphs?.find((g: any) => g.graph_id === targetGraphId);
-            setGraphSwitchBanner({
+            ui.actions.setGraphSwitchBanner({
               message: `Switched to ${graph?.name || targetGraphId}`,
               graphName: graph?.name || targetGraphId,
             });
           }).catch(() => {
-            setGraphSwitchBanner({
+            ui.actions.setGraphSwitchBanner({
               message: `Switched to ${targetGraphId}`,
               graphName: targetGraphId,
             });
@@ -1715,7 +1903,7 @@ export default function GraphVisualization() {
         }, 100);
       }).catch((err) => {
         console.error('Failed to switch to graph from URL:', err);
-        loadGraph();
+        loadGraph(targetGraphId);
         refreshGraphs();
         refreshBranches();
       });
@@ -1723,10 +1911,16 @@ export default function GraphVisualization() {
   }, [urlGraphId, activeGraphId, getActiveGraphId]); // Stable dependencies
 
   // Handle highlight_run_id query param
+  const highlightRunIdParamRef = useRef<string | null>(null);
+  const currentHighlightRunId = searchParams?.get('highlight_run_id') || null;
+  if (highlightRunIdParamRef.current !== currentHighlightRunId) {
+    highlightRunIdParamRef.current = currentHighlightRunId;
+  }
+  const runIdParam = highlightRunIdParamRef.current;
+
   useEffect(() => {
-    const runIdParam = searchParams?.get('highlight_run_id');
-    if (runIdParam && runIdParam !== highlightRunId) {
-      setHighlightRunId(runIdParam);
+    if (runIdParam && runIdParam !== ui.state.highlightRunId) {
+      ui.actions.setHighlightRunId(runIdParam);
       // Load run changes
       getIngestionRunChanges(runIdParam)
         .then((changes) => {
@@ -1747,13 +1941,13 @@ export default function GraphVisualization() {
         .catch((err) => {
           console.error('Failed to load run changes:', err);
         });
-    } else if (!runIdParam && highlightRunId) {
-      setHighlightRunId(null);
+    } else if (!runIdParam && ui.state.highlightRunId) {
+      ui.actions.setHighlightRunId(null);
       setRunChanges(null);
       setHighlightedConceptIds(new Set());
       setHighlightedRelationshipIds(new Set());
     }
-  }, [searchParams, highlightRunId]);
+  }, [runIdParam, ui.state.highlightRunId]);
 
   // Apply highlighting to graph data when highlightedConceptIds or highlightedRelationshipIds change
   useEffect(() => {
@@ -1814,95 +2008,75 @@ export default function GraphVisualization() {
 
   // (Chat is now a docked panel; splitter resizing removed)
 
-  // Helper function to extract ticker from a node
-  const extractTicker = useCallback((node: Concept): string | null => {
-    // Check if node has ticker property
-    if ((node as any).ticker) {
-      return (node as any).ticker;
-    }
-    // Check if node name contains ticker in parentheses: "Company Name (TICKER)"
-    const match = node.name.match(/\(([A-Z]{1,5})\)$/);
-    if (match) {
-      return match[1];
-    }
-    // Check tags for ticker:xxx
-    if (node.tags) {
-      const tickerTag = node.tags.find(t => t.startsWith('ticker:'));
-      if (tickerTag) {
-        return tickerTag.split(':')[1];
+  // Get active domain plugin for selected node
+  const getActivePlugin = useCallback((node: Concept | null): ReturnType<typeof getPlugin> | null => {
+    if (!node) return null;
+    // Check domain first
+    const domainPlugin = getPluginForDomain(node.domain || '');
+    if (domainPlugin) return domainPlugin;
+    // Check all plugins for relevance
+    const plugins = [getPlugin('lecture')].filter(Boolean);
+    for (const plugin of plugins) {
+      if (plugin?.isRelevant?.(node)) {
+        return plugin;
       }
     }
     return null;
   }, []);
 
-  // Load finance tracking state when ticker is available
-  useEffect(() => {
-    if (!selectedNode) {
-      setFinanceTrackingState(null);
-      return;
-    }
-
-    const ticker = extractTicker(selectedNode);
-    if (!ticker) {
-      setFinanceTrackingState(null);
-      return;
-    }
-
-    // Load tracking state
-    let cancelled = false;
-    const loadTracking = async () => {
-      try {
-        setIsLoadingTracking(true);
-        const config = await getFinanceTracking(ticker);
-        if (!cancelled) {
-          setFinanceTrackingState(config);
-          // Update trackedTickers set
-          if (config?.enabled) {
-            setTrackedTickers(prev => new Set(prev).add(ticker));
-          } else {
-            setTrackedTickers(prev => {
-              const next = new Set(prev);
-              next.delete(ticker);
-              return next;
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to load finance tracking:', err);
-        if (!cancelled) {
-          setFinanceTrackingState(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingTracking(false);
-        }
-      }
-    };
-    loadTracking();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedNode, extractTicker]);
 
   // Chat input handler
   const handleChatSubmit = useCallback(async (message: string) => {
-    if (!message.trim() || isChatLoading) return;
+    if (!message.trim() || chat.state.isChatLoading) return;
     
-    setIsChatLoading(true);
-    setLoadingStage('Processing your question...');
-    setLastQuestion(message);
-    setChatAnswer(null);
-    setAnswerId(null);
-    setAnswerSections(null);
-    setEvidenceUsed([]);
-    setUsedNodes([]);
-    setSuggestedQuestions([]);
-    setSuggestedActions([]);
-    setRetrievalMeta(null);
+    // Add user message to history immediately so it appears right away
+    const userMessageId = `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    
+    // Add pending message to history (will be updated when response arrives)
+    const pendingMessage = {
+      id: userMessageId,
+      question: message,
+      answer: '', // Empty initially, will be filled when response arrives
+      answerId: null,
+      answerSections: null,
+      timestamp: Date.now(),
+      suggestedQuestions: [],
+      usedNodes: [],
+      suggestedActions: [],
+      retrievalMeta: null,
+      evidenceUsed: [],
+    };
+    chat.actions.addChatMessage(pendingMessage);
+    
+    // Scroll to bottom after adding pending message to show it immediately
+    setTimeout(() => {
+      if (chatStreamRef.current) {
+        chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+      }
+    }, 0);
+    
+    chat.actions.setChatLoading(true);
+    chat.actions.setLoadingStage('Processing your question...');
+    chat.actions.setLastQuestion(message);
+    chat.actions.setChatAnswer(null);
+    chat.actions.setAnswerId(null);
+    chat.actions.setAnswerSections(null);
+    chat.actions.setEvidenceUsed([]);
+    chat.actions.setUsedNodes([]);
+    chat.actions.setSuggestedQuestions([]);
+    chat.actions.setSuggestedActions([]);
+    chat.actions.setRetrievalMeta(null);
     clearEvidenceHighlight();
     
     try {
+      // Convert chat history to the format expected by the API
+      const chatHistoryForAPI = chat.state.chatHistory.map(msg => ({
+        id: msg.id,
+        question: msg.question,
+        answer: msg.answer,
+        timestamp: msg.timestamp,
+      }));
+      
       const response = await fetch('/api/brain-web/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1911,7 +2085,8 @@ export default function GraphVisualization() {
           mode: 'graphrag',
           graph_id: activeGraphId,
           branch_id: activeBranchId,
-          lens: activeLens,
+          lens: undefined,
+          chatHistory: chatHistoryForAPI,
         }),
       });
       
@@ -1920,48 +2095,282 @@ export default function GraphVisualization() {
       }
       
       const data = await response.json();
-      setChatAnswer(data.answer || '');
-      setAnswerId(data.answerId || null);
-      setAnswerSections(data.sections || null);
-      setUsedNodes(data.usedNodes || []);
-      setSuggestedQuestions(data.suggestedQuestions || []);
-      setSuggestedActions(data.suggestedActions || []);
-      setRetrievalMeta(data.retrievalMeta || null);
+      console.log('[Chat] Received response:', {
+        answer: data.answer?.substring(0, 100),
+        suggestedActions: data.suggestedActions,
+        suggestedActionsCount: data.suggestedActions?.length || 0,
+        fullSuggestedActions: data.suggestedActions,
+      });
       
-      // Normalize and set evidence
-      if (data.evidence) {
-        const normalized = normalizeEvidence(data.evidence);
-        setEvidenceUsed(normalized);
+      // Auto-execute actions if this is an action request (user wants to add/create/link something)
+      const isActionRequest = message.toLowerCase().match(/\b(add|create|link|connect)\b.*\b(node|graph|concept)\b/i) ||
+                              message.toLowerCase().match(/\badd\s+\w+\s+to\s+(graph|the\s+graph)\b/i);
+      
+      if (data.suggestedActions && data.suggestedActions.length > 0) {
+        console.log('[Chat] ✅ Actions received:', data.suggestedActions);
         
-        // Auto-highlight evidence if enabled
-        if (autoHighlightEvidence && normalized.length > 0) {
-          await applyEvidenceHighlightWithRetry(normalized, data.retrievalMeta);
+        // Auto-execute if this looks like an action request
+        if (isActionRequest && data.suggestedActions.length > 0) {
+          console.log('[Chat] 🚀 Auto-executing action request');
+          // Execute the first action automatically
+          const action = data.suggestedActions[0];
+          
+          try {
+            chat.actions.setChatLoading(true);
+            chat.actions.setLoadingStage(`Executing: ${action.label}...`);
+            
+            if (action.type === 'add' && action.concept) {
+              const api = await import('../../api-client');
+              
+              // CRITICAL: Set the active graph context in backend before creating concept
+              // This ensures the node is created in the correct graph/workspace
+              console.log('[Auto-Action] Setting active graph context to:', activeGraphId);
+              await api.selectGraph(activeGraphId);
+              
+              const newConcept = await api.createConcept({
+                name: action.concept,
+                domain: action.domain || 'general',
+                type: 'concept',
+                graph_id: activeGraphId, // Explicitly specify which graph to add to
+              });
+              
+              console.log('[Auto-Action] Created concept:', newConcept);
+              
+              // Fetch the full concept from backend to ensure we have all data
+              let fullConcept: Concept;
+              try {
+                fullConcept = await api.getConcept(newConcept.node_id);
+                console.log('[Auto-Action] Fetched full concept:', fullConcept);
+              } catch (err) {
+                console.warn('[Auto-Action] Could not fetch concept, using created one:', err);
+                fullConcept = newConcept;
+              }
+              
+              const visualNode: Concept & { domain: string; type: string } = {
+                ...fullConcept,
+                domain: action.domain || 'general',
+                type: 'concept',
+              };
+              
+              // Add to graph immediately
+              setGraphData(prev => {
+                const exists = prev.nodes.some(n => n.node_id === fullConcept.node_id);
+                if (exists) {
+                  console.log('[Auto-Action] Node already in graph, updating it');
+                  return {
+                    ...prev,
+                    nodes: prev.nodes.map(n => n.node_id === fullConcept.node_id ? visualNode : n),
+                  };
+                }
+                console.log('[Auto-Action] Adding new node to graph:', visualNode);
+                return { ...prev, nodes: [...prev.nodes, visualNode] };
+              });
+              
+              // Refresh graph, but ensure our node persists
+              await loadGraph(activeGraphId);
+              
+              // After loadGraph, ensure our node is still there (it might be filtered out by limits)
+              setTimeout(() => {
+                setGraphData(prev => {
+                  const nodeExists = prev.nodes.some(n => n.node_id === fullConcept.node_id);
+                  if (!nodeExists) {
+                    console.log('[Auto-Action] Node missing after loadGraph (likely filtered by limits), re-adding');
+                    return { ...prev, nodes: [...prev.nodes, visualNode] };
+                  }
+                  return prev;
+                });
+              }, 100);
+              
+              setTimeout(() => {
+                setGraphData(prev => {
+                  const nodeExists = prev.nodes.some(n => n.node_id === newConcept.node_id);
+                  if (!nodeExists) {
+                    return { ...prev, nodes: [...prev.nodes, visualNode] };
+                  }
+                  return prev;
+                });
+                
+                const updatedGraphData = graphRef.current?.graphData();
+                const conceptInGraph = updatedGraphData?.nodes?.find((n: any) => n.node_id === newConcept.node_id) || visualNode;
+                setSelectedNode(conceptInGraph);
+                updateSelectedPosition(conceptInGraph);
+                
+                setTimeout(() => {
+                  if (graphRef.current && conceptInGraph) {
+                    if (conceptInGraph.x !== undefined && conceptInGraph.y !== undefined) {
+                      graphRef.current.centerAt(conceptInGraph.x, conceptInGraph.y, 1000);
+                      graphRef.current.zoom(1.5, 1000);
+                    } else {
+                      graphRef.current.zoomToFit(1000, 50);
+                    }
+                  }
+                }, 300);
+              }, 600);
+              
+              chat.actions.setChatAnswer(`✅ Added "${action.concept}" to the graph!`);
+            } else if (action.type === 'link' && action.source && action.target) {
+              const api = await import('../../api-client');
+              const sourceConcept = await resolveConceptByName(action.source);
+              const targetConcept = await resolveConceptByName(action.target);
+              
+              if (!sourceConcept || !targetConcept) {
+                throw new Error(`Could not find concepts: ${action.source} or ${action.target}`);
+              }
+              
+              await api.createRelationshipByIds(
+                sourceConcept.node_id,
+                targetConcept.node_id,
+                action.label || 'related_to'
+              );
+              
+              await loadGraph(activeGraphId);
+              chat.actions.setChatAnswer(`✅ Linked "${action.source}" to "${action.target}"!`);
+            }
+            
+            chat.actions.setLoadingStage('');
+          } catch (err: any) {
+            console.error('[Auto-Action] Error:', err);
+            chat.actions.setChatAnswer(`❌ Failed to execute: ${err.message || 'Unknown error'}`);
+          } finally {
+            chat.actions.setChatLoading(false);
+            chat.actions.setLoadingStage('');
+          }
+        }
+      } else {
+        console.log('[Chat] ⚠️ No actions in response');
+      }
+      // Normalize and set evidence first
+      let normalizedEvidence: EvidenceItem[] = [];
+      if (data.evidence) {
+        normalizedEvidence = normalizeEvidence(data.evidence);
+      } else if (data.evidenceUsed) {
+        normalizedEvidence = data.evidenceUsed;
+      }
+      
+      // Update the pending message in history with the complete answer FIRST
+      // This ensures history is persisted before setting transient state
+      if (data.answer && message.trim()) {
+        // Use functional update to ensure we have the latest state
+        const currentHistory = chat.state.chatHistory;
+        const messageIndex = currentHistory.findIndex(msg => msg.id === userMessageId);
+        
+        if (messageIndex >= 0) {
+          // Update existing message
+          const updatedHistory = currentHistory.map(msg => 
+            msg.id === userMessageId ? {
+              ...msg,
+              answer: data.answer,
+              answerId: data.answerId || null,
+              answerSections: data.answer_sections || data.sections || null,
+              suggestedQuestions: data.suggestedQuestions || [],
+              usedNodes: data.usedNodes || [],
+              suggestedActions: data.suggestedActions || [],
+              retrievalMeta: data.retrievalMeta || null,
+              evidenceUsed: normalizedEvidence,
+            } : msg
+          );
+          chat.actions.setChatHistory(updatedHistory);
+        } else {
+          // Message not found, add it (shouldn't happen, but defensive)
+          console.warn('[Chat] Message not found in history, adding new message');
+          const newMessage: ChatMessage = {
+            id: userMessageId,
+            question: message,
+            answer: data.answer,
+            answerId: data.answerId || null,
+            answerSections: data.answer_sections || data.sections || null,
+            timestamp: Date.now(),
+            suggestedQuestions: data.suggestedQuestions || [],
+            usedNodes: data.usedNodes || [],
+            suggestedActions: data.suggestedActions || [],
+            retrievalMeta: data.retrievalMeta || null,
+            evidenceUsed: normalizedEvidence,
+          };
+          chat.actions.addChatMessage(newMessage);
         }
       }
       
-      // Scroll chat to bottom
-      if (chatStreamRef.current) {
-        chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+      // Set transient state (for display while answer is streaming/updating)
+      // Note: chatAnswer will be cleared once it's confirmed in history via useEffect
+      chat.actions.setChatAnswer(data.answer || '');
+      chat.actions.setAnswerId(data.answerId || null);
+      chat.actions.setAnswerSections(data.answer_sections || data.sections || null);
+      chat.actions.setUsedNodes(data.usedNodes || []);
+      chat.actions.setSuggestedQuestions(data.suggestedQuestions || []);
+      chat.actions.setSuggestedActions(data.suggestedActions || []);
+      chat.actions.setRetrievalMeta(data.retrievalMeta || null);
+      chat.actions.setEvidenceUsed(normalizedEvidence);
+      
+      // Auto-highlight evidence if enabled
+      if (autoHighlightEvidence && normalizedEvidence.length > 0) {
+        await applyEvidenceHighlightWithRetry(normalizedEvidence, data.retrievalMeta);
       }
+      
+      // Session management: Create or update session
+      let currentSessionId = getCurrentSessionId();
+      
+      // If no session exists, create one (first question)
+      if (!currentSessionId && message.trim()) {
+        try {
+          const newSession = await createChatSession(
+            message,
+            data.answer || '',
+            data.answerId || null,
+            activeGraphId,
+            activeBranchId
+          );
+          currentSessionId = newSession.id;
+          setCurrentSessionId(currentSessionId);
+        } catch (err) {
+          console.warn('Failed to create session:', err);
+        }
+      }
+      
+      // Add message to session
+      if (currentSessionId && data.answer && message.trim()) {
+        addMessageToSession(
+          currentSessionId,
+          message,
+          data.answer,
+          data.answerId || null,
+          data.suggestedQuestions || [],
+          normalizedEvidence
+        );
+      }
+      
+      // Scroll chat to bottom after a brief delay to ensure DOM is updated
+      setTimeout(() => {
+        if (chatStreamRef.current) {
+          chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+        }
+      }, 100);
     } catch (err) {
       console.error('Chat error:', err);
-      setChatAnswer('I encountered an error while processing your question. Please try again.');
+      chat.actions.setChatAnswer('I encountered an error while processing your question. Please try again.');
     } finally {
-      setIsChatLoading(false);
-      setLoadingStage('');
+      chat.actions.setChatLoading(false);
+      chat.actions.setLoadingStage('');
     }
-  }, [isChatLoading, activeGraphId, activeBranchId, activeLens, autoHighlightEvidence, applyEvidenceHighlightWithRetry, clearEvidenceHighlight]);
+  }, [chat.actions, chat.state.isChatLoading, activeGraphId, activeBranchId, autoHighlightEvidence, applyEvidenceHighlightWithRetry, clearEvidenceHighlight]);
 
   // Node selection handler
   const handleNodeClick = useCallback((node: any) => {
     const concept = graphData.nodes.find(n => n.node_id === node.node_id);
-    if (concept) {
-      setSelectedNode(concept);
-      trackConceptViewed(concept.node_id, concept.name);
-      pushRecentConceptView({ id: concept.node_id, name: concept.name });
-      updateSelectedPosition(concept);
+    if (!concept) return;
+    
+    // Always allow node selection - clear any loading states if switching nodes
+    const isDifferentNode = selectedNode?.node_id !== concept.node_id;
+    if (isDifferentNode && loadingNeighbors) {
+      // Clear loading state when switching to a different node
+      loadingNeighborsRef.current = null;
+      setLoadingNeighbors(null);
     }
-  }, [graphData.nodes, updateSelectedPosition]);
+    
+    setSelectedNode(concept);
+    trackConceptViewed(concept.node_id, concept.name);
+    pushRecentConceptView({ id: concept.node_id, name: concept.name });
+    updateSelectedPosition(concept);
+  }, [graphData.nodes, updateSelectedPosition, loadingNeighbors, selectedNode]);
 
   // Graph switch handler
   const handleGraphSwitch = useCallback(async (graphId: string) => {
@@ -1969,14 +2378,46 @@ export default function GraphVisualization() {
       await selectGraph(graphId);
       setActiveGraphId(graphId);
       setSelectedNode(null);
-      await loadGraph();
+      await loadGraph(graphId);
       await refreshGraphs();
       await refreshBranches();
     } catch (err) {
       console.error('Failed to switch graph:', err);
-      setGraphSwitchError(err instanceof Error ? err.message : 'Failed to switch graph');
+      ui.actions.setGraphSwitchError(err instanceof Error ? err.message : 'Failed to switch graph');
     }
   }, [loadGraph, refreshGraphs, refreshBranches]);
+
+  // Load chat session from URL param
+  useEffect(() => {
+    const chatSessionId = searchParams?.get('chat');
+    if (chatSessionId) {
+      const session = getChatSession(chatSessionId);
+      if (session) {
+        setCurrentSessionId(session.id);
+        // Load session messages into chat history
+        const sessionMessages = session.messages.map(msg => ({
+          id: msg.id,
+          question: msg.question,
+          answer: msg.answer,
+          answerId: msg.answerId,
+          answerSections: null,
+          timestamp: msg.timestamp,
+          suggestedQuestions: msg.suggestedQuestions || [],
+          usedNodes: [],
+          suggestedActions: [],
+          retrievalMeta: null,
+          evidenceUsed: msg.evidenceUsed || [],
+        }));
+        chat.actions.setChatHistory(sessionMessages);
+        // Scroll to bottom
+        setTimeout(() => {
+          if (chatStreamRef.current) {
+            chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+          }
+        }, 100);
+      }
+    }
+  }, [searchParams, chat.actions]);
 
   // Focus handler
   const handleFocus = useCallback(() => {
@@ -1995,20 +2436,12 @@ export default function GraphVisualization() {
       const resource = selectedResources.find(r => r.resource_id === resourceId);
       if (resource) {
         setExpandedResources(prev => new Set(prev).add(resourceId));
-        setNodePanelTab('evidence');
+        ui.actions.setNodePanelTab('evidence');
       }
     });
   }, [selectedResources, selectedNode]);
 
-  if (loading) {
-    return (
-      <div className="loader">
-        <div className="loader__ring" />
-        <p className="loader__text">Mapping your knowledge…</p>
-      </div>
-    );
-  }
-
+  // Don't block UI - show everything immediately, just show loading state in graph area
   return (
     <div className="app-shell">
       {/* Toolbar */}
@@ -2018,7 +2451,7 @@ export default function GraphVisualization() {
           graphs={graphs}
           activeGraphId={activeGraphId}
           onSelectGraph={handleGraphSwitch}
-          onRequestCreateGraph={() => setShowGraphModal(true)}
+          onRequestCreateGraph={() => ui.actions.setShowGraphModal(true)}
           branches={branches}
           activeBranchId={activeBranchId}
           onSelectBranch={async (branchId: string) => {
@@ -2031,7 +2464,7 @@ export default function GraphVisualization() {
               console.error('Failed to switch branch:', err);
             }
           }}
-          graphSwitchError={graphSwitchError}
+          graphSwitchError={ui.state.graphSwitchError}
           canFocus={!!selectedNode}
           onFocus={handleFocus}
           canFork={!!selectedNode}
@@ -2078,50 +2511,56 @@ export default function GraphVisualization() {
           domainsCount={uniqueDomains.length}
           overviewMeta={overviewMeta}
           loadingNeighbors={loadingNeighbors}
-          showLectureIngest={showLectureIngest}
-          onToggleLectureIngest={() => setShowLectureIngest(!showLectureIngest)}
-          lecturePopover={showLectureIngest ? (
-            <div style={{ padding: '12px', background: 'var(--panel)', borderRadius: '8px', boxShadow: 'var(--shadow)', minWidth: '300px' }}>
-              <ContentImportForm
-                onIngest={async (title, text, domain) => {
-                  setLectureIngestLoading(true);
-                  try {
-                    const result = await ingestLecture(activeGraphId, title, text, domain);
-                    setLectureIngestResult(result);
-                    await loadGraph();
-                  } catch (err) {
-                    console.error('Failed to ingest lecture:', err);
-                  } finally {
-                    setLectureIngestLoading(false);
-                  }
-                }}
-                isLoading={lectureIngestLoading}
-                result={lectureIngestResult}
-                onClose={() => setShowLectureIngest(false)}
-              />
-            </div>
-          ) : undefined}
-          showControls={showControls}
-          onToggleControls={() => setShowControls(!showControls)}
-          focusMode={focusMode}
-          onToggleFocusMode={() => setFocusMode(!focusMode)}
-          showFilters={showFilters}
-          onToggleFilters={() => setShowFilters(!showFilters)}
-          sourceLayer={sourceLayer}
-          onSourceLayerChange={setSourceLayer}
+          showContentIngest={ui.state.showContentIngest}
+          onToggleContentIngest={() => ui.actions.setShowContentIngest(!ui.state.showContentIngest)}
+          contentIngestPopover={ui.state.showContentIngest ? (() => {
+            // Find active plugin that supports ingestion
+            const lecturePlugin = getPlugin('lecture');
+            if (!lecturePlugin?.handleIngestion) return undefined;
+            
+            return (
+              <div style={{ padding: '12px', background: 'var(--panel)', borderRadius: '8px', boxShadow: 'var(--shadow)', minWidth: '300px' }}>
+                <ContentImportForm
+                  onIngest={async (title, text, domain) => {
+                    ui.actions.setContentIngestLoading(true);
+                    try {
+                      const result = await lecturePlugin.handleIngestion!(activeGraphId, title, text, domain);
+                      setContentIngestResult(result);
+                      await loadGraph();
+                    } catch (err) {
+                      console.error('Failed to ingest content:', err);
+                    } finally {
+                      ui.actions.setContentIngestLoading(false);
+                    }
+                  }}
+                  isLoading={ui.state.contentIngestLoading}
+                  result={contentIngestResult}
+                  onClose={() => ui.actions.setShowContentIngest(false)}
+                />
+              </div>
+            );
+          })() : undefined}
+          showControls={ui.state.showControls}
+          onToggleControls={() => ui.actions.setShowControls(!ui.state.showControls)}
+          focusMode={ui.state.focusMode}
+          onToggleFocusMode={() => ui.actions.setFocusMode(!ui.state.focusMode)}
+          showFilters={filters.state.showFilters}
+          onToggleFilters={() => filters.actions.setShowFilters(!filters.state.showFilters)}
+          sourceLayer={filters.state.sourceLayer}
+          onSourceLayerChange={filters.actions.setSourceLayer}
         />
       </div>
 
       {/* Main layout */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: '16px', padding: '0 16px 16px' }}>
         {/* Session Drawer (left sidebar) */}
-        {!sidebarCollapsed && (
+        {!ui.state.sidebarCollapsed && (
           <SessionDrawer
-            isCollapsed={sidebarCollapsed}
-            onToggleCollapse={() => setSidebarCollapsed(true)}
+            isCollapsed={ui.state.sidebarCollapsed}
+            onToggleCollapse={() => ui.actions.setSidebarCollapsed(true)}
           />
         )}
-        {sidebarCollapsed && (
+        {ui.state.sidebarCollapsed && (
           <div style={{
             width: '40px',
             background: 'var(--panel)',
@@ -2131,7 +2570,7 @@ export default function GraphVisualization() {
             padding: '12px 8px',
           }}>
             <button
-              onClick={() => setSidebarCollapsed(false)}
+              onClick={() => ui.actions.setSidebarCollapsed(false)}
               style={{
                 background: 'transparent',
                 border: '1px solid var(--border)',
@@ -2142,6 +2581,7 @@ export default function GraphVisualization() {
                 fontSize: '14px',
                 width: '100%',
               }}
+              aria-label="Expand sidebar"
               title="Expand sidebar"
             >
               →
@@ -2151,14 +2591,30 @@ export default function GraphVisualization() {
 
         {/* Graph canvas */}
         <div ref={graphCanvasRef} className="graph-canvas" style={{ position: 'relative', flex: 1 }}>
+          {loading && graphData.nodes.length === 0 && (
+            <div style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              zIndex: 10,
+              textAlign: 'center',
+              pointerEvents: 'none',
+            }}>
+              <div className="loader__ring" style={{ margin: '0 auto 16px' }} />
+              <p style={{ color: 'var(--muted)', fontSize: '14px', margin: 0 }}>
+                Mapping your knowledge…
+              </p>
+            </div>
+          )}
           <ForceGraph2D
             ref={graphRef}
             graphData={displayGraph}
             nodeLabel={(node: any) => {
-              const zoom = zoomTransform.k || zoomLevel || 1;
+              const zoom = ui.state.zoomTransform.k || ui.state.zoomLevel || 1;
               const isHighDegree = (degreeById.get(node.node_id) || 0) >= highDegreeThreshold;
               const isInNeighborhood = selectedNeighborhoodIds.has(node.node_id);
-              const isEvidence = evidenceNodeIds.has(node.node_id);
+              const isEvidence = chat.state.evidenceNodeIds.has(node.node_id);
               const isHighlighted = (node as any).__highlighted;
               
               // Show label if: zoomed in enough, high degree, in neighborhood, evidence, or highlighted
@@ -2170,7 +2626,7 @@ export default function GraphVisualization() {
             nodeColor={(node: any) => {
               const domain = node.domain || 'general';
               const color = domainColors.get(domain) || '#94a3b8';
-              const isEvidence = evidenceNodeIds.has(node.node_id);
+              const isEvidence = chat.state.evidenceNodeIds.has(node.node_id);
               const isHighlighted = (node as any).__highlighted;
               
               if (isHighlighted) {
@@ -2189,7 +2645,7 @@ export default function GraphVisualization() {
               return Math.max(4, Math.min(12, 4 + degree * 0.5));
             }}
             linkColor={(link: any) => {
-              const isEvidence = evidenceLinkIds.has(`${link.source.node_id}-${link.target.node_id}-${link.predicate}`);
+              const isEvidence = chat.state.evidenceLinkIds.has(`${link.source.node_id}-${link.target.node_id}-${link.predicate}`);
               const isHighlighted = (link as any).__highlighted;
               
               if (isHighlighted) {
@@ -2204,7 +2660,7 @@ export default function GraphVisualization() {
               return 'rgba(15, 23, 42, 0.2)';
             }}
             linkWidth={(link: any) => {
-              const isEvidence = evidenceLinkIds.has(`${link.source.node_id}-${link.target.node_id}-${link.predicate}`);
+              const isEvidence = chat.state.evidenceLinkIds.has(`${link.source.node_id}-${link.target.node_id}-${link.predicate}`);
               const isHighlighted = (link as any).__highlighted;
               return isEvidence || isHighlighted ? 3 : 1;
             }}
@@ -2213,18 +2669,34 @@ export default function GraphVisualization() {
               node.fx = node.x;
               node.fy = node.y;
             }}
-            onBackgroundClick={() => setSelectedNode(null)}
-            d3Force={forceCollide().radius((node: any) => {
-              const degree = degreeById.get(node.node_id) || 0;
-              return Math.max(8, Math.min(20, 8 + degree * 0.3));
-            })}
-            cooldownTicks={100}
+            onBackgroundClick={() => {
+              // Clear loading states when clicking background to prevent UI lock
+              if (loadingNeighbors) {
+                loadingNeighborsRef.current = null;
+                setLoadingNeighbors(null);
+              }
+              setSelectedNode(null);
+            }}
+            d3Force={(name: string) => {
+              if (name === 'collide') {
+                return forceCollide().radius((node: any) => {
+                  const degree = degreeById.get(node.node_id) || 0;
+                  return Math.max(8, Math.min(20, 8 + degree * 0.3));
+                });
+              }
+              // For isolated nodes (no links), add center force to keep them visible
+              if (name === 'center' && displayGraph.links.length === 0) {
+                return forceCenter();
+              }
+              return null;
+            }}
+            cooldownTicks={displayGraph.links.length === 0 ? 50 : 100}
             onEngineStop={() => {
               recomputeDomainBubbles();
             }}
             onZoom={(transform: any) => {
-              setZoomTransform(transform);
-              setZoomLevel(transform.k);
+              ui.actions.setZoomTransform(transform);
+              ui.actions.setZoomLevel(transform.k);
             }}
           />
           
@@ -2234,9 +2706,309 @@ export default function GraphVisualization() {
           </div>
           
           {/* Focus hint */}
-          {selectedNode && !focusMode && (
+          {selectedNode && !ui.state.focusMode && (
             <div className="focus-hint">
               💡 Press Focus to center on selected node
+            </div>
+          )}
+
+          {/* Controls Panel */}
+          {ui.state.showControls && (
+            <div style={{
+              position: 'absolute',
+              top: '16px',
+              right: '16px',
+              background: 'var(--panel)',
+              border: '1px solid var(--border)',
+              borderRadius: '12px',
+              padding: '16px',
+              boxShadow: 'var(--shadow)',
+              zIndex: 1000,
+              minWidth: '280px',
+              maxWidth: '400px',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: '600', margin: 0 }}>Graph Controls</h3>
+                <button
+                  onClick={() => ui.actions.setShowControls(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--muted)',
+                    cursor: 'pointer',
+                    fontSize: '18px',
+                    padding: '0',
+                    width: '24px',
+                    height: '24px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title="Close controls"
+                >
+                  ×
+                </button>
+              </div>
+              
+              <div className="graph-controls">
+                {/* Zoom Level */}
+                <div className="control-card">
+                  <div className="control-header">
+                    <span>Zoom Level</span>
+                    <span className="control-value">{Math.round((ui.state.zoomLevel || 1) * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3"
+                    step="0.1"
+                    value={ui.state.zoomLevel || 1}
+                    onChange={(e) => {
+                      const zoom = parseFloat(e.target.value);
+                      ui.actions.setZoomLevel(zoom);
+                      if (graphRef.current) {
+                        graphRef.current.zoom(zoom);
+                      }
+                    }}
+                    style={{ width: '100%', marginTop: '8px' }}
+                  />
+                  <div className="control-caption">Adjust graph zoom level</div>
+                </div>
+
+                {/* Domain Spread */}
+                <div className="control-card">
+                  <div className="control-header">
+                    <span>Domain Spread</span>
+                    <span className="control-value">{domainSpread.toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2.5"
+                    step="0.1"
+                    value={domainSpread}
+                    onChange={(e) => {
+                      const spread = parseFloat(e.target.value);
+                      setDomainSpread(spread);
+                      // Trigger recomputation of domain bubbles
+                      setTimeout(() => {
+                        if (graphRef.current) {
+                          recomputeDomainBubbles();
+                        }
+                      }, 100);
+                    }}
+                    style={{ width: '100%', marginTop: '8px' }}
+                  />
+                  <div className="control-caption">Control domain clustering</div>
+                </div>
+
+                {/* Domain Visibility */}
+                {Array.from(domainColors.keys()).length > 0 && (
+                  <div className="control-card control-card--legend">
+                    <div className="control-header">
+                      <span>Domain Visibility</span>
+                    </div>
+                    <div className="legend" style={{ marginTop: '8px' }}>
+                      {Array.from(domainColors.entries()).map(([domain, color]) => {
+                        const isSelected = selectedDomains.has(domain);
+                        return (
+                          <label
+                            key={domain}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                if (isSelected) {
+                                  setSelectedDomains(prev => {
+                                    const next = new Set(prev);
+                                    next.delete(domain);
+                                    return next;
+                                  });
+                                } else {
+                                  setSelectedDomains(prev => new Set(prev).add(domain));
+                                }
+                              }}
+                              style={{ cursor: 'pointer' }}
+                            />
+                            <span
+                              className="legend-dot"
+                              style={{ backgroundColor: color }}
+                            />
+                            <span style={{ textTransform: 'capitalize' }}>{domain}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div className="control-caption">Toggle domain visibility</div>
+                  </div>
+                )}
+
+                {/* Zoom to Fit */}
+                <div className="control-card">
+                  <button
+                    onClick={() => {
+                      if (graphRef.current) {
+                        graphRef.current.zoomToFit(400, 50);
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      background: 'var(--accent)',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Zoom to Fit
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Filters Panel */}
+          {filters.state.showFilters && (
+            <div style={{
+              position: 'absolute',
+              top: ui.state.showControls ? 'calc(16px + 320px)' : '16px',
+              right: '16px',
+              background: 'var(--panel)',
+              border: '1px solid var(--border)',
+              borderRadius: '12px',
+              padding: '16px',
+              boxShadow: 'var(--shadow)',
+              zIndex: 999,
+              minWidth: '280px',
+              maxWidth: '400px',
+              maxHeight: ui.state.showControls ? 'calc(80vh - 340px)' : '80vh',
+              overflowY: 'auto',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: '600', margin: 0 }}>Relationship Filters</h3>
+                <button
+                  onClick={() => filters.actions.setShowFilters(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--muted)',
+                    cursor: 'pointer',
+                    fontSize: '18px',
+                    padding: '0',
+                    width: '24px',
+                    height: '24px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title="Close filters"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* Status Filters */}
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px' }}>Status</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={filters.state.filterStatusAccepted}
+                        onChange={(e) => filters.actions.setStatusAccepted(e.target.checked)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <span>Accepted</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={filters.state.filterStatusProposed}
+                        onChange={(e) => filters.actions.setStatusProposed(e.target.checked)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <span>Proposed</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px' }}>
+                      <input
+                        type="checkbox"
+                        checked={filters.state.filterStatusRejected}
+                        onChange={(e) => filters.actions.setStatusRejected(e.target.checked)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <span>Rejected</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Confidence Threshold */}
+                <div>
+                  <div className="control-header">
+                    <span>Confidence Threshold</span>
+                    <span className="control-value">{(filters.state.filterConfidenceThreshold * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={filters.state.filterConfidenceThreshold}
+                    onChange={(e) => filters.actions.setConfidenceThreshold(parseFloat(e.target.value))}
+                    style={{ width: '100%', marginTop: '8px' }}
+                  />
+                  <div className="control-caption">Hide relationships below this confidence</div>
+                </div>
+
+                {/* Source Filters */}
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px' }}>Sources</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {['SEC', 'IR', 'NEWS', 'MANUAL'].map((source) => (
+                      <label key={source} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '12px' }}>
+                        <input
+                          type="checkbox"
+                          checked={filters.state.filterSources.has(source)}
+                          onChange={() => filters.actions.toggleFilterSource(source)}
+                          style={{ cursor: 'pointer' }}
+                        />
+                        <span>{source}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Reset Filters */}
+                <button
+                  onClick={() => filters.actions.resetFilters()}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: 'transparent',
+                    color: 'var(--accent)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset Filters
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -2254,9 +3026,16 @@ export default function GraphVisualization() {
             setEvidenceFilter={setEvidenceFilter}
             evidenceSearch={evidenceSearch}
             setEvidenceSearch={setEvidenceSearch}
-            activeTab={nodePanelTab}
-            setActiveTab={setNodePanelTab}
-            onClose={() => setSelectedNode(null)}
+            activeTab={ui.state.nodePanelTab}
+            setActiveTab={ui.actions.setNodePanelTab}
+            onClose={() => {
+              // Clear loading states when closing to prevent UI lock
+              if (loadingNeighbors) {
+                loadingNeighborsRef.current = null;
+                setLoadingNeighbors(null);
+              }
+              setSelectedNode(null);
+            }}
             onFetchEvidence={async () => {
               if (!selectedNode) return;
               setIsResourceLoading(true);
@@ -2283,23 +3062,43 @@ export default function GraphVisualization() {
               }
             }}
             domainColors={domainColors}
+            activeGraphId={activeGraphId}
+            onSwitchGraph={async (graphId: string, nodeId?: string) => {
+              // Switch to the target graph
+              setActiveGraphId(graphId);
+              await loadGraph(graphId);
+              // If nodeId provided, select that node
+              if (nodeId) {
+                const api = await import('../../api-client');
+                const concept = await api.getConcept(nodeId);
+                setSelectedNode(concept);
+                updateSelectedPosition(concept);
+                // Center on the node
+                setTimeout(() => {
+                  if (graphRef.current && concept) {
+                    const node = concept;
+                    if (node.x !== undefined && node.y !== undefined) {
+                      graphRef.current.centerAt(node.x, node.y, 1000);
+                      graphRef.current.zoom(1.5, 1000);
+                    } else {
+                      graphRef.current.zoomToFit(1000, 50);
+                    }
+                  }
+                }, 300);
+              }
+            }}
             neighborCount={displayGraph.links.filter(l => 
               l.source.node_id === selectedNode.node_id || l.target.node_id === selectedNode.node_id
             ).length}
-            isFinanceRelevant={!!extractTicker(selectedNode)}
+            connections={connectionsForSelected}
             IS_DEMO_MODE={IS_DEMO_MODE}
             activityEvents={activityEvents}
-            financeTabContent={financeLensEnabled && selectedNode ? (
-              <div style={{ padding: '12px' }}>
-                <p>Finance lens content for {selectedNode.name}</p>
-              </div>
-            ) : undefined}
           />
         )}
 
         {/* Chat panel */}
         <div style={{
-          width: isChatMaximized ? '100%' : isChatExpanded ? '500px' : '350px',
+          width: chat.state.isChatMaximized ? '100%' : chat.state.isChatExpanded ? '500px' : '350px',
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--panel)',
@@ -2313,56 +3112,164 @@ export default function GraphVisualization() {
             padding: '12px 16px',
             borderBottom: '1px solid var(--border)',
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
+            flexDirection: 'column',
+            gap: '8px',
           }}>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <select
-                value={chatMode}
-                onChange={(e) => setChatMode(e.target.value as any)}
-                style={{
-                  padding: '4px 8px',
-                  border: '1px solid var(--border)',
-                  borderRadius: '6px',
-                  fontSize: '12px',
-                  background: 'var(--background)',
-                }}
-              >
-                <option value="Ask">Ask</option>
-                <option value="Explore Paths">Explore Paths</option>
-                <option value="Summaries">Summaries</option>
-                <option value="Gaps">Gaps</option>
-              </select>
+            {/* Header row */}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '600', margin: 0, color: 'var(--ink)' }}>
+                Chat
+              </h3>
+              {chat.state.chatHistory.length > 0 && (
+                <button
+                  onClick={() => {
+                    if (confirm('Clear chat history?')) {
+                      chat.actions.setChatHistory([]);
+                      chat.actions.setChatAnswer(null);
+                      chat.actions.setLastQuestion('');
+                      setCurrentSessionId(null);
+                    }
+                  }}
+                  style={{
+                    padding: '4px 8px',
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    color: 'var(--muted)',
+                  }}
+                  title="Clear chat history"
+                >
+                  Clear
+                </button>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
+            
+            {/* Control buttons row */}
+            <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
               <button
-                onClick={() => setIsChatExpanded(!isChatExpanded)}
+                onClick={() => {
+                  // Maximize/Expand chat
+                  if (!chat.state.isChatExpanded) {
+                    chat.actions.setChatExpanded(true);
+                  }
+                  if (!chat.state.isChatMaximized) {
+                    chat.actions.setChatMaximized(true);
+                  }
+                }}
+                disabled={chat.state.isChatMaximized}
                 style={{
                   padding: '4px 8px',
                   background: 'transparent',
                   border: '1px solid var(--border)',
                   borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '12px',
+                  cursor: chat.state.isChatMaximized ? 'default' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: chat.state.isChatMaximized ? 'var(--muted)' : 'var(--ink)',
+                  opacity: chat.state.isChatMaximized ? 0.5 : 1,
+                  minWidth: '25px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
+                aria-label="Maximize chat"
+                title="Maximize chat"
               >
-                {isChatExpanded ? '−' : '+'}
+                +
               </button>
               <button
-                onClick={() => setIsChatMaximized(!isChatMaximized)}
+                onClick={() => {
+                  // Minimize chat - restore to normal size
+                  chat.actions.setChatMaximized(false);
+                  chat.actions.setChatExpanded(false);
+                }}
+                disabled={!chat.state.isChatMaximized && !chat.state.isChatExpanded}
                 style={{
                   padding: '4px 8px',
                   background: 'transparent',
                   border: '1px solid var(--border)',
                   borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '12px',
+                  cursor: (!chat.state.isChatMaximized && !chat.state.isChatExpanded) ? 'default' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  color: (!chat.state.isChatMaximized && !chat.state.isChatExpanded) ? 'var(--muted)' : 'var(--ink)',
+                  opacity: (!chat.state.isChatMaximized && !chat.state.isChatExpanded) ? 0.5 : 1,
+                  minWidth: '25px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
+                aria-label="Minimize chat"
+                title="Minimize chat"
               >
-                {isChatMaximized ? '⊟' : '⊞'}
+                −
               </button>
             </div>
           </div>
+
+          {/* Chat input - at top initially, moves to bottom after first message with answer */}
+          {(chat.state.chatHistory.length === 0 || (chat.state.chatHistory.length > 0 && !chat.state.chatHistory.some(msg => msg.answer && msg.answer.trim()))) && (
+            <div style={{
+              padding: '12px',
+              borderBottom: '1px solid var(--border)',
+            }}>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
+                  if (textarea?.value) {
+                    handleChatSubmit(textarea.value);
+                    textarea.value = '';
+                    textarea.style.height = 'auto';
+                  }
+                }}
+              >
+                <div className="chat-input-row" style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                  <textarea
+                    placeholder="Ask a question..."
+                    disabled={chat.state.isChatLoading}
+                    className="chat-input"
+                    style={{
+                      padding: '10px 14px',
+                      fontSize: '14px',
+                      minHeight: '44px',
+                      maxHeight: '200px',
+                      resize: 'none',
+                      fontFamily: 'inherit',
+                      lineHeight: '1.5',
+                    }}
+                    onInput={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      target.style.height = 'auto';
+                      target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        const form = e.currentTarget.closest('form');
+                        if (form) {
+                          form.requestSubmit();
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={chat.state.isChatLoading}
+                    className="pill pill--primary"
+                    style={{
+                      padding: '10px 20px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {chat.state.isChatLoading ? '...' : 'Ask'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
 
           {/* Chat content */}
           <div
@@ -2376,31 +3283,267 @@ export default function GraphVisualization() {
               gap: '16px',
             }}
           >
-            {isChatLoading && (
+            {/* Display chat history */}
+            {chat.state.chatHistory.map((msg) => (
+              <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* User question - right aligned */}
+                <div style={{
+                  padding: '10px 14px',
+                  background: 'rgba(17, 138, 178, 0.1)',
+                  border: '1px solid rgba(17, 138, 178, 0.2)',
+                  borderRadius: '12px 12px 4px 12px',
+                  alignSelf: 'flex-end',
+                  maxWidth: '75%',
+                  wordWrap: 'break-word',
+                }}>
+                  <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.5', color: 'var(--ink)' }}>
+                    {msg.question}
+                  </p>
+                </div>
+                
+                {/* Assistant answer - left aligned */}
+                {msg.answer && (
+                  <div style={{
+                    padding: '12px 14px',
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '12px 12px 12px 4px',
+                    alignSelf: 'flex-start',
+                    maxWidth: '75%',
+                    whiteSpace: 'pre-wrap',
+                    fontSize: '14px',
+                    lineHeight: '1.6',
+                    wordWrap: 'break-word',
+                  }}>
+                    {msg.answer}
+                  </div>
+                )}
+                
+                {/* Answer sections with evidence */}
+                {msg.answerSections && msg.answerSections.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {msg.answerSections.map((section) => (
+                      <div key={section.id} style={{
+                        padding: '12px',
+                        background: 'var(--background)',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border)',
+                      }}>
+                        {section.heading && (
+                          <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 600 }}>
+                            {section.heading}
+                          </h4>
+                        )}
+                        <p style={{ margin: 0, fontSize: '13px', lineHeight: '1.6' }}>
+                          {section.text}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Suggested actions from history */}
+                {msg.suggestedActions && msg.suggestedActions.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
+                    <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: 'var(--muted)' }}>
+                      Actions:
+                    </p>
+                    {msg.suggestedActions.map((action, idx) => (
+                      <button
+                        key={idx}
+                        onClick={async () => {
+                          try {
+                            chat.actions.setChatLoading(true);
+                            chat.actions.setLoadingStage(`Executing: ${action.label}...`);
+                            
+                            if (action.type === 'add' && action.concept) {
+                              const api = await import('../../api-client');
+                              
+                              // CRITICAL: Set the active graph context in backend before creating concept
+                              // This ensures the node is created in the correct graph/workspace
+                              console.log('[Action Button] Setting active graph context to:', activeGraphId);
+                              await api.selectGraph(activeGraphId);
+                              
+                              const newConcept = await api.createConcept({
+                                name: action.concept,
+                                domain: action.domain || 'general',
+                                type: 'concept',
+                                graph_id: activeGraphId, // Explicitly specify which graph to add to
+                              });
+                              
+                              console.log('[Action] Created concept:', newConcept);
+                              
+                              // Fetch the full concept from backend to ensure we have all data
+                              let fullConcept: Concept;
+                              try {
+                                fullConcept = await api.getConcept(newConcept.node_id);
+                                console.log('[Action] Fetched full concept from backend:', fullConcept);
+                              } catch (err) {
+                                console.warn('[Action] Could not fetch concept, using created one:', err);
+                                fullConcept = newConcept;
+                              }
+                              
+                              // Manually add the new node to the graph data immediately
+                              const visualNode: Concept & { domain: string; type: string } = {
+                                ...fullConcept,
+                                domain: action.domain || 'general',
+                                type: 'concept',
+                              };
+                              
+                              // Add to graphData state
+                              setGraphData(prev => {
+                                const exists = prev.nodes.some(n => n.node_id === fullConcept.node_id);
+                                if (exists) {
+                                  console.log('[Action] Node already in graph data, updating');
+                                  return {
+                                    ...prev,
+                                    nodes: prev.nodes.map(n => n.node_id === fullConcept.node_id ? visualNode : n),
+                                  };
+                                }
+                                console.log('[Action] Adding node to graph data:', visualNode);
+                                return {
+                                  ...prev,
+                                  nodes: [...prev.nodes, visualNode],
+                                };
+                              });
+                              
+                              // Also refresh graph to ensure consistency, but preserve our new node
+                              await loadGraph(activeGraphId);
+                              
+                              // After loadGraph completes, ensure our new node is still in the graph
+                              setTimeout(() => {
+                                setGraphData(prev => {
+                                  const nodeExists = prev.nodes.some(n => n.node_id === fullConcept.node_id);
+                                  if (!nodeExists) {
+                                    console.log('[Action] Node missing after refresh (likely filtered by limits), re-adding it');
+                                    return {
+                                      ...prev,
+                                      nodes: [...prev.nodes, visualNode],
+                                    };
+                                  }
+                                  return prev;
+                                });
+                                
+                                // Now select and center on the node
+                                const updatedGraphData = graphRef.current?.graphData();
+                                const conceptInGraph = updatedGraphData?.nodes?.find((n: any) => n.node_id === fullConcept.node_id) || visualNode;
+                                
+                                console.log('[Action] Selecting node:', conceptInGraph);
+                                setSelectedNode(conceptInGraph);
+                                updateSelectedPosition(conceptInGraph);
+                                
+                                // Force graph to center on new node after a short delay
+                                setTimeout(() => {
+                                  if (graphRef.current && conceptInGraph) {
+                                    const node = conceptInGraph;
+                                    // If node has coordinates, center on it
+                                    if (node.x !== undefined && node.y !== undefined) {
+                                      graphRef.current.centerAt(node.x, node.y, 1000);
+                                      graphRef.current.zoom(1.5, 1000);
+                                    } else {
+                                      // Otherwise, zoom to fit all nodes
+                                      graphRef.current.zoomToFit(1000, 50);
+                                    }
+                                  }
+                                }, 300);
+                              }, 600);
+                              
+                              chat.actions.setChatAnswer(`✅ Created node "${action.concept}" successfully!`);
+                            } else if (action.type === 'link' && action.source && action.target) {
+                              const api = await import('../../api-client');
+                              const sourceConcept = await resolveConceptByName(action.source);
+                              const targetConcept = await resolveConceptByName(action.target);
+                              
+                              if (!sourceConcept || !targetConcept) {
+                                throw new Error(`Could not find concepts: ${action.source} or ${action.target}`);
+                              }
+                              
+                              await api.createRelationshipByIds(
+                                sourceConcept.node_id,
+                                targetConcept.node_id,
+                                action.label || 'related_to'
+                              );
+                              
+                              await loadGraph(activeGraphId);
+                              chat.actions.setChatAnswer(`✅ Linked "${action.source}" to "${action.target}" successfully!`);
+                            } else {
+                              chat.actions.setChatAnswer(`Action type "${action.type}" not yet supported.`);
+                            }
+                          } catch (err: any) {
+                            console.error('Action execution error:', err);
+                            chat.actions.setChatAnswer(`❌ Failed to execute action: ${err.message || 'Unknown error'}`);
+                          } finally {
+                            chat.actions.setChatLoading(false);
+                            chat.actions.setLoadingStage('');
+                          }
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          background: 'rgba(17, 138, 178, 0.1)',
+                          border: '1px solid rgba(17, 138, 178, 0.3)',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          fontSize: '13px',
+                          color: 'var(--foreground)',
+                        }}
+                      >
+                        {action.label || `${action.type}: ${action.concept || `${action.source} → ${action.target}`}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {chat.state.isChatLoading && (
               <div style={{ padding: '12px', background: 'var(--background)', borderRadius: '8px' }}>
                 <p style={{ margin: 0, fontSize: '14px', color: 'var(--muted)' }}>
-                  {loadingStage || 'Processing...'}
+                  {chat.state.loadingStage || 'Processing...'}
                 </p>
               </div>
             )}
 
-            {chatAnswer && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Current answer (if not yet saved to history) */}
+            {chat.state.chatAnswer && !chat.state.chatHistory.some(msg => msg.answerId === chat.state.answerId) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* User question - right aligned */}
+                {chat.state.lastQuestion && (
+                  <div style={{
+                    padding: '10px 14px',
+                    background: 'rgba(17, 138, 178, 0.1)',
+                    border: '1px solid rgba(17, 138, 178, 0.2)',
+                    borderRadius: '12px 12px 4px 12px',
+                    alignSelf: 'flex-end',
+                    maxWidth: '75%',
+                    wordWrap: 'break-word',
+                  }}>
+                    <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.5', color: 'var(--ink)' }}>
+                      {chat.state.lastQuestion}
+                    </p>
+                  </div>
+                )}
+                
+                {/* Assistant answer - left aligned */}
                 <div style={{
-                  padding: '12px',
-                  background: 'var(--background)',
-                  borderRadius: '8px',
+                  padding: '12px 14px',
+                  background: 'var(--panel)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '12px 12px 12px 4px',
+                  alignSelf: 'flex-start',
+                  maxWidth: '75%',
                   whiteSpace: 'pre-wrap',
                   fontSize: '14px',
                   lineHeight: '1.6',
+                  wordWrap: 'break-word',
                 }}>
-                  {chatAnswer}
+                  {chat.state.chatAnswer}
                 </div>
 
                 {/* Answer sections with evidence */}
-                {answerSections && answerSections.length > 0 && (
+                {chat.state.answerSections && chat.state.answerSections.length > 0 && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {answerSections.map((section) => (
+                    {chat.state.answerSections.map((section) => (
                       <div key={section.id} style={{
                         padding: '12px',
                         background: 'var(--background)',
@@ -2418,14 +3561,14 @@ export default function GraphVisualization() {
                         {section.supporting_evidence_ids.length > 0 && (
                           <button
                             onClick={() => {
-                              const sectionEvidence = evidenceUsed.filter(e =>
+                              const sectionEvidence = chat.state.evidenceUsed.filter(e =>
                                 section.supporting_evidence_ids.includes(e.resource_id || e.id || '')
                               );
                               applySectionEvidenceHighlight(
                                 section.id,
                                 section.supporting_evidence_ids,
-                                evidenceUsed,
-                                retrievalMeta
+                                chat.state.evidenceUsed,
+                                chat.state.retrievalMeta
                               );
                             }}
                             style={{
@@ -2447,12 +3590,12 @@ export default function GraphVisualization() {
                 )}
 
                 {/* Style feedback form */}
-                {answerId && (
+                {chat.state.answerId && (
                   <div style={{ marginTop: '8px' }}>
                     <StyleFeedbackForm
-                      answerId={answerId}
-                      question={lastQuestion || ''}
-                      originalResponse={chatAnswer}
+                      answerId={chat.state.answerId}
+                      question={chat.state.lastQuestion || ''}
+                      originalResponse={chat.state.chatAnswer}
                       onSubmitted={() => {
                         console.log('✅ Style feedback submitted! This will improve future responses.');
                       }}
@@ -2460,13 +3603,184 @@ export default function GraphVisualization() {
                   </div>
                 )}
 
+                {/* Suggested actions */}
+                {chat.state.suggestedActions.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
+                    <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: 'var(--muted)' }}>
+                      Actions:
+                    </p>
+                    {chat.state.suggestedActions.map((action, idx) => {
+                      console.log('[UI] Rendering action button:', idx, action);
+                      return (
+                        <button
+                        key={idx}
+                        onClick={async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          console.log('[Action Button] ✅ CLICKED!', action);
+                          try {
+                            console.log('[Action Button] Starting execution...');
+                            chat.actions.setChatLoading(true);
+                            chat.actions.setLoadingStage(`Executing: ${action.label}...`);
+                            
+                            if (action.type === 'add' && action.concept) {
+                              console.log('[Action Button] Creating node:', action.concept, 'in domain:', action.domain);
+                              // Create a new concept/node
+                              const api = await import('../../api-client');
+                              
+                              // CRITICAL: Set the active graph context in backend before creating concept
+                              // This ensures the node is created in the correct graph/workspace
+                              console.log('[Action Button] Setting active graph context to:', activeGraphId);
+                              await api.selectGraph(activeGraphId);
+                              
+                              const newConcept = await api.createConcept({
+                                name: action.concept,
+                                domain: action.domain || 'general',
+                                type: 'concept',
+                                graph_id: activeGraphId, // Explicitly specify which graph to add to
+                              });
+                              
+                              console.log('[Action] Created concept:', newConcept);
+                              
+                              // Fetch the full concept from backend to ensure we have all data
+                              let fullConcept: Concept;
+                              try {
+                                fullConcept = await api.getConcept(newConcept.node_id);
+                                console.log('[Action] Fetched full concept from backend:', fullConcept);
+                              } catch (err) {
+                                console.warn('[Action] Could not fetch concept, using created one:', err);
+                                fullConcept = newConcept;
+                              }
+                              
+                              // Manually add the new node to the graph data immediately
+                              const visualNode: Concept & { domain: string; type: string } = {
+                                ...fullConcept,
+                                domain: action.domain || 'general',
+                                type: 'concept',
+                              };
+                              
+                              // Add to graphData state
+                              setGraphData(prev => {
+                                // Check if node already exists
+                                const exists = prev.nodes.some(n => n.node_id === fullConcept.node_id);
+                                if (exists) {
+                                  console.log('[Action] Node already in graph data, updating');
+                                  return {
+                                    ...prev,
+                                    nodes: prev.nodes.map(n => n.node_id === fullConcept.node_id ? visualNode : n),
+                                  };
+                                }
+                                console.log('[Action] Adding node to graph data:', visualNode);
+                                return {
+                                  ...prev,
+                                  nodes: [...prev.nodes, visualNode],
+                                };
+                              });
+                              
+                              // Also refresh graph to ensure consistency
+                              // Also refresh graph to ensure consistency, but preserve our new node
+                              await loadGraph(activeGraphId);
+                              
+                              // After loadGraph completes, ensure our new node is still in the graph
+                              setTimeout(() => {
+                                setGraphData(prev => {
+                                  const nodeExists = prev.nodes.some(n => n.node_id === fullConcept.node_id);
+                                  if (!nodeExists) {
+                                    console.log('[Action] Node missing after refresh (likely filtered by limits), re-adding it');
+                                    return {
+                                      ...prev,
+                                      nodes: [...prev.nodes, visualNode],
+                                    };
+                                  }
+                                  return prev;
+                                });
+                                
+                                // Now select and center on the node
+                                const updatedGraphData = graphRef.current?.graphData();
+                                const conceptInGraph = updatedGraphData?.nodes?.find((n: any) => n.node_id === fullConcept.node_id) || visualNode;
+                                
+                                console.log('[Action] Selecting node:', conceptInGraph);
+                                setSelectedNode(conceptInGraph);
+                                updateSelectedPosition(conceptInGraph);
+                                
+                                // Force graph to center on new node after a short delay
+                                setTimeout(() => {
+                                  if (graphRef.current && conceptInGraph) {
+                                    const node = conceptInGraph;
+                                    // If node has coordinates, center on it
+                                    if (node.x !== undefined && node.y !== undefined) {
+                                      graphRef.current.centerAt(node.x, node.y, 1000);
+                                      graphRef.current.zoom(1.5, 1000);
+                                    } else {
+                                      // Otherwise, zoom to fit all nodes
+                                      graphRef.current.zoomToFit(1000, 50);
+                                    }
+                                  }
+                                }, 300);
+                              }, 600);
+                              
+                              chat.actions.setChatAnswer(`✅ Created node "${action.concept}" successfully!`);
+                              chat.actions.setLoadingStage('');
+                            } else if (action.type === 'link' && action.source && action.target) {
+                              // Create a relationship between concepts
+                              const api = await import('../../api-client');
+                              
+                              // Resolve concept names to IDs
+                              const sourceConcept = await resolveConceptByName(action.source);
+                              const targetConcept = await resolveConceptByName(action.target);
+                              
+                              if (!sourceConcept || !targetConcept) {
+                                throw new Error(`Could not find concepts: ${action.source} or ${action.target}`);
+                              }
+                              
+                              // Create relationship
+                              await api.createRelationshipByIds(
+                                sourceConcept.node_id,
+                                targetConcept.node_id,
+                                action.label || 'related_to'
+                              );
+                              
+                              // Refresh graph to show new link
+                              await loadGraph(activeGraphId);
+                              
+                              chat.actions.setChatAnswer(`✅ Linked "${action.source}" to "${action.target}" successfully!`);
+                              chat.actions.setLoadingStage('');
+                            } else {
+                              chat.actions.setChatAnswer(`Action type "${action.type}" not yet supported.`);
+                            }
+                          } catch (err: any) {
+                            console.error('Action execution error:', err);
+                            chat.actions.setChatAnswer(`❌ Failed to execute action: ${err.message || 'Unknown error'}`);
+                          } finally {
+                            chat.actions.setChatLoading(false);
+                            chat.actions.setLoadingStage('');
+                          }
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          background: 'rgba(17, 138, 178, 0.1)',
+                          border: '1px solid rgba(17, 138, 178, 0.3)',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          fontSize: '13px',
+                          color: 'var(--foreground)',
+                        }}
+                      >
+                        {action.label || `${action.type}: ${action.concept || `${action.source} → ${action.target}`}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Suggested questions */}
-                {suggestedQuestions.length > 0 && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {chat.state.suggestedQuestions.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
                     <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: 'var(--muted)' }}>
                       Suggested questions:
                     </p>
-                    {suggestedQuestions.map((q, idx) => (
+                    {chat.state.suggestedQuestions.map((q, idx) => (
                       <button
                         key={idx}
                         onClick={() => handleChatSubmit(q)}
@@ -2489,45 +3803,68 @@ export default function GraphVisualization() {
             )}
           </div>
 
-          {/* Chat input */}
-          <div style={{
-            padding: '12px',
-            borderTop: '1px solid var(--border)',
-          }}>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const input = e.currentTarget.querySelector('input') as HTMLInputElement;
-                if (input?.value) {
-                  handleChatSubmit(input.value);
-                  input.value = '';
-                }
-              }}
-            >
-              <div className="chat-input-row">
-                <input
-                  type="text"
-                  placeholder="Ask a question..."
-                  disabled={isChatLoading}
-                  className="chat-input"
-                  style={{
-                    padding: '10px 14px',
-                    fontSize: '14px',
-                  }}
-                />
-                <button
-                  type="submit"
-                  disabled={isChatLoading}
-                  className="pill pill--primary"
-                  style={{
-                    padding: '10px 20px',
-                  }}
-                >
-                  {isChatLoading ? '...' : 'Ask'}
-                </button>
-              </div>
-            </form>
-          </div>
+          {/* Chat input - at bottom after first message with answer */}
+          {chat.state.chatHistory.length > 0 && chat.state.chatHistory.some(msg => msg.answer) && (
+            <div style={{
+              padding: '12px',
+              borderTop: '1px solid var(--border)',
+            }}>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
+                  if (textarea?.value) {
+                    handleChatSubmit(textarea.value);
+                    textarea.value = '';
+                    textarea.style.height = 'auto';
+                  }
+                }}
+              >
+                <div className="chat-input-row" style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                  <textarea
+                    placeholder="Type your message..."
+                    disabled={chat.state.isChatLoading}
+                    className="chat-input"
+                    style={{
+                      padding: '10px 14px',
+                      fontSize: '14px',
+                      minHeight: '44px',
+                      maxHeight: '200px',
+                      resize: 'none',
+                      fontFamily: 'inherit',
+                      lineHeight: '1.5',
+                    }}
+                    onInput={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      target.style.height = 'auto';
+                      target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        const form = e.currentTarget.closest('form');
+                        if (form) {
+                          form.requestSubmit();
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={chat.state.isChatLoading}
+                    className="pill pill--primary"
+                    style={{
+                      padding: '10px 20px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {chat.state.isChatLoading ? '...' : 'Send'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
         </div>
       </div>
 
@@ -2550,7 +3887,7 @@ export default function GraphVisualization() {
       )}
 
       {/* Graph switch banner */}
-      {graphSwitchBanner && (
+      {ui.state.graphSwitchBanner && (
         <div style={{
           position: 'fixed',
           top: '16px',
@@ -2563,10 +3900,18 @@ export default function GraphVisualization() {
           boxShadow: 'var(--shadow)',
           zIndex: 1000,
         }}>
-          {graphSwitchBanner.message}
+          {ui.state.graphSwitchBanner.message}
         </div>
       )}
     </div>
   );
 }
 
+// Export wrapper component with GraphProvider
+export default function GraphVisualization() {
+  return (
+    <GraphProvider>
+      <GraphVisualizationInner />
+    </GraphProvider>
+  );
+}

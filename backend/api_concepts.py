@@ -31,6 +31,7 @@ from typing import List, Literal, Optional
 # If request A reads a value of 5, request B reads a value of 5 but both try to increment it to 6, only one increment is correctly saved. 
 
 from db_neo4j import get_neo4j_session
+from cache_utils import get_cached, set_cached, invalidate_cache_pattern
 
 # Auto-export to CSV after mutations (backup system)
 from services_sync import auto_export_csv
@@ -322,9 +323,123 @@ def read_concept(node_id: str, session=Depends(get_neo4j_session)):
     return concept
 
 
+@router.get("/{node_id}/cross-graph-instances")
+def get_cross_graph_instances_endpoint(
+    node_id: str,
+    session=Depends(get_neo4j_session)
+):
+    """
+    Get all instances of a concept across all graphs by matching the concept name.
+    
+    PURPOSE:
+    Find where else a concept exists across different graph workspaces. This enables
+    cross-graph navigation and discovery of related concepts in different contexts.
+    
+    HOW IT WORKS:
+    - Takes a node_id and finds the concept's name
+    - Searches all graphs for concepts with the same name
+    - Returns all instances with their graph context
+    
+    EXAMPLE:
+    GET /concepts/N55D928BF/cross-graph-instances
+    Returns: All instances of "TSMC" across all graphs (Personal Finance, Default, etc.)
+    
+    USE CASES:
+    - Show "Also seen in: [graph_name]" in concept view
+    - Navigate between graph instances of the same concept
+    - Discover related concepts in different contexts
+    
+    CONNECTS TO:
+    - ContextPanel - Cross-graph instance display
+    - Concept Board - Cross-graph navigation
+    - GraphVisualization - Instance discovery
+    """
+    from services_graph import get_cross_graph_instances
+    try:
+        result = get_cross_graph_instances(session, node_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get cross-graph instances: {str(e)}")
+
+
+@router.post("/{node_id}/link-cross-graph")
+def link_cross_graph_instances_endpoint(
+    node_id: str,
+    target_node_id: str = Query(..., description="Node ID of the target concept instance to link to"),
+    link_type: str = Query("user_linked", description="Type of link: 'user_linked', 'manual_merge', 'auto_detected'"),
+    session=Depends(get_neo4j_session)
+):
+    """
+    Create a bidirectional CROSS_GRAPH_LINK relationship between two concept instances
+    in different graphs.
+    
+    PURPOSE:
+    Explicitly link related concepts across graphs. This creates a visible connection
+    that shows concepts are related even though they exist in different graph contexts.
+    
+    HOW IT WORKS:
+    - Creates a CROSS_GRAPH_LINK relationship between two nodes
+    - Both nodes must have the same name
+    - Both nodes must be in different graphs
+    - Relationship is bidirectional
+    
+    EXAMPLE:
+    POST /concepts/N55D928BF/link-cross-graph?target_node_id=NC53B0A1D&link_type=user_linked
+    Links TSMC in Personal Finance graph to TSMC in Default graph
+    
+    USE CASES:
+    - User manually links related concepts across graphs
+    - Merge workflow maintains graph-specific context
+    - Cross-graph relationship discovery
+    
+    CONNECTS TO:
+    - ContextPanel - Manual linking UI
+    - Merge workflow - Cross-graph merge
+    """
+    from services_graph import link_cross_graph_instances
+    try:
+        result = link_cross_graph_instances(
+            session,
+            node_id,
+            target_node_id,
+            link_type=link_type,
+            linked_by="user"  # TODO: Get from auth context
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to link cross-graph instances: {str(e)}")
+
+
+@router.get("/{node_id}/linked-instances")
+def get_linked_instances_endpoint(
+    node_id: str,
+    session=Depends(get_neo4j_session)
+):
+    """
+    Get all cross-graph instances that are explicitly linked via CROSS_GRAPH_LINK relationships.
+    
+    PURPOSE:
+    Find instances that have been explicitly linked (not just same name). This shows
+    user-created or system-detected relationships between concepts across graphs.
+    
+    EXAMPLE:
+    GET /concepts/N55D928BF/linked-instances
+    Returns: All instances linked to this concept via CROSS_GRAPH_LINK
+    """
+    from services_graph import get_linked_cross_graph_instances
+    try:
+        instances = get_linked_cross_graph_instances(session, node_id)
+        return {"instances": instances, "total": len(instances)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get linked instances: {str(e)}")
+
+
 @router.post("/", response_model=Concept)
 def create_concept_endpoint(
     payload: ConceptCreate,
+    graph_id: Optional[str] = Query(None, description="Optional graph_id to explicitly specify which graph to add the concept to"),
     session=Depends(get_neo4j_session),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
@@ -362,9 +477,30 @@ def create_concept_endpoint(
     - services_sync.py - CSV backup system
     """
     # In future: check if already exists
+    # Handle graph context setting
+    from services_branch_explorer import set_active_graph
+    
+    import logging
+    logger = logging.getLogger("brain_web")
+    
+    if graph_id:
+        # Use explicitly provided graph_id to set the active graph context
+        # This ensures the concept is created in the correct graph
+        logger.info(f"[create_concept_endpoint] Setting active graph to: {graph_id}")
+        set_active_graph(session, graph_id)
+    # Otherwise, use active graph context (already set, e.g., via selectGraph endpoint)
+    
+    # Verify active graph context before creating
+    ensure_graph_scoping_initialized(session)
+    active_graph_id, active_branch_id = get_active_graph_context(session)
+    logger.info(f"[create_concept_endpoint] Creating concept '{payload.name}' in graph: {active_graph_id} (requested: {graph_id})")
+    
     concept = create_concept(session, payload)
-    # Auto-export to CSV after creating node
-    auto_export_csv(background_tasks)
+    logger.info(f"[create_concept_endpoint] Created concept '{concept.name}' with node_id: {concept.node_id}")
+    # Invalidate graph overview cache (new node added)
+    invalidate_cache_pattern("graph_overview")
+    # Auto-export to CSV after creating node - only export the graph that was modified
+    auto_export_csv(background_tasks, export_per_graph=True, graph_id=active_graph_id)
     return concept
 
 
@@ -407,8 +543,13 @@ def update_concept_endpoint(
     """
     update_dict = payload.dict(exclude_unset=True)
     concept = update_concept(session, node_id, update_dict)
-    # Auto-export to CSV after updating
-    auto_export_csv(background_tasks)
+    # Invalidate cache for this node and graph overview
+    invalidate_cache_pattern("neighbors_with_relationships")
+    invalidate_cache_pattern("graph_overview")
+    # Get the graph_id from the concept to export only that graph
+    graph_id_for_export = concept.graph_id if hasattr(concept, 'graph_id') else None
+    # Auto-export to CSV after updating - only export the graph that was modified
+    auto_export_csv(background_tasks, export_per_graph=True, graph_id=graph_id_for_export)
     return concept
 
 
@@ -461,8 +602,13 @@ def create_relationship_endpoint(
     """
     # In future: validate predicate, ensure both nodes exist
     create_relationship(session, payload)
-    # Auto-export to CSV after creating relationship
-    auto_export_csv(background_tasks)
+    # Invalidate cache for both nodes' neighbors
+    invalidate_cache_pattern("neighbors_with_relationships")
+    invalidate_cache_pattern("graph_neighbors")
+    # Get active graph context to export only that graph
+    active_graph_id, _ = get_active_graph_context(session)
+    # Auto-export to CSV after creating relationship - only export the graph that was modified
+    auto_export_csv(background_tasks, export_per_graph=True, graph_id=active_graph_id)
     return {"status": "ok"}
 
 
@@ -564,6 +710,8 @@ def read_neighbors_with_relationships(
     - GraphVisualization - Edge rendering with types
     - Graph rendering - Proper edge visualization
     - fetchGraphData() in api-client.ts - Recursive graph loading
+    
+    Cached for 1 minute to improve performance.
     """
     # If status is explicitly provided, map it to include_proposed
     if status == "ACCEPTED":
@@ -572,7 +720,17 @@ def read_neighbors_with_relationships(
         include_proposed = "all"  # Will need to filter to PROPOSED only in the query
     # If status is None, use include_proposed as-is (defaults to "all" to show everything)
     
-    return get_neighbors_with_relationships(session, node_id, include_proposed=include_proposed)
+    # Try cache first
+    cache_key = ("neighbors_with_relationships", node_id, include_proposed, status)
+    cached_result = get_cached(*cache_key, ttl_seconds=60)
+    if cached_result is not None:
+        return cached_result
+    
+    result = get_neighbors_with_relationships(session, node_id, include_proposed=include_proposed)
+    
+    # Cache the result
+    set_cached(cache_key[0], result, *cache_key[1:], ttl_seconds=60)
+    return result
 
 
 @router.get("/{node_id}/claims")
@@ -675,7 +833,7 @@ def get_sources_for_concept(
              text_preview: substring(chunk.text, 0, 200)
            }) AS chunks,
            count(DISTINCT claim) AS claim_count
-    ORDER BY doc.published_at DESC, doc.created_at DESC
+    ORDER BY published_at DESC
     LIMIT $limit
     """
     
@@ -851,6 +1009,10 @@ def delete_concept_endpoint(
     deleted = delete_concept(session, node_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Concept not found")
+    # Invalidate all caches (node deleted affects graph structure)
+    invalidate_cache_pattern("neighbors_with_relationships")
+    invalidate_cache_pattern("graph_neighbors")
+    invalidate_cache_pattern("graph_overview")
     # Auto-export to CSV after deleting node
     auto_export_csv(background_tasks)
     return {"status": "ok", "message": f"Concept {node_id} deleted"}
@@ -895,6 +1057,9 @@ def delete_relationship_endpoint(
     deleted = delete_relationship(session, source_id, target_id, predicate)
     if not deleted:
         raise HTTPException(status_code=404, detail="Relationship not found")
+    # Invalidate cache for both nodes' neighbors
+    invalidate_cache_pattern("neighbors_with_relationships")
+    invalidate_cache_pattern("graph_neighbors")
     # Auto-export to CSV after deleting relationship
     auto_export_csv(background_tasks)
     return {"status": "ok", "message": f"Relationship {predicate} deleted"}

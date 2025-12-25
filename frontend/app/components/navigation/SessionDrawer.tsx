@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { fetchRecentSessions, type SessionSummary } from '../../lib/eventsClient';
 import { getLastSession } from '../../lib/sessionState';
 import { useSidebar } from '../context-providers/SidebarContext';
+import { getChatSessions, getChatSession, setCurrentSessionId, type ChatSession } from '../../lib/chatSessions';
 
 interface SessionDrawerProps {
   isCollapsed?: boolean;
@@ -17,6 +18,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const pathname = usePathname();
   const { isMobileSidebarOpen, setIsMobileSidebarOpen } = useSidebar();
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastSession, setLastSession] = useState<{ graph_id?: string; concept_id?: string } | null>(null);
   const [isMobile, setIsMobile] = useState(false);
@@ -38,6 +40,12 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
         setRecentSessions(sessions);
         const localLastSession = getLastSession();
         setLastSession(localLastSession);
+        
+        // Load chat sessions
+        const chats = getChatSessions();
+        // Sort by updatedAt descending
+        const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+        setChatSessions(sortedChats.slice(0, 10));
       } catch (err) {
         console.warn('Failed to load sessions:', err);
         setRecentSessions([]);
@@ -46,6 +54,15 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       }
     }
     loadData();
+    
+    // Refresh chat sessions periodically
+    const interval = setInterval(() => {
+      const chats = getChatSessions();
+      const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+      setChatSessions(sortedChats.slice(0, 10));
+    }, 2000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const navigateToExplorer = (params?: { conceptId?: string; graphId?: string; chat?: string }) => {
@@ -82,6 +99,31 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       conceptId: session.last_concept_id,
       graphId: session.graph_id,
     });
+  };
+
+  const handleLoadChatSession = (chatSession: ChatSession) => {
+    // Set as current session and navigate to explorer
+    setCurrentSessionId(chatSession.id);
+    navigateToExplorer({
+      graphId: chatSession.graphId,
+      chat: chatSession.id, // Pass session ID to load it
+    });
+  };
+
+  const formatChatSessionTime = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    
+    return date.toLocaleDateString();
   };
 
   const formatSessionTimeRange = (startAt: string, endAt: string): string => {
@@ -187,6 +229,8 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
                 color: 'var(--muted)',
                 fontSize: '18px',
               }}
+              aria-label="Close sidebar"
+              title="Close sidebar"
             >
               ×
             </button>
@@ -378,6 +422,34 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
               >
                 Saved
               </Link>
+              <Link
+                href="/source-management"
+                onClick={() => setIsMobileSidebarOpen(false)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  color: pathname === '/source-management' ? 'var(--accent)' : 'var(--ink)',
+                  fontSize: '14px',
+                  textDecoration: 'none',
+                  background: pathname === '/source-management' ? 'var(--surface)' : 'transparent',
+                }}
+              >
+                Source Management
+              </Link>
+              <Link
+                href="/profile-customization"
+                onClick={() => setIsMobileSidebarOpen(false)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  color: pathname === '/profile-customization' ? 'var(--accent)' : 'var(--ink)',
+                  fontSize: '14px',
+                  textDecoration: 'none',
+                  background: pathname === '/profile-customization' ? 'var(--surface)' : 'transparent',
+                }}
+              >
+                Profile Customization
+              </Link>
             </div>
           </div>
         </div>
@@ -410,6 +482,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
             color: 'var(--ink)',
             fontSize: '20px',
           }}
+          aria-label="Expand sidebar"
           title="Expand sidebar"
         >
           →
@@ -432,6 +505,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
               alignItems: 'center',
               justifyContent: 'center',
             }}
+            aria-label="Resume last session"
             title="Resume last session"
           >
             ↻
@@ -535,6 +609,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
             color: 'var(--muted)',
             fontSize: '14px',
           }}
+          aria-label="Collapse sidebar"
           title="Collapse sidebar"
         >
           ←
@@ -568,8 +643,52 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
 
       {/* Sessions Section */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+        {/* Chat Sessions */}
+        {chatSessions.length > 0 && (
+          <div style={{ marginBottom: '24px' }}>
+            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Chat Sessions
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {chatSessions.map((chatSession) => (
+                <div
+                  key={chatSession.id}
+                  onClick={() => handleLoadChatSession(chatSession)}
+                  style={{
+                    padding: '10px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border)',
+                    cursor: 'pointer',
+                    transition: 'background 0.2s',
+                    background: 'var(--background)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--surface)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'var(--background)';
+                  }}
+                >
+                  <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--ink)', marginBottom: '4px' }}>
+                    {chatSession.title}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
+                    {formatChatSessionTime(chatSession.updatedAt)} • {chatSession.messages.length} message{chatSession.messages.length !== 1 ? 's' : ''}
+                  </div>
+                  {chatSession.messages.length > 0 && (
+                    <div style={{ fontSize: '12px', color: 'var(--muted)', fontStyle: 'italic' }}>
+                      "{chatSession.messages[0].question.substring(0, 60)}{chatSession.messages[0].question.length > 60 ? '...' : ''}"
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Graph Sessions */}
         <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Sessions
+          Graph Sessions
         </div>
         {loading ? (
           <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '8px' }}>Loading...</div>
@@ -693,6 +812,32 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
             }}
           >
             Review
+          </Link>
+          <Link
+            href="/source-management"
+            style={{
+              padding: '8px 12px',
+              borderRadius: '6px',
+              color: pathname === '/source-management' ? 'var(--accent)' : 'var(--ink)',
+              fontSize: '14px',
+              textDecoration: 'none',
+              background: pathname === '/source-management' ? 'var(--surface)' : 'transparent',
+            }}
+          >
+            Source Management
+          </Link>
+          <Link
+            href="/profile-customization"
+            style={{
+              padding: '8px 12px',
+              borderRadius: '6px',
+              color: pathname === '/profile-customization' ? 'var(--accent)' : 'var(--ink)',
+              fontSize: '14px',
+              textDecoration: 'none',
+              background: pathname === '/profile-customization' ? 'var(--surface)' : 'transparent',
+            }}
+          >
+            Profile Customization
           </Link>
         </div>
       </div>

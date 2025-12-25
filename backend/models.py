@@ -66,7 +66,9 @@ class Concept (BaseModel):
     last_updated_by: Optional[str] = None
     # Ingestion run tracking
     created_by_run_id: Optional[str] = None  # ingestion_run_id for new concepts
-    last_updated_by_run_id: Optional[str] = None  # ingestion_run_id for updates  
+    last_updated_by_run_id: Optional[str] = None  # ingestion_run_id for updates
+    # Aliases for concept matching (Phase 2)
+    aliases: List[str] = []  # Alternative names for this concept  
 
 class ConceptCreate(BaseModel):
     name: str
@@ -92,6 +94,7 @@ class ConceptUpdate(BaseModel):
     tags: Optional[List[str]] = None
     domain: Optional[str] = None
     type: Optional[str] = None
+    aliases: Optional[List[str]] = None  # Phase 2: Support updating aliases
 
 
 class RelationshipCreate(BaseModel):
@@ -361,6 +364,10 @@ class RetrievalRequest(BaseModel):
     limit_claims: Optional[int] = None  # Override default caps
     limit_entities: Optional[int] = None
     limit_sources: Optional[int] = None
+    trail_id: Optional[str] = None  # Phase A: Trail session state
+    focus_concept_id: Optional[str] = None  # Phase A: Focus context
+    focus_quote_id: Optional[str] = None  # Phase A: Focus context
+    focus_page_url: Optional[str] = None  # Phase A: Focus context
 
 
 # ---------- Personalization Models ----------
@@ -638,10 +645,20 @@ class GraphSummary(BaseModel):
     updated_at: Optional[str] = None
     node_count: int = 0
     edge_count: int = 0
+    template_id: Optional[str] = None
+    template_label: Optional[str] = None
+    template_description: Optional[str] = None
+    template_tags: Optional[List[str]] = None
+    intent: Optional[str] = None
 
 
 class GraphCreateRequest(BaseModel):
     name: str
+    template_id: Optional[str] = None
+    template_label: Optional[str] = None
+    template_description: Optional[str] = None
+    template_tags: Optional[List[str]] = None
+    intent: Optional[str] = None
 
 
 class GraphRenameRequest(BaseModel):
