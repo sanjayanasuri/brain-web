@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import MarkdownIt from 'markdown-it';
 import { useTheme } from '../../components/context-providers/ThemeProvider';
 import { 
   getLecture, 
@@ -15,11 +16,22 @@ import {
   updateSegment,
   getUserProfile,
   ingestAllNotionPages,
+  ingestAllNotionPagesParallel,
   type Lecture, 
   type LectureSegment,
   type Concept,
   type Resource,
+  type NotionIngestProgressEvent,
 } from '../../api-client';
+import { LectureEditor } from '../../components/lecture-editor/LectureEditor';
+import TurndownService from 'turndown';
+
+// Initialize markdown renderer
+const md = new MarkdownIt({
+  html: true,
+  linkify: true,
+  typographer: true,
+});
 
 interface Annotation {
   id: string;
@@ -66,6 +78,14 @@ function SegmentReaderPageInner() {
   const [showFullPage, setShowFullPage] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editedText, setEditedText] = useState('');
+  const [editedHtml, setEditedHtml] = useState('');
+  const [activeGraphId, setActiveGraphId] = useState<string | undefined>(undefined);
+  
+  // Initialize TurndownService for HTML to Markdown conversion
+  const turndownService = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+  });
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [selectedText, setSelectedText] = useState<{ start: number; end: number; text: string } | null>(null);
@@ -80,7 +100,7 @@ function SegmentReaderPageInner() {
 
   useEffect(() => {
     // If no params, show landing page (handled in render)
-    if ((!lectureId || segmentIndex === null) && !resourceId && !resourceUrl) {
+    if (!lectureId && !resourceId && !resourceUrl) {
       setLoading(false);
       return;
     }
@@ -110,21 +130,34 @@ function SegmentReaderPageInner() {
           return;
         }
         
-        // Handle lecture segment
-        if (lectureId && segmentIndex !== null) {
+        // Handle lecture - can work with or without segments
+        if (lectureId) {
           const [lectureData, segmentsData] = await Promise.all([
             getLecture(lectureId),
-            getLectureSegments(lectureId),
+            getLectureSegments(lectureId).catch(() => []), // If segments fail, use empty array
           ]);
           setLecture(lectureData);
           setSegments(segmentsData);
           
-          const segment = segmentsData.find(s => s.segment_index === segmentIndex);
-          if (segment) {
-            setCurrentSegment(segment);
-            setEditedText(segment.text);
+          // If segmentIndex is provided, try to find that segment
+          if (segmentIndex !== null) {
+            const segment = segmentsData.find(s => s.segment_index === segmentIndex);
+            if (segment) {
+              setCurrentSegment(segment);
+              setEditedText(segment.text);
+            } else if (segmentsData.length > 0) {
+              // If segment not found but segments exist, use first segment
+              setCurrentSegment(segmentsData[0]);
+              setEditedText(segmentsData[0].text);
+            } else {
+              // No segments - will display full markdown/raw_text instead
+              setCurrentSegment(null);
+              setEditedText('');
+            }
           } else {
-            setError(`Segment #${segmentIndex + 1} not found`);
+            // No segmentIndex - display full content from metadata_json or raw_text
+            setCurrentSegment(null);
+            setEditedText('');
           }
         }
       } catch (err) {
@@ -136,6 +169,20 @@ function SegmentReaderPageInner() {
 
     loadData();
   }, [lectureId, segmentIndex, resourceId, resourceUrl]);
+
+  // Load active graph ID for editor
+  useEffect(() => {
+    async function loadGraphId() {
+      try {
+        const { listGraphs } = await import('../../api-client');
+        const data = await listGraphs();
+        setActiveGraphId(data.active_graph_id);
+      } catch (err) {
+        console.error('Failed to load active graph:', err);
+      }
+    }
+    loadGraphId();
+  }, []);
 
   // Load saved annotations and comments from localStorage
   useEffect(() => {
@@ -253,6 +300,24 @@ function SegmentReaderPageInner() {
   };
 
   const handleSaveEdit = async () => {
+    // If we're editing markdown (full document), save to lecture metadata_json
+    // This applies when we have markdown content, regardless of whether segments exist
+    if (isMarkdown && lecture) {
+      try {
+        const metadata = { markdown: editedText };
+        const updatedLecture = await updateLecture(lecture.lecture_id, {
+          metadata_json: JSON.stringify(metadata),
+        });
+        setLecture(updatedLecture);
+        setIsEditing(false);
+      } catch (error) {
+        console.error('Failed to save lecture markdown:', error);
+        setIsEditing(false);
+      }
+      return;
+    }
+    
+    // Otherwise, save segment text (only if we have a segment)
     if (!currentSegment) return;
     
     try {
@@ -336,8 +401,8 @@ function SegmentReaderPageInner() {
     }
   };
 
-  // Show landing page if no params
-  if ((!lectureId || segmentIndex === null) && !resourceId && !resourceUrl) {
+  // Show landing page only if there are NO params at all
+  if (!lectureId && !resourceId && !resourceUrl) {
     return <FileReaderStudioLanding router={router} />;
   }
 
@@ -349,7 +414,31 @@ function SegmentReaderPageInner() {
     );
   }
 
-  if (error || ((!currentSegment || !lecture) && !currentResource)) {
+  // Determine content to display
+  // Check if lecture has markdown in metadata (for Notion pages)
+  let displayText = currentResource?.metadata?.highlighted_text || currentSegment?.text || '';
+  let isMarkdown = false;
+  
+  if (lecture?.metadata_json && !currentResource) {
+    try {
+      const metadata = JSON.parse(lecture.metadata_json);
+      if (metadata.markdown) {
+        displayText = metadata.markdown;
+        isMarkdown = true;
+      }
+    } catch (e) {
+      // If metadata_json is not valid JSON, fall back to plain text
+      console.warn('Failed to parse lecture metadata_json:', e);
+    }
+  }
+  
+  // If no display text yet, try raw_text from lecture
+  if (!displayText && lecture?.raw_text && !currentResource) {
+    displayText = lecture.raw_text;
+  }
+  
+  // Show error only if we truly have no content
+  if (error || ((!displayText || !lecture) && !currentResource)) {
     return (
       <div style={{ padding: '40px', textAlign: 'center', minHeight: '100vh', background: 'var(--page-bg)' }}>
         <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error || 'Content not found'}</div>
@@ -359,9 +448,7 @@ function SegmentReaderPageInner() {
       </div>
     );
   }
-
-  // Determine content to display
-  const displayText = currentResource?.metadata?.highlighted_text || currentSegment?.text || '';
+  
   const displayTitle = currentResource?.title || lecture?.title || 'File Reader Studio';
   const isWebResource = !!currentResource;
 
@@ -370,12 +457,85 @@ function SegmentReaderPageInner() {
   const hasNext = currentIndex < segments.length - 1;
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'var(--page-bg)',
-      display: 'flex',
-      flexDirection: 'column',
-    }}>
+    <>
+      <style jsx global>{`
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3 {
+          margin-top: 1.5em;
+          margin-bottom: 0.5em;
+          font-weight: 600;
+        }
+        .markdown-content h1 {
+          font-size: 2em;
+        }
+        .markdown-content h2 {
+          font-size: 1.5em;
+        }
+        .markdown-content h3 {
+          font-size: 1.25em;
+        }
+        .markdown-content code {
+          background: var(--panel);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 0.9em;
+          font-family: 'Monaco', 'Courier New', monospace;
+        }
+        .markdown-content pre {
+          background: var(--panel);
+          padding: 12px;
+          border-radius: 8px;
+          overflow: auto;
+          border: 1px solid var(--border);
+        }
+        .markdown-content pre code {
+          background: transparent;
+          padding: 0;
+        }
+        .markdown-content blockquote {
+          border-left: 4px solid var(--accent);
+          padding-left: 16px;
+          margin-left: 0;
+          color: var(--muted);
+          font-style: italic;
+        }
+        .markdown-content a {
+          color: var(--accent);
+          text-decoration: underline;
+        }
+        .markdown-content ul,
+        .markdown-content ol {
+          margin-left: 1.5em;
+          margin-bottom: 1em;
+        }
+        .markdown-content li {
+          margin-bottom: 0.5em;
+        }
+        .markdown-content p {
+          margin-bottom: 1em;
+        }
+        .markdown-content table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 1em 0;
+        }
+        .markdown-content table th,
+        .markdown-content table td {
+          border: 1px solid var(--border);
+          padding: 8px;
+        }
+        .markdown-content table th {
+          background: var(--panel);
+          font-weight: 600;
+        }
+      `}</style>
+      <div style={{ 
+        minHeight: '100vh', 
+        background: 'var(--page-bg)',
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
       {/* Header */}
       <div style={{
         background: 'var(--panel)',
@@ -509,13 +669,42 @@ function SegmentReaderPageInner() {
             </button>
           )}
           
-          {/* Edit Toggle (for segments only) */}
-          {!isWebResource && currentSegment && (
+          {/* Edit Toggle (for segments or full markdown document) */}
+          {!isWebResource && (currentSegment || (lecture && isMarkdown)) && (
             <button
               onClick={() => {
                 setIsEditing(!isEditing);
                 if (!isEditing) {
-                  setEditedText(currentSegment.text);
+                  // When entering edit mode, initialize editedText and editedHtml
+                  let contentToEdit = '';
+                  if (isMarkdown && lecture) {
+                    try {
+                      const metadata = JSON.parse(lecture.metadata_json || '{}');
+                      contentToEdit = metadata.markdown || displayText;
+                    } catch (e) {
+                      contentToEdit = displayText;
+                    }
+                  } else if (currentSegment) {
+                    contentToEdit = currentSegment.text;
+                  } else {
+                    contentToEdit = displayText;
+                  }
+                  
+                  // Convert markdown to HTML for the rich editor
+                  if (isMarkdown) {
+                    // Convert markdown to HTML for editing
+                    const htmlContent = md.render(contentToEdit);
+                    setEditedHtml(htmlContent);
+                    setEditedText(contentToEdit); // Keep markdown for saving
+                  } else {
+                    // For plain text, just set as HTML (TipTap will handle it)
+                    setEditedHtml(contentToEdit);
+                    setEditedText(contentToEdit);
+                  }
+                } else {
+                  // When canceling, reset
+                  setEditedHtml('');
+                  setEditedText('');
                 }
               }}
               style={{
@@ -735,31 +924,57 @@ function SegmentReaderPageInner() {
             </div>
           )}
           
-          {/* Segment: Edit Mode */}
+          {/* Edit Mode (for segments or full markdown document) */}
           {!isWebResource && isEditing ? (
             <div>
-              <textarea
-                ref={textareaRef}
-                value={editedText}
-                onChange={(e) => setEditedText(e.target.value)}
-                style={{
-                  width: '100%',
-                  minHeight: '400px',
-                  padding: '20px',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  background: 'var(--surface)',
-                  color: 'var(--ink)',
-                  fontSize: '16px',
-                  lineHeight: '1.8',
-                  fontFamily: 'inherit',
-                  resize: 'vertical',
-                }}
-              />
+              <div style={{
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                background: 'var(--surface)',
+                minHeight: '500px',
+                padding: '20px',
+              }}>
+                <LectureEditor
+                  content={editedHtml}
+                  onUpdate={(html) => {
+                    setEditedHtml(html);
+                    // Convert HTML to markdown for saving (if it was markdown originally)
+                    if (isMarkdown) {
+                      try {
+                        const markdown = turndownService.turndown(html);
+                        setEditedText(markdown);
+                      } catch (e) {
+                        console.error('Failed to convert HTML to markdown:', e);
+                        // Fallback: extract text content
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = html;
+                        setEditedText(tempDiv.textContent || '');
+                      }
+                    } else {
+                      // For plain text segments, convert HTML to plain text
+                      // TipTap stores as HTML, but segments should be plain text
+                      try {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = html;
+                        // Get text content, preserving line breaks
+                        const textContent = tempDiv.textContent || tempDiv.innerText || '';
+                        setEditedText(textContent);
+                      } catch (e) {
+                        // Fallback: use HTML as-is
+                        setEditedText(html);
+                      }
+                    }
+                  }}
+                  placeholder={isMarkdown ? "Edit markdown content..." : "Edit text..."}
+                  graphId={activeGraphId}
+                />
+              </div>
               <div style={{ display: 'flex', gap: '8px', marginTop: '16px', justifyContent: 'flex-end' }}>
                 <button
                   onClick={() => {
                     setIsEditing(false);
+                    setEditedHtml('');
+                    setEditedText('');
                     if (currentSegment) {
                       setEditedText(currentSegment.text);
                     }
@@ -800,12 +1015,22 @@ function SegmentReaderPageInner() {
                 fontSize: '18px',
                 lineHeight: '1.8',
                 color: 'var(--ink)',
-                whiteSpace: 'pre-wrap',
+                whiteSpace: isMarkdown ? 'normal' : 'pre-wrap',
                 wordBreak: 'break-word',
                 userSelect: 'text',
               }}
             >
-              {renderTextWithAnnotations(displayText)}
+              {isMarkdown ? (
+                <div
+                  dangerouslySetInnerHTML={{ __html: md.render(displayText) }}
+                  style={{
+                    // Markdown content styles
+                  }}
+                  className="markdown-content"
+                />
+              ) : (
+                renderTextWithAnnotations(displayText)
+              )}
             </div>
           )}
 
@@ -1082,6 +1307,7 @@ function SegmentReaderPageInner() {
         })()}
       </div>
     </div>
+    </>
   );
 }
 
@@ -1154,6 +1380,7 @@ function FolderTreeView({
   onShowWorkspaceModal: (lectureId: string, workspace: string) => void;
   onShowTagsModal: (lectureId: string, tags?: string[]) => void;
   setLectures: (lectures: LectureCardData[]) => void;
+  router: any;
 }) {
   const getWorkspaces = () => {
     const workspaces = new Set<string>();
@@ -1352,6 +1579,13 @@ function FolderTreeView({
               fontSize: '12px',
             }}
           >
+            <div onClick={() => {
+              router.push(`/lecture-editor?lectureId=${lecture.lecture_id}`);
+              onOptionsClick(null);
+            }} style={{ padding: '4px', cursor: 'pointer', color: 'var(--accent)', fontWeight: '600' }}>
+              📝 Open in Editor
+            </div>
+            <div style={{ height: '1px', background: 'var(--border)', margin: '4px 0' }} />
             <div onClick={() => onMoveToFolder(lecture.lecture_id)} style={{ padding: '4px', cursor: 'pointer' }}>
               📂 Move
             </div>
@@ -1437,6 +1671,7 @@ function FileReaderStudioLanding({ router }: { router: any }) {
   const [syncingNotion, setSyncingNotion] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [editingLectureId, setEditingLectureId] = useState<string | null>(null);
   const [optionsMenuOpen, setOptionsMenuOpen] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'tree'>('tree');
@@ -1504,10 +1739,27 @@ function FileReaderStudioLanding({ router }: { router: any }) {
               try {
                 const segments = await getLectureSegments(lecture.lecture_id);
                 
-                // Get preview text from first segment
-                const preview_text = segments.length > 0 
-                  ? segments[0].text.substring(0, 150).trim() + (segments[0].text.length > 150 ? '...' : '')
-                  : undefined;
+                // Get preview text from first segment, or from markdown in metadata_json, or from raw_text
+                let preview_text: string | undefined;
+                if (segments.length > 0) {
+                  preview_text = segments[0].text.substring(0, 150).trim() + (segments[0].text.length > 150 ? '...' : '');
+                } else if (lecture.metadata_json) {
+                  try {
+                    const metadata = JSON.parse(lecture.metadata_json);
+                    if (metadata.markdown) {
+                      // Extract plain text from markdown for preview
+                      const markdownText = metadata.markdown.replace(/[#*\[\]()]/g, '').replace(/\n/g, ' ').trim();
+                      preview_text = markdownText.substring(0, 150) + (markdownText.length > 150 ? '...' : '');
+                    }
+                  } catch (e) {
+                    // If parsing fails, try raw_text
+                    if (lecture.raw_text) {
+                      preview_text = lecture.raw_text.substring(0, 150).trim() + (lecture.raw_text.length > 150 ? '...' : '');
+                    }
+                  }
+                } else if (lecture.raw_text) {
+                  preview_text = lecture.raw_text.substring(0, 150).trim() + (lecture.raw_text.length > 150 ? '...' : '');
+                }
                 
                 // Get last edited time from localStorage
                 const lastEditedKey = `lecture_${lecture.lecture_id}_last_edited`;
@@ -1614,10 +1866,27 @@ function FileReaderStudioLanding({ router }: { router: any }) {
           try {
             const segments = await getLectureSegments(lecture.lecture_id);
             
-            // Get preview text from first segment
-            const preview_text = segments.length > 0 
-              ? segments[0].text.substring(0, 150).trim() + (segments[0].text.length > 150 ? '...' : '')
-              : undefined;
+            // Get preview text from first segment, or from markdown in metadata_json, or from raw_text
+            let preview_text: string | undefined;
+            if (segments.length > 0) {
+              preview_text = segments[0].text.substring(0, 150).trim() + (segments[0].text.length > 150 ? '...' : '');
+            } else if (lecture.metadata_json) {
+              try {
+                const metadata = JSON.parse(lecture.metadata_json);
+                if (metadata.markdown) {
+                  // Extract plain text from markdown for preview
+                  const markdownText = metadata.markdown.replace(/[#*\[\]()]/g, '').replace(/\n/g, ' ').trim();
+                  preview_text = markdownText.substring(0, 150) + (markdownText.length > 150 ? '...' : '');
+                }
+              } catch (e) {
+                // If parsing fails, try raw_text
+                if (lecture.raw_text) {
+                  preview_text = lecture.raw_text.substring(0, 150).trim() + (lecture.raw_text.length > 150 ? '...' : '');
+                }
+              }
+            } else if (lecture.raw_text) {
+              preview_text = lecture.raw_text.substring(0, 150).trim() + (lecture.raw_text.length > 150 ? '...' : '');
+            }
             
             // Get last edited time from localStorage
             const lastEditedKey = `lecture_${lecture.lecture_id}_last_edited`;
@@ -1682,7 +1951,20 @@ function FileReaderStudioLanding({ router }: { router: any }) {
     }
   };
 
-  // Handle full sync from Notion
+  // Handle canceling sync
+  const handleCancelSync = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setSyncingNotion(false);
+    setSyncStatus('Sync cancelled. Pages already ingested will remain in your database.');
+    setTimeout(() => {
+      setSyncStatus(null);
+    }, 5000);
+  };
+
+  // Handle full sync from Notion (with parallel processing and progress)
   const handleFullSyncFromNotion = async () => {
     if (!confirm('This will ingest all Notion pages into Brain Web. This may take a while. Continue?')) {
       return;
@@ -1692,14 +1974,43 @@ function FileReaderStudioLanding({ router }: { router: any }) {
     setSyncStatus('Starting sync from Notion...');
     setError(null);
     
+    // Create abort controller for cancellation
+    abortControllerRef.current = new AbortController();
+    
     try {
-      const results = await ingestAllNotionPages('pages');
-      const totalPages = results.length;
-      const totalNodes = results.reduce((sum, r) => sum + (r.nodes_created?.length || 0) + (r.nodes_updated?.length || 0), 0);
-      const totalLinks = results.reduce((sum, r) => sum + (r.links_created?.length || 0), 0);
-      const totalSegments = results.reduce((sum, r) => sum + (r.segments?.length || 0), 0);
-      
-      setSyncStatus(`✓ Successfully synced ${totalPages} Notion pages: ${totalNodes} concepts, ${totalLinks} links, ${totalSegments} segments created.`);
+      const results = await ingestAllNotionPagesParallel(
+        'pages',
+        'Software Engineering',
+        5, // maxWorkers
+        true, // useParallel
+        (event: NotionIngestProgressEvent) => {
+          if (event.type === 'start') {
+            setSyncStatus(`Starting ingestion of ${event.total} pages...`);
+          } else if (event.type === 'progress') {
+            const percent = event.total ? Math.round((event.processed! / event.total) * 100) : 0;
+            setSyncStatus(
+              `Processing page ${event.processed}/${event.total} (${percent}%)${event.success ? ' ✓' : ' ✗'}`
+            );
+          } else if (event.type === 'complete') {
+            const totalPages = event.total || 0;
+            const totalNodes = event.summary?.nodes || 0;
+            const totalLinks = event.summary?.links || 0;
+            const totalSegments = event.summary?.segments || 0;
+            setSyncStatus(
+              `✓ Successfully synced ${totalPages} Notion pages: ${totalNodes} concepts, ${totalLinks} links, ${totalSegments} segments created. Reloading...`
+            );
+            // Reload lectures to show newly ingested ones
+            reloadLectures().catch(err => {
+              console.error('Failed to reload lectures after sync:', err);
+              setError('Sync completed but failed to reload lectures. Please refresh the page.');
+            });
+          } else if (event.type === 'error') {
+            setError(event.message || 'Unknown error during sync');
+            setSyncStatus(null);
+          }
+        },
+        abortControllerRef.current // Pass abort controller for cancellation
+      );
       
       // Reload lectures to show newly ingested ones
       await reloadLectures();
@@ -1709,12 +2020,20 @@ function FileReaderStudioLanding({ router }: { router: any }) {
         setSyncStatus(null);
       }, 10000);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to sync from Notion';
-      setError(errorMessage);
-      setSyncStatus(null);
-      console.error('Failed to sync from Notion:', err);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setSyncStatus('Sync cancelled. Pages already ingested will remain in your database.');
+        setTimeout(() => {
+          setSyncStatus(null);
+        }, 5000);
+      } else {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to sync from Notion';
+        setError(errorMessage);
+        setSyncStatus(null);
+        console.error('Failed to sync from Notion:', err);
+      }
     } finally {
       setSyncingNotion(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -1755,12 +2074,19 @@ function FileReaderStudioLanding({ router }: { router: any }) {
   };
 
   const handleLectureClick = async (lectureId: string) => {
-    // Track that this lecture was opened
-    const lastEditedKey = `lecture_${lectureId}_last_edited`;
-    localStorage.setItem(lastEditedKey, Date.now().toString());
-    
-    // Navigate to editor with returnTo parameter pointing back to File Reader Studio
-    router.push(`/lecture-editor?lectureId=${lectureId}&returnTo=${encodeURIComponent('/reader/segment')}`);
+    console.log('handleLectureClick called with:', lectureId);
+    try {
+      // Track that this lecture was opened
+      const lastEditedKey = `lecture_${lectureId}_last_edited`;
+      localStorage.setItem(lastEditedKey, Date.now().toString());
+      
+      // Navigate to file reader studio (without segmentIndex to show full content)
+      // The file reader will display markdown from metadata_json if available
+      console.log('Navigating to:', `/reader/segment?lectureId=${lectureId}`);
+      router.push(`/reader/segment?lectureId=${lectureId}`);
+    } catch (error) {
+      console.error('Error in handleLectureClick:', error);
+    }
   };
 
   const handleRenameLecture = async (lectureId: string, newTitle: string) => {
@@ -2106,6 +2432,36 @@ function FileReaderStudioLanding({ router }: { router: any }) {
               >
                 {syncingNotion ? '🔄 Syncing...' : '🔄 Full Sync from Notion'}
               </button>
+              {syncingNotion && (
+                <button
+                  onClick={handleCancelSync}
+                  disabled={!syncingNotion}
+                  style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    background: 'var(--accent-2)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: syncingNotion ? 'pointer' : 'not-allowed',
+                    marginLeft: '8px',
+                    opacity: syncingNotion ? 1 : 0.5,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (syncingNotion) {
+                      e.currentTarget.style.background = 'var(--accent-3)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (syncingNotion) {
+                      e.currentTarget.style.background = 'var(--accent-2)';
+                    }
+                  }}
+                  title="Cancel sync (pages already ingested will remain)"
+                >
+                  ✕ Cancel
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -2253,6 +2609,7 @@ function FileReaderStudioLanding({ router }: { router: any }) {
                 setShowTagsModal(true);
               }}
               setLectures={setLectures}
+              router={router}
             />
           ) : (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
@@ -2277,6 +2634,17 @@ function FileReaderStudioLanding({ router }: { router: any }) {
                       cursor: 'pointer',
                       transition: 'all 0.2s',
                       position: 'relative',
+                    }}
+                    onClick={(e) => {
+                      // Don't trigger if clicking on options menu, options button, or editing
+                      const target = e.target as HTMLElement;
+                      const isOptionsMenu = target.closest('[data-options-menu]');
+                      const isOptionsButton = target.closest('button') && target.closest('button')?.parentElement?.querySelector('[data-options-menu]');
+                      
+                      if (!isEditing && !showOptions && !isOptionsMenu && !isOptionsButton) {
+                        console.log('Clicking lecture:', lecture.lecture_id);
+                        handleLectureClick(lecture.lecture_id);
+                      }
                     }}
                     onMouseEnter={(e) => {
                       if (!isEditing && !showOptions) {
@@ -2346,6 +2714,31 @@ function FileReaderStudioLanding({ router }: { router: any }) {
                           padding: '8px',
                         }}
                       >
+                        <div
+                          onClick={() => {
+                            router.push(`/lecture-editor?lectureId=${lecture.lecture_id}`);
+                            setOptionsMenuOpen(null);
+                          }}
+                          style={{
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            borderRadius: '6px',
+                            fontSize: '14px',
+                            color: 'var(--accent)',
+                            fontWeight: '600',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = 'var(--panel)'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                        >
+                          📝 Open in Editor
+                        </div>
+                        <div
+                          style={{
+                            height: '1px',
+                            background: 'var(--border)',
+                            margin: '4px 0',
+                          }}
+                        />
                         <div
                           onClick={() => {
                             setEditingLectureId(lecture.lecture_id);
@@ -2507,9 +2900,18 @@ function FileReaderStudioLanding({ router }: { router: any }) {
                       />
                     ) : (
                       <h3 
-                        style={{ fontSize: '18px', fontWeight: '600', margin: '0 0 8px 0', paddingRight: '30px' }}
+                        style={{ 
+                          fontSize: '18px', 
+                          fontWeight: '600', 
+                          margin: '0 0 8px 0', 
+                          paddingRight: '30px',
+                          cursor: 'pointer',
+                          pointerEvents: 'auto',
+                        }}
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
+                          console.log('Title clicked:', lecture.lecture_id, lecture.title);
                           handleLectureClick(lecture.lecture_id);
                         }}
                       >

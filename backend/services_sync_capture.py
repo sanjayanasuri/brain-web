@@ -53,18 +53,18 @@ def capture_selection_into_graph(
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
 
-    MERGE (a:Artifact {graph_id: $graph_id, artifact_id: $artifact_id})
+    MERGE (a:Artifact {graph_id: $graph_id, url: $url, content_hash: $content_hash})
     ON CREATE SET
+      a.artifact_id = $artifact_id,
       a.branch_id = $branch_id,
       a.artifact_type = "webpage",
-      a.url = $url,
       a.title = $title,
       a.captured_at = $captured_at_ms,
-      a.content_hash = $content_hash,
       a.text = $text,
       a.metadata_json = $meta_json,
       a.created_at = $now
     ON MATCH SET
+      a.artifact_id = COALESCE(a.artifact_id, $artifact_id),
       a.updated_at = $now
     MERGE (a)-[:BELONGS_TO]->(g)
 

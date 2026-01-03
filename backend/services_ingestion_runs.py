@@ -7,6 +7,7 @@ all objects created/updated during that run.
 from typing import Optional, List, Dict, Any
 from uuid import uuid4
 from datetime import datetime
+import json
 from neo4j import Session
 
 from models import IngestionRun, IngestionRunCreate
@@ -14,6 +15,34 @@ from services_branch_explorer import (
     ensure_graph_scoping_initialized,
     get_active_graph_context,
 )
+
+
+def _parse_summary_counts(value: Any) -> Optional[Dict[str, int]]:
+    """Parse summary_counts from JSON string or return dict if already parsed."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _parse_undo_summary(value: Any) -> Optional[Dict[str, Any]]:
+    """Parse undo_summary from JSON string or return dict if already parsed."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return None
 
 
 def create_ingestion_run(
@@ -83,12 +112,12 @@ def create_ingestion_run(
         status=record["status"],
         started_at=record["started_at"],
         completed_at=record["completed_at"],
-        summary_counts=record["summary_counts"],
+        summary_counts=_parse_summary_counts(record.get("summary_counts")),
         error_count=record["error_count"],
         errors=record["errors"],
         undone_at=record.get("undone_at"),
         undo_mode=record.get("undo_mode"),
-        undo_summary=record.get("undo_summary"),
+        undo_summary=_parse_undo_summary(record.get("undo_summary")),
         restored_at=record.get("restored_at"),
     )
 
@@ -130,8 +159,15 @@ def update_ingestion_run_status(
     }
     
     if summary_counts is not None:
-        set_clauses.append("r.summary_counts = $summary_counts")
-        params["summary_counts"] = summary_counts
+        # Neo4j requires JSON strings for complex types, not dictionaries
+        # Store as JSON string to avoid Neo4j Map type error
+        # Convert dict to JSON string explicitly
+        summary_counts_json = json.dumps(summary_counts)
+        # Ensure it's actually a string, not a dict
+        if not isinstance(summary_counts_json, str):
+            raise ValueError(f"summary_counts must be convertible to JSON string, got {type(summary_counts_json)}")
+        set_clauses.append("r.summary_counts = $summary_counts_str")
+        params["summary_counts_str"] = summary_counts_json
     
     if error_count is not None:
         set_clauses.append("r.error_count = $error_count")
@@ -146,6 +182,13 @@ def update_ingestion_run_status(
     SET {', '.join(set_clauses)}
     RETURN 1
     """
+    
+    # Debug: Verify summary_counts_str is actually a string if present
+    if "summary_counts_str" in params:
+        if not isinstance(params["summary_counts_str"], str):
+            raise ValueError(
+                f"summary_counts_str must be a string, got {type(params['summary_counts_str'])}: {params['summary_counts_str']}"
+            )
     
     session.run(query, **params)
 
@@ -195,7 +238,7 @@ def get_ingestion_run(session: Session, run_id: str) -> Optional[IngestionRun]:
         status=record["status"],
         started_at=record["started_at"],
         completed_at=record["completed_at"],
-        summary_counts=record["summary_counts"],
+        summary_counts=_parse_summary_counts(record.get("summary_counts")),
         error_count=record["error_count"],
         errors=record["errors"],
     )
@@ -252,12 +295,12 @@ def list_ingestion_runs(
             status=record["status"],
             started_at=record["started_at"],
             completed_at=record["completed_at"],
-            summary_counts=record["summary_counts"],
+            summary_counts=_parse_summary_counts(record.get("summary_counts")),
             error_count=record["error_count"],
             errors=record["errors"],
             undone_at=record.get("undone_at"),
             undo_mode=record.get("undo_mode"),
-            undo_summary=record.get("undo_summary"),
+            undo_summary=_parse_undo_summary(record.get("undo_summary")),
             restored_at=record.get("restored_at"),
         ))
     return runs
@@ -605,16 +648,18 @@ def undo_ingestion_run(
                 })
     
     # Update run record with undo metadata
-    undo_summary = {
+    # Convert to JSON string to avoid Neo4j Map type error
+    undo_summary_dict = {
         "archived": archived_counts,
         "skipped": skipped_items,
     }
+    undo_summary_json = json.dumps(undo_summary_dict)
     
     update_run_query = """
     MATCH (r:IngestionRun {run_id: $run_id, graph_id: $graph_id})
     SET r.undone_at = $undone_at,
         r.undo_mode = $undo_mode,
-        r.undo_summary = $undo_summary
+        r.undo_summary = $undo_summary_json
     RETURN 1
     """
     session.run(
@@ -623,7 +668,7 @@ def undo_ingestion_run(
         graph_id=graph_id,
         undone_at=archived_at,
         undo_mode=mode,
-        undo_summary=undo_summary,
+        undo_summary_json=undo_summary_json,
     )
     
     return {

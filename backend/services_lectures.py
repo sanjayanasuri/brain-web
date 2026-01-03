@@ -80,7 +80,8 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
            l.level AS level,
            l.estimated_time AS estimated_time,
            l.slug AS slug,
-           l.raw_text AS raw_text
+           l.raw_text AS raw_text,
+           l.metadata_json AS metadata_json
     LIMIT 1
     """
     record = session.run(query, graph_id=graph_id, branch_id=branch_id, lecture_id=lecture_id).single()
@@ -99,7 +100,8 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
            l.level AS level,
            l.estimated_time AS estimated_time,
            l.slug AS slug,
-           l.raw_text AS raw_text
+           l.raw_text AS raw_text,
+           l.metadata_json AS metadata_json
     LIMIT 1
     """
     fallback_record = session.run(fallback_query, lecture_id=lecture_id).single()
@@ -192,6 +194,7 @@ def list_lectures(session: Session) -> List[Lecture]:
            l.estimated_time AS estimated_time,
            l.slug AS slug,
            l.raw_text AS raw_text,
+           l.metadata_json AS metadata_json,
            count(DISTINCT seg) AS segment_count
     ORDER BY l.title
     """
@@ -209,6 +212,7 @@ def list_lectures(session: Session) -> List[Lecture]:
             estimated_time=record["estimated_time"],
             slug=record["slug"],
             raw_text=record.get("raw_text"),
+            metadata_json=record.get("metadata_json"),
         ))
 
     # If no lectures found in active branch, try to get all lectures in the graph
@@ -226,6 +230,7 @@ def list_lectures(session: Session) -> List[Lecture]:
                l.estimated_time AS estimated_time,
                l.slug AS slug,
                l.raw_text AS raw_text,
+               l.metadata_json AS metadata_json,
                count(DISTINCT seg) AS segment_count
         ORDER BY l.title
         """
@@ -240,6 +245,7 @@ def list_lectures(session: Session) -> List[Lecture]:
                 estimated_time=record["estimated_time"],
                 slug=record["slug"],
                 raw_text=record.get("raw_text"),
+                metadata_json=record.get("metadata_json"),
             ))
 
     return lectures
@@ -296,9 +302,9 @@ def get_lecture_steps(session: Session, lecture_id: str) -> List[LectureStep]:
     return steps
 
 
-def update_lecture(session: Session, lecture_id: str, title: Optional[str] = None, raw_text: Optional[str] = None) -> Optional[Lecture]:
+def update_lecture(session: Session, lecture_id: str, title: Optional[str] = None, raw_text: Optional[str] = None, metadata_json: Optional[str] = None) -> Optional[Lecture]:
     """
-    Update a lecture's title and/or raw_text.
+    Update a lecture's title, raw_text, and/or metadata_json.
     Returns the updated lecture or None if not found.
     """
     ensure_graph_scoping_initialized(session)
@@ -320,6 +326,10 @@ def update_lecture(session: Session, lecture_id: str, title: Optional[str] = Non
         set_clauses.append("l.raw_text = $raw_text")
         params["raw_text"] = raw_text
 
+    if metadata_json is not None:
+        set_clauses.append("l.metadata_json = $metadata_json")
+        params["metadata_json"] = metadata_json
+
     if not set_clauses:
         # Nothing to update, just return the lecture
         return get_lecture_by_id(session, lecture_id)
@@ -336,7 +346,8 @@ def update_lecture(session: Session, lecture_id: str, title: Optional[str] = Non
            l.level AS level,
            l.estimated_time AS estimated_time,
            l.slug AS slug,
-           l.raw_text AS raw_text
+           l.raw_text AS raw_text,
+           l.metadata_json AS metadata_json
     LIMIT 1
     """
 

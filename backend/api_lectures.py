@@ -155,6 +155,7 @@ def update_lecture_endpoint(
         lecture_id=lecture_id,
         title=payload.title,
         raw_text=payload.raw_text,
+        metadata_json=payload.metadata_json,
     )
     if not lecture:
         raise HTTPException(status_code=404, detail="Lecture not found")

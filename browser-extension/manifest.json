@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "description": "Add highlighted text to Brain Web from the context menu.",
   "permissions": ["contextMenus", "storage", "notifications", "scripting"],
-  "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*", "https://*/*", "http://*/*"],
+  "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*", "https://*/*", "http://*/*", "file://*/*"],
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"

@@ -127,6 +127,7 @@ class Lecture(BaseModel):
     estimated_time: Optional[int] = None   # minutes
     slug: Optional[str] = None
     raw_text: Optional[str] = None  # Full lecture content (saved immediately, before AI processing)
+    metadata_json: Optional[str] = None  # JSON metadata (e.g., markdown for Notion pages)
 
 """
 the lecture create class defines how lectures are created.
@@ -146,6 +147,7 @@ class LectureCreate(BaseModel):
 class LectureUpdate(BaseModel):
     title: Optional[str] = None
     raw_text: Optional[str] = None  # Full lecture content
+    metadata_json: Optional[str] = None  # JSON metadata (e.g., markdown for Notion pages)
 
 """
 the lecture step create class defines how lecture steps are created.

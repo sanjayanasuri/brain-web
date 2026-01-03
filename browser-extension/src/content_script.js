@@ -21,6 +21,11 @@ function getCanonicalUrl() {
   return link?.getAttribute("href") || null;
 }
 
+function isLocalFile() {
+  const url = window.location.href || "";
+  return url.startsWith("file://");
+}
+
 function isProbablyPDF() {
   const url = window.location.href || "";
   if (url.toLowerCase().includes(".pdf")) return true;
@@ -248,6 +253,35 @@ function buildResponse({ mode }) {
   const meta = getMetadata();
   const selection = getSelectionText();
   const pdf = isProbablyPDF();
+  const isLocal = isLocalFile();
+
+  // Handle local files - extract text from the document
+  if (isLocal) {
+    // For local files, try to extract text from common file types
+    const url = window.location.href || "";
+    const fileExtension = url.split('.').pop()?.toLowerCase();
+    
+    // For text-based files (txt, md, html, etc.), extract content
+    if (['txt', 'md', 'markdown', 'html', 'htm', 'json', 'xml', 'csv'].includes(fileExtension)) {
+      const text = extractFullTextFallback();
+      return {
+        ok: true,
+        mode_used: "local_file",
+        selection_text: selection || null,
+        text: text || selection || "",
+        meta: { ...meta, is_local_file: true, file_extension: fileExtension }
+      };
+    }
+    
+    // For other local files, just capture metadata and selection
+    return {
+      ok: true,
+      mode_used: "local_file",
+      selection_text: selection || null,
+      text: selection || "",
+      meta: { ...meta, is_local_file: true, file_extension: fileExtension }
+    };
+  }
 
   // If it's a PDF, we avoid pretending we extracted full text.
   // We still capture metadata and let your backend store the URL + context.

@@ -95,6 +95,66 @@ async function refreshQueue() {
   queueEl.textContent = formatQueue(resp.queue);
 }
 
+async function showPreview(tabId, mode) {
+  const previewEl = document.getElementById("preview");
+  const previewContentEl = document.getElementById("previewContent");
+  const closePreviewBtn = document.getElementById("closePreview");
+  
+  if (!previewEl || !previewContentEl) return;
+  
+  try {
+    // Extract content from the tab
+    const extracted = await chrome.tabs.sendMessage(tabId, { type: "BW_EXTRACT", mode });
+    
+    if (!extracted?.ok) {
+      return;
+    }
+    
+    const text = extracted.text || "";
+    const meta = extracted.meta || {};
+    const truncated = extracted.truncated || false;
+    
+    // Format the preview
+    let html = `<div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #22304f;">`;
+    html += `<div style="font-size: 11px; opacity: 0.7; margin-bottom: 4px;">Mode: ${extracted.mode_used || mode}</div>`;
+    if (meta.is_local_file) {
+      html += `<div style="font-size: 11px; opacity: 0.7; margin-bottom: 4px;">Local file (${meta.file_extension || 'unknown'})</div>`;
+    }
+    if (truncated) {
+      html += `<div style="font-size: 11px; opacity: 0.7; margin-bottom: 4px; color: #ffa;">⚠ Content truncated</div>`;
+    }
+    html += `</div>`;
+    
+    // Show text preview (first 500 chars)
+    const previewText = text.substring(0, 500);
+    const remaining = text.length - 500;
+    html += `<div style="font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;">`;
+    html += escapeHtml(previewText);
+    if (remaining > 0) {
+      html += `<span style="opacity: 0.6;">... (${remaining.toLocaleString()} more characters)</span>`;
+    }
+    html += `</div>`;
+    
+    previewContentEl.innerHTML = html;
+    previewEl.style.display = "block";
+    
+    // Close button handler
+    if (closePreviewBtn) {
+      closePreviewBtn.onclick = () => {
+        previewEl.style.display = "none";
+      };
+    }
+  } catch (error) {
+    console.error("Failed to show preview:", error);
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 async function checkActiveTrail(apiBase) {
   try {
     const res = await fetch(`${apiBase}/trails?status=active&limit=1`);
@@ -235,6 +295,9 @@ async function main() {
     }
 
     resultEl.textContent = `Queued capture: ${resp.itemId}\nTip: If this is a PDF, use Selection mode for now unless you add PDF text extraction later.`;
+    
+    // Show preview of captured content
+    await showPreview(tab.id, mode);
     await refreshQueue();
   });
 

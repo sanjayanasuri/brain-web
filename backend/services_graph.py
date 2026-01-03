@@ -446,10 +446,18 @@ def create_or_get_artifact(
     # Compute text length
     text_len = len(text)
     
+    # Determine url value for constraint (required by NODE KEY constraint)
+    # Use canonical_url if available, otherwise source_url, otherwise construct from source_id
+    url_value = canonical_url or source_url
+    if not url_value and source_id:
+        # For Notion pages and other sources without URLs, construct a placeholder URL
+        url_value = f"{artifact_type}://{source_id}"
+    
     # Build ON CREATE SET clause
     on_create_set = [
         "a.artifact_id = $artifact_id",
         "a.artifact_type = $artifact_type",
+        "a.url = $url_value",  # Required by constraint
         "a.source_url = $source_url",
         "a.canonical_url = $canonical_url",
         "a.source_id = $source_id",
@@ -476,59 +484,38 @@ def create_or_get_artifact(
         "a.updated_at = timestamp()",
     ]
     
-    # Build MERGE query - use canonical_url if available, otherwise source_id
-    # We need to handle the COALESCE logic in the WHERE clause since MERGE can't use COALESCE directly
-    if canonical_url:
-        # Use canonical_url as merge key
-        merge_query = """
-        MATCH (g:GraphSpace {graph_id: $graph_id})
-        MERGE (a:Artifact {
-            graph_id: $graph_id,
-            artifact_type: $artifact_type,
-            canonical_url: $canonical_url,
-            content_hash: $content_hash
-        })
-        ON CREATE SET """ + ', '.join(on_create_set) + """
-        ON MATCH SET """ + ', '.join(on_match_set) + """
-        MERGE (a)-[:BELONGS_TO]->(g)
-        """
-    elif source_id:
-        # Use source_id as merge key
-        merge_query = """
-        MATCH (g:GraphSpace {graph_id: $graph_id})
-        MERGE (a:Artifact {
-            graph_id: $graph_id,
-            artifact_type: $artifact_type,
-            source_id: $source_id,
-            content_hash: $content_hash
-        })
-        ON CREATE SET """ + ', '.join(on_create_set) + """
-        ON MATCH SET """ + ', '.join(on_match_set) + """
-        MERGE (a)-[:BELONGS_TO]->(g)
-        """
-    else:
-        # No merge key available - this shouldn't happen but handle it
-        raise ValueError("Either source_url or source_id must be provided")
+    # Build MERGE query - constraint requires (graph_id, url, content_hash) as NODE KEY
+    # Use url_value (which is canonical_url or source_url or constructed URL) for the constraint
+    if not url_value:
+        raise ValueError("Cannot create Artifact: url is required by constraint. Need source_url, canonical_url, or source_id")
     
-    # Check if artifact already exists before creating
+    merge_query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MERGE (a:Artifact {
+        graph_id: $graph_id,
+        url: $url_value,
+        content_hash: $content_hash
+    })
+    ON CREATE SET """ + ', '.join(on_create_set) + """
+    ON MATCH SET """ + ', '.join(on_match_set) + """
+    MERGE (a)-[:BELONGS_TO]->(g)
+    """
+    
+    # Check if artifact already exists before creating (using constraint key)
     check_query = """
     MATCH (a:Artifact {
         graph_id: $graph_id,
-        artifact_type: $artifact_type,
+        url: $url_value,
         content_hash: $content_hash
     })
-    WHERE ($canonical_url IS NOT NULL AND a.canonical_url = $canonical_url)
-       OR ($canonical_url IS NULL AND $source_id IS NOT NULL AND a.source_id = $source_id)
     RETURN a.artifact_id AS artifact_id
     LIMIT 1
     """
     existing = session.run(
         check_query,
         graph_id=graph_id,
-        artifact_type=artifact_type,
-        content_hash=content_hash,
-        canonical_url=canonical_url,
-        source_id=source_id
+        url_value=url_value,
+        content_hash=content_hash
     ).single()
     
     reused_existing = existing is not None
@@ -559,6 +546,7 @@ def create_or_get_artifact(
         "graph_id": graph_id,
         "branch_id": branch_id,
         "artifact_type": artifact_type,
+        "url_value": url_value,  # Required for constraint
         "source_url": source_url,
         "canonical_url": canonical_url,
         "source_id": source_id,

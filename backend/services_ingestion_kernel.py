@@ -223,6 +223,9 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
                     # Create Lecture node if requested (properly scoped to graph + branch)
                     if payload.actions.create_lecture_node and lecture_id:
                         try:
+                            # Extract markdown from metadata if available (for Notion pages)
+                            markdown = payload.metadata.get("markdown") if payload.metadata else None
+                            
                             # Create or update Lecture node with proper graph scoping
                             # graph_id and branch_id are already available from Step 2
                             lecture_query = """
@@ -231,10 +234,12 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
                             ON CREATE SET l.graph_id = $graph_id,
                                           l.on_branches = [$branch_id],
                                           l.title = $title,
-                                          l.raw_text = $raw_text
+                                          l.raw_text = $raw_text,
+                                          l.metadata_json = $metadata_json
                             ON MATCH SET l.title = COALESCE(l.title, $title),
                                          l.raw_text = COALESCE(l.raw_text, $raw_text),
                                          l.graph_id = COALESCE(l.graph_id, $graph_id),
+                                         l.metadata_json = COALESCE($metadata_json, l.metadata_json),
                                          l.on_branches = CASE
                                            WHEN $branch_id IN COALESCE(l.on_branches, []) THEN l.on_branches
                                            ELSE COALESCE(l.on_branches, []) + $branch_id
@@ -242,6 +247,8 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
                             MERGE (l)-[:BELONGS_TO]->(g)
                             RETURN l.lecture_id AS lecture_id
                             """
+                            import json
+                            metadata_json = json.dumps({"markdown": markdown}) if markdown else None
                             session.run(
                                 lecture_query,
                                 graph_id=graph_id,
@@ -249,6 +256,7 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
                                 lecture_id=lecture_id,
                                 title=lecture_title,
                                 raw_text=lecture_text,
+                                metadata_json=metadata_json,
                             )
                             print(f"[Ingestion Kernel] Created/updated Lecture node: {lecture_id} (scoped to graph {graph_id}, branch {branch_id})")
                         except Exception as e:

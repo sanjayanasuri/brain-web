@@ -143,3 +143,28 @@ body {
   font-size: 12px;
 }
 
+.preview {
+  margin-top: 12px;
+  padding: 12px;
+  background: #0f1626;
+  border: 1px solid #22304f;
+  border-radius: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.preview-content {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #e6eaf2;
+}
+
