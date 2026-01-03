@@ -107,8 +107,8 @@ export default function ConceptBoardPage() {
     router.push(`/concepts/${neighborId}`);
   };
 
-  const handleSegmentClick = (lectureId: string) => {
-    router.push(`/lecture-studio?lectureId=${lectureId}`);
+  const handleSegmentClick = (segment: LectureSegment) => {
+    router.push(`/reader/segment?lectureId=${segment.lecture_id}&segmentIndex=${segment.segment_index}`);
   };
 
   const handleSaveDescription = async () => {
@@ -162,7 +162,7 @@ export default function ConceptBoardPage() {
   return (
     <div style={{ 
       minHeight: '100vh', 
-      background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+      background: 'var(--page-bg)',
       padding: '20px',
     }}>
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
@@ -178,7 +178,8 @@ export default function ConceptBoardPage() {
             {concept.domain && (
               <span style={{
                 padding: '4px 12px',
-                background: 'rgba(17, 138, 178, 0.1)',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
                 color: 'var(--accent)',
                 borderRadius: '16px',
                 fontSize: '12px',
@@ -190,7 +191,8 @@ export default function ConceptBoardPage() {
             {concept.type && (
               <span style={{
                 padding: '4px 12px',
-                background: 'rgba(107, 114, 128, 0.1)',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
                 color: 'var(--muted)',
                 borderRadius: '16px',
                 fontSize: '12px',
@@ -316,6 +318,8 @@ export default function ConceptBoardPage() {
                   border: '1px solid var(--border)',
                   borderRadius: '8px',
                   resize: 'vertical',
+                  background: 'var(--surface)',
+                  color: 'var(--ink)',
                 }}
                 placeholder="Enter concept description..."
               />
@@ -370,7 +374,8 @@ export default function ConceptBoardPage() {
                   key={tag}
                   style={{
                     padding: '4px 10px',
-                    background: 'rgba(17, 138, 178, 0.1)',
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
                     color: 'var(--accent)',
                     borderRadius: '12px',
                     fontSize: '12px',
@@ -416,7 +421,7 @@ export default function ConceptBoardPage() {
                       transition: 'all 0.2s',
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(17, 138, 178, 0.05)';
+                      e.currentTarget.style.background = 'var(--panel)';
                       e.currentTarget.style.borderColor = 'var(--accent)';
                     }}
                     onMouseLeave={(e) => {
@@ -428,7 +433,7 @@ export default function ConceptBoardPage() {
                       <div style={{ fontSize: '16px', fontWeight: '600' }}>
                         {neighbor.concept.name}
                       </div>
-                      <div style={{ fontSize: '11px', color: 'var(--muted)', padding: '2px 8px', background: 'rgba(17, 138, 178, 0.1)', borderRadius: '12px' }}>
+                      <div style={{ fontSize: '11px', color: 'var(--muted)', padding: '2px 8px', background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '12px' }}>
                         {neighbor.predicate}
                       </div>
                     </div>
@@ -460,7 +465,7 @@ export default function ConceptBoardPage() {
                 {segments.map(segment => (
                   <div
                     key={segment.segment_id}
-                    onClick={() => handleSegmentClick(segment.lecture_id)}
+                    onClick={() => handleSegmentClick(segment)}
                     style={{
                       padding: '12px',
                       borderRadius: '8px',
@@ -469,7 +474,7 @@ export default function ConceptBoardPage() {
                       transition: 'all 0.2s',
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(17, 138, 178, 0.05)';
+                      e.currentTarget.style.background = 'var(--panel)';
                       e.currentTarget.style.borderColor = 'var(--accent)';
                     }}
                     onMouseLeave={(e) => {
@@ -516,9 +521,9 @@ export default function ConceptBoardPage() {
                   key={resource.resource_id}
                   style={{
                     padding: '12px',
-                    background: 'rgba(17, 138, 178, 0.05)',
+                    background: 'var(--panel)',
                     borderRadius: '8px',
-                    border: '1px solid rgba(17, 138, 178, 0.2)',
+                    border: '1px solid var(--border)',
                   }}
                 >
                   <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '4px' }}>
@@ -575,7 +580,7 @@ export default function ConceptBoardPage() {
                       padding: '16px',
                       borderRadius: '8px',
                       border: '1px solid var(--border)',
-                      background: 'white',
+                      background: 'var(--surface)',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '8px' }}>
@@ -584,7 +589,8 @@ export default function ConceptBoardPage() {
                       </div>
                       <div style={{
                         padding: '4px 10px',
-                        background: `rgba(17, 138, 178, ${claim.confidence * 0.2})`,
+                        background: 'var(--panel)',
+                        border: '1px solid var(--border)',
                         color: 'var(--accent)',
                         borderRadius: '12px',
                         fontSize: '11px',
@@ -599,7 +605,8 @@ export default function ConceptBoardPage() {
                       {claim.source_type && (
                         <span style={{
                           padding: '2px 8px',
-                          background: 'rgba(107, 114, 128, 0.1)',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           color: 'var(--muted)',
                           borderRadius: '12px',
                           fontSize: '11px',
@@ -614,7 +621,8 @@ export default function ConceptBoardPage() {
                           rel="noopener noreferrer"
                           style={{
                             padding: '2px 8px',
-                            background: 'rgba(17, 138, 178, 0.1)',
+                            background: 'var(--panel)',
+                            border: '1px solid var(--border)',
                             color: 'var(--accent)',
                             borderRadius: '12px',
                             fontSize: '11px',
@@ -627,7 +635,8 @@ export default function ConceptBoardPage() {
                       {claim.source_span && (
                         <span style={{
                           padding: '2px 8px',
-                          background: 'rgba(107, 114, 128, 0.05)',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           color: 'var(--muted)',
                           borderRadius: '12px',
                           fontSize: '11px',
@@ -665,7 +674,7 @@ export default function ConceptBoardPage() {
                       padding: '16px',
                       borderRadius: '8px',
                       border: '1px solid var(--border)',
-                      background: 'white',
+                      background: 'var(--surface)',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '8px' }}>
@@ -687,7 +696,8 @@ export default function ConceptBoardPage() {
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <span style={{
                           padding: '4px 10px',
-                          background: 'rgba(17, 138, 178, 0.1)',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           color: 'var(--accent)',
                           borderRadius: '12px',
                           fontSize: '11px',
@@ -697,7 +707,8 @@ export default function ConceptBoardPage() {
                         </span>
                         <span style={{
                           padding: '4px 10px',
-                          background: 'rgba(107, 114, 128, 0.1)',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           color: 'var(--muted)',
                           borderRadius: '12px',
                           fontSize: '11px',

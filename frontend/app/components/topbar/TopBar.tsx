@@ -5,10 +5,12 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, type CreateGraphOptions, type GraphSummary, type Concept, type Resource } from '../../api-client';
 import { useSidebar } from '../context-providers/SidebarContext';
-import { setLastSession, getRecentConceptViews, pushRecentConceptView } from '../../lib/sessionState';
+import { useTheme } from '../context-providers/ThemeProvider';
+import { setLastSession, getRecentConceptViews, pushRecentConceptView, getLastSession } from '../../lib/sessionState';
 import { logEvent, fetchRecentEvents } from '../../lib/eventsClient';
 import { fetchEvidenceForConcept } from '../../lib/evidenceFetch';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
+import { searchAll } from '@/lib/search/search_router';
 
 interface ConceptSearchResult {
   type: 'concept';
@@ -283,7 +285,7 @@ function renderGroupedResults(
                 style={{
                   padding: '10px 16px',
                   cursor: 'pointer',
-                  backgroundColor: idx === selectedIndex ? '#f3f4f6' : 'transparent',
+                  backgroundColor: idx === selectedIndex ? 'var(--panel)' : 'transparent',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
@@ -339,7 +341,7 @@ function renderGroupedResults(
                 style={{
                   padding: '10px 16px',
                   cursor: 'pointer',
-                  backgroundColor: idx === selectedIndex ? '#f3f4f6' : 'transparent',
+                  backgroundColor: idx === selectedIndex ? 'var(--panel)' : 'transparent',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
@@ -384,7 +386,7 @@ function renderGroupedResults(
                 style={{
                   padding: '10px 16px',
                   cursor: 'pointer',
-                  backgroundColor: idx === selectedIndex ? '#f3f4f6' : 'transparent',
+                  backgroundColor: idx === selectedIndex ? 'var(--panel)' : 'transparent',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
@@ -431,7 +433,7 @@ function renderGroupedResults(
                 style={{
                   padding: '10px 16px',
                   cursor: 'pointer',
-                  backgroundColor: idx === selectedIndex ? '#f3f4f6' : 'transparent',
+                  backgroundColor: idx === selectedIndex ? 'var(--panel)' : 'transparent',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
@@ -476,7 +478,7 @@ function renderGroupedResults(
                 style={{
                   padding: '10px 16px',
                   cursor: 'pointer',
-                  backgroundColor: idx === selectedIndex ? '#f3f4f6' : 'transparent',
+                  backgroundColor: idx === selectedIndex ? 'var(--panel)' : 'transparent',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px',
@@ -559,7 +561,7 @@ function renderPreviewPanel(
         width: '300px',
         borderLeft: '1px solid var(--border)',
         padding: '16px',
-        backgroundColor: '#fafafa',
+        backgroundColor: 'var(--surface)',
         display: 'flex',
         flexDirection: 'column',
         gap: '12px',
@@ -585,15 +587,15 @@ function renderPreviewPanel(
               padding: '8px 12px',
               borderRadius: '6px',
               border: '1px solid var(--border)',
-              backgroundColor: '#6366f1',
+              backgroundColor: 'var(--accent)',
               color: 'white',
               fontSize: '13px',
               fontWeight: 500,
               cursor: 'pointer',
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#6366f1'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
           >
             Open
           </button>
@@ -611,7 +613,7 @@ function renderPreviewPanel(
                 cursor: 'pointer',
                 transition: 'background-color 0.2s',
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
             >
               Fetch evidence
@@ -631,7 +633,7 @@ function renderPreviewPanel(
                 cursor: 'pointer',
                 transition: 'background-color 0.2s',
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
             >
               {isPinned ? 'Unpin' : 'Pin concept'}
@@ -652,7 +654,7 @@ function renderPreviewPanel(
         width: '300px',
         borderLeft: '1px solid var(--border)',
         padding: '16px',
-        backgroundColor: '#fafafa',
+        backgroundColor: 'var(--surface)',
         display: 'flex',
         flexDirection: 'column',
         gap: '12px',
@@ -683,15 +685,15 @@ function renderPreviewPanel(
               padding: '8px 12px',
               borderRadius: '6px',
               border: '1px solid var(--border)',
-              backgroundColor: '#6366f1',
+              backgroundColor: 'var(--accent)',
               color: 'white',
               fontSize: '13px',
               fontWeight: 500,
               cursor: 'pointer',
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#6366f1'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
           >
             Open evidence
           </button>
@@ -709,7 +711,7 @@ function renderPreviewPanel(
                 cursor: 'pointer',
                 transition: 'background-color 0.2s',
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
             >
               Open concept
@@ -726,7 +728,7 @@ function renderPreviewPanel(
         width: '300px',
         borderLeft: '1px solid var(--border)',
         padding: '16px',
-        backgroundColor: '#fafafa',
+        backgroundColor: 'var(--surface)',
         display: 'flex',
         flexDirection: 'column',
         gap: '12px',
@@ -747,15 +749,15 @@ function renderPreviewPanel(
               padding: '8px 12px',
               borderRadius: '6px',
               border: '1px solid var(--border)',
-              backgroundColor: '#6366f1',
+              backgroundColor: 'var(--accent)',
               color: 'white',
               fontSize: '13px',
               fontWeight: 500,
               cursor: 'pointer',
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#6366f1'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
           >
             Run
           </button>
@@ -774,7 +776,7 @@ function renderPreviewPanel(
         width: '300px',
         borderLeft: '1px solid var(--border)',
         padding: '16px',
-        backgroundColor: '#fafafa',
+        backgroundColor: 'var(--surface)',
         display: 'flex',
         flexDirection: 'column',
         gap: '12px',
@@ -800,15 +802,15 @@ function renderPreviewPanel(
               padding: '8px 12px',
               borderRadius: '6px',
               border: '1px solid var(--border)',
-              backgroundColor: '#6366f1',
+              backgroundColor: 'var(--accent)',
               color: 'white',
               fontSize: '13px',
               fontWeight: 500,
               cursor: 'pointer',
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#6366f1'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
           >
             Open explorer
           </button>
@@ -826,7 +828,7 @@ function renderPreviewPanel(
                 cursor: 'pointer',
                 transition: 'background-color 0.2s',
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
             >
               Browse graph
@@ -842,6 +844,7 @@ function renderPreviewPanel(
 
 export default function TopBar() {
   const router = useRouter();
+  const { theme, toggleTheme } = useTheme();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { setIsMobileSidebarOpen } = useSidebar();
@@ -1137,11 +1140,39 @@ export default function TopBar() {
 
         // Get effective graph_id for search
         const searchGraphId = getSearchGraphId();
+        const lastSession = getLastSession();
+        const branchId = lastSession?.branch_id || 'main';
 
-        // Search concepts and resources in parallel
+        // Check if offline search is enabled
+        const offlineSearchEnabled = typeof window !== 'undefined' 
+          ? localStorage.getItem('brainweb:offlineSearchEnabled') !== 'false'
+          : true;
+
+        // Try offline search first if enabled
+        let offlineResources: any[] = [];
+        if (offlineSearchEnabled) {
+          try {
+            const offlineResult = await searchAll({
+              query,
+              offlineSearchEnabled: true,
+              graph_id: searchGraphId,
+              branch_id: branchId,
+            });
+            if (offlineResult.mode === 'offline' || offlineResult.mode === 'hybrid') {
+              offlineResources = offlineResult.results || [];
+            }
+          } catch (err) {
+            console.warn('Offline search failed:', err);
+          }
+        }
+
+        // Search concepts and resources in parallel (fallback to server if offline search didn't return enough)
+        const shouldUseServerSearch = !offlineSearchEnabled || offlineResources.length < 6;
         const [conceptsData, resourcesData] = await Promise.all([
           searchConcepts(query, searchGraphId, 8).catch(() => ({ results: [], count: 0 })),
-          searchResources(query, searchGraphId, 6).catch(() => []),
+          shouldUseServerSearch 
+            ? searchResources(query, searchGraphId, 6).catch(() => [])
+            : Promise.resolve([]),
         ]);
 
         if (abortController.signal.aborted) return;
@@ -1155,8 +1186,8 @@ export default function TopBar() {
             type: 'concept',
             concept: c,
           })),
-          // Evidence/Resources
-          ...(resourcesData || []).map((r: Resource): EvidenceSearchResult => ({
+          // Evidence/Resources (prefer offline results if available, otherwise server results)
+          ...(offlineResources.length > 0 ? offlineResources : (resourcesData || [])).map((r: Resource | any): EvidenceSearchResult => ({
             type: 'evidence',
             resource: r,
             concept_id: r.metadata?._concept_id as string | undefined,
@@ -1807,7 +1838,7 @@ export default function TopBar() {
               gap: '2px',
               transition: 'all 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--surface)'}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
@@ -1879,7 +1910,7 @@ export default function TopBar() {
                       style={{
                         padding: '10px 16px',
                         cursor: 'pointer',
-                        backgroundColor: graph.graph_id === activeGraphId ? '#f3f4f6' : 'transparent',
+                        backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -1887,7 +1918,7 @@ export default function TopBar() {
                       }}
                       onMouseEnter={(e) => {
                         if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = '#f8f9fa';
+                          e.currentTarget.style.backgroundColor = 'var(--panel)';
                         }
                       }}
                       onMouseLeave={(e) => {
@@ -1919,7 +1950,7 @@ export default function TopBar() {
                           border: 'none',
                           cursor: 'pointer',
                           padding: '4px 8px',
-                          color: isGraphPinned(graph.graph_id) ? '#f59e0b' : 'var(--muted)',
+                          color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
                           fontSize: '16px',
                         }}
                         title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
@@ -1952,7 +1983,7 @@ export default function TopBar() {
                       style={{
                         padding: '10px 16px',
                         cursor: 'pointer',
-                        backgroundColor: graph.graph_id === activeGraphId ? '#f3f4f6' : 'transparent',
+                        backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -1960,7 +1991,7 @@ export default function TopBar() {
                       }}
                       onMouseEnter={(e) => {
                         if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = '#f8f9fa';
+                          e.currentTarget.style.backgroundColor = 'var(--panel)';
                         }
                       }}
                       onMouseLeave={(e) => {
@@ -1991,7 +2022,7 @@ export default function TopBar() {
                           border: 'none',
                           cursor: 'pointer',
                           padding: '4px 8px',
-                          color: isGraphPinned(graph.graph_id) ? '#f59e0b' : 'var(--muted)',
+                          color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
                           fontSize: '16px',
                         }}
                         title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
@@ -2024,7 +2055,7 @@ export default function TopBar() {
                       style={{
                         padding: '10px 16px',
                         cursor: 'pointer',
-                        backgroundColor: graph.graph_id === activeGraphId ? '#f3f4f6' : 'transparent',
+                        backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
@@ -2032,7 +2063,7 @@ export default function TopBar() {
                       }}
                       onMouseEnter={(e) => {
                         if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = '#f8f9fa';
+                          e.currentTarget.style.backgroundColor = 'var(--panel)';
                         }
                       }}
                       onMouseLeave={(e) => {
@@ -2063,7 +2094,7 @@ export default function TopBar() {
                           border: 'none',
                           cursor: 'pointer',
                           padding: '4px 8px',
-                          color: isGraphPinned(graph.graph_id) ? '#f59e0b' : 'var(--muted)',
+                          color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
                           fontSize: '16px',
                         }}
                         title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
@@ -2089,7 +2120,7 @@ export default function TopBar() {
                       textDecoration: 'none',
                       color: 'var(--ink)',
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
                     Browse graph
@@ -2102,7 +2133,7 @@ export default function TopBar() {
                     cursor: 'pointer',
                     transition: 'background-color 0.1s',
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                   onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
                   + Create Graph
@@ -2117,7 +2148,7 @@ export default function TopBar() {
                     cursor: 'pointer',
                     transition: 'background-color 0.1s',
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                   onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
                   Manage Graphs
@@ -2136,15 +2167,15 @@ export default function TopBar() {
               padding: '0 16px',
               borderRadius: '6px',
               border: 'none',
-              backgroundColor: '#6366f1',
+              backgroundColor: 'var(--accent)',
               color: 'white',
               fontSize: '14px',
               fontWeight: 500,
               cursor: 'pointer',
               transition: 'background-color 0.2s',
             }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4f46e5'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#6366f1'}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
           >
             New
           </button>
@@ -2172,7 +2203,7 @@ export default function TopBar() {
                   cursor: 'pointer',
                   transition: 'background-color 0.1s',
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                 onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
               >
                 Add Source
@@ -2187,7 +2218,7 @@ export default function TopBar() {
                   cursor: 'pointer',
                   transition: 'background-color 0.1s',
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                 onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
               >
                 New Note
@@ -2205,7 +2236,7 @@ export default function TopBar() {
                   cursor: 'pointer',
                   transition: 'background-color 0.1s',
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                 onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
               >
                 New Snapshot
@@ -2218,16 +2249,76 @@ export default function TopBar() {
                     cursor: 'pointer',
                     transition: 'background-color 0.1s',
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8f9fa'}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                   onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
                   New Graph
+                </div>
+                <div
+                  onClick={() => {
+                    router.push('/offline-settings');
+                    setNewMenuOpen(false);
+                  }}
+                  style={{
+                    padding: '10px 16px',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.1s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
+                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  Offline Settings
                 </div>
               </div>
             </div>
           )}
         </div>
 
+        {/* Theme Toggle */}
+        <button
+          onClick={toggleTheme}
+          style={{
+            padding: '10px',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            background: 'var(--panel)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--ink)',
+            transition: 'all 0.2s ease',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--accent)';
+            e.currentTarget.style.color = 'white';
+            e.currentTarget.style.borderColor = 'var(--accent)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'var(--panel)';
+            e.currentTarget.style.color = 'var(--ink)';
+            e.currentTarget.style.borderColor = 'var(--border)';
+          }}
+          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+        >
+          {theme === 'light' ? (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+          ) : (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5"></circle>
+              <line x1="12" y1="1" x2="12" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line>
+              <line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+          )}
+        </button>
 
         {/* Profile icon (simple placeholder) */}
         <div
@@ -2235,7 +2326,7 @@ export default function TopBar() {
             width: '36px',
             height: '36px',
             borderRadius: '50%',
-            backgroundColor: '#e5e7eb',
+            backgroundColor: 'var(--border)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -2316,7 +2407,7 @@ export default function TopBar() {
                         minWidth: '160px',
                         borderRadius: '10px',
                         border: isSelected ? '1px solid #6366f1' : '1px solid var(--border)',
-                        backgroundColor: isSelected ? '#eef2ff' : 'white',
+                        backgroundColor: isSelected ? 'var(--panel)' : 'var(--surface)',
                         padding: '10px',
                         textAlign: 'left',
                         cursor: 'pointer',
@@ -2327,7 +2418,7 @@ export default function TopBar() {
                       <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
                         {template.description}
                       </div>
-                      <div style={{ fontSize: '11px', color: '#6366f1', marginTop: '6px' }}>
+                      <div style={{ fontSize: '11px', color: 'var(--accent)', marginTop: '6px' }}>
                         {template.tags.join(' · ')}
                       </div>
                     </button>
@@ -2402,7 +2493,7 @@ export default function TopBar() {
                   padding: '8px 12px',
                   borderRadius: '6px',
                   border: 'none',
-                  backgroundColor: '#6366f1',
+                  backgroundColor: 'var(--accent)',
                   color: 'white',
                   fontWeight: 600,
                   cursor: createGraphLoading ? 'not-allowed' : 'pointer',

@@ -2,16 +2,22 @@
 API endpoints for quality metrics (coverage, freshness, graph health).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel
 from neo4j import Session
 from db_neo4j import get_neo4j_session
 from services_quality import (
     compute_concept_coverage,
     compute_evidence_freshness,
-    compute_graph_health
+    compute_graph_health,
+    compute_narrative_metrics
 )
 
 router = APIRouter(prefix="/quality", tags=["quality"])
+
+
+class NarrativeMetricsRequest(BaseModel):
+    concept_ids: List[str]
 
 
 @router.get("/concepts/{concept_id}")
@@ -84,4 +90,32 @@ def get_graph_quality(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to compute graph quality: {str(e)}")
+
+
+@router.post("/narrative-metrics")
+def get_narrative_metrics(
+    request: NarrativeMetricsRequest,
+    graph_id: Optional[str] = Query(None, description="Graph ID (optional, uses active if not provided)"),
+    session: Session = Depends(get_neo4j_session)
+):
+    """
+    Get narrative metrics (recency, mention frequency, centrality) for a list of concepts.
+    
+    Request body: { "concept_ids": ["N001", "N002", ...] }
+    
+    Returns:
+        {
+            "concept_id": {
+                "recencyWeight": float (0-1),
+                "mentionFrequency": float (0-1),
+                "centralityDelta": float (0-1)
+            },
+            ...
+        }
+    """
+    try:
+        metrics = compute_narrative_metrics(session, request.concept_ids, graph_id)
+        return metrics
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to compute narrative metrics: {str(e)}")
 

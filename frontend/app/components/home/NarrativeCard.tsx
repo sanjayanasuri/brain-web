@@ -42,7 +42,8 @@ export default function NarrativeCard({
                 padding: '2px 8px',
                 borderRadius: '4px',
                 fontSize: '11px',
-                background: 'rgba(156, 163, 175, 0.1)',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
                 color: 'var(--muted)',
                 whiteSpace: 'nowrap',
               }}

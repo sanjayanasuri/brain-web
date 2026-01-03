@@ -152,7 +152,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '100vh',
-        background: 'linear-gradient(135deg, #118ab2 0%, #ef476f 50%, #f4a261 100%)',
+        background: 'var(--page-bg)',
       }}>
         <div style={{ color: 'white', fontSize: '18px' }}>Loading...</div>
       </div>
@@ -162,7 +162,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(135deg, #118ab2 0%, #ef476f 50%, #f4a261 100%)',
+      background: 'var(--page-bg)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -173,30 +173,31 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
       <div style={{
         maxWidth: '600px',
         width: '100%',
-        background: 'rgba(255, 255, 255, 0.95)',
+        background: 'var(--panel)',
         borderRadius: '16px',
         padding: '48px',
-        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+        boxShadow: 'var(--shadow)',
+        border: '1px solid var(--border)',
       }}>
         <h1 style={{
           fontSize: '36px',
           fontWeight: '700',
           marginBottom: '8px',
-          color: '#0f172a',
+          color: 'var(--ink)',
         }}>
           Welcome, {userName}
         </h1>
         
         <p style={{
           fontSize: '20px',
-          color: '#6b7280',
+          color: 'var(--muted)',
           marginBottom: '8px',
         }}>
           What would you like to focus on today?
         </p>
         <p style={{
           fontSize: '13px',
-          color: '#6b7280',
+          color: 'var(--muted)',
           marginBottom: '24px',
           fontStyle: 'italic',
           opacity: 0.8,
@@ -217,22 +218,22 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 width: '100%',
                 minHeight: '120px',
                 padding: '16px',
-                border: '2px solid #d8e2f1',
+                border: '2px solid var(--border)',
                 borderRadius: '8px',
                 fontSize: '16px',
                 fontFamily: 'inherit',
-                color: '#0f172a',
-                background: 'white',
+                color: 'var(--ink)',
+                background: 'var(--surface)',
                 resize: 'vertical',
                 transition: 'border-color 0.2s',
                 lineHeight: '1.6',
               }}
               onFocus={(e) => {
-                e.currentTarget.style.borderColor = '#118ab2';
+                e.currentTarget.style.borderColor = 'var(--accent)';
                 e.currentTarget.style.outline = 'none';
               }}
               onBlur={(e) => {
-                e.currentTarget.style.borderColor = '#d8e2f1';
+                e.currentTarget.style.borderColor = 'var(--border)';
               }}
             />
             {lastSaved && (
@@ -241,8 +242,8 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 bottom: '8px',
                 right: '12px',
                 fontSize: '12px',
-                color: '#118ab2',
-                background: 'rgba(255, 255, 255, 0.9)',
+                color: 'var(--accent)',
+                background: 'var(--panel)',
                 padding: '4px 8px',
                 borderRadius: '4px',
               }}>
@@ -259,7 +260,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 padding: '10px 20px',
                 fontSize: '14px',
                 fontWeight: '600',
-                background: saving ? '#ccc' : 'linear-gradient(120deg, #118ab2, #00b4d8)',
+                background: saving ? 'var(--muted)' : 'var(--accent)',
                 color: 'white',
                 border: 'none',
                 borderRadius: '6px',
@@ -282,7 +283,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
             </button>
             <span style={{
               fontSize: '12px',
-              color: '#6b7280',
+              color: 'var(--muted)',
             }}>
               This syncs with Profile Customization
             </span>
@@ -292,7 +293,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
             <div style={{
               marginTop: '20px',
               paddingTop: '20px',
-              borderTop: '1px solid #d8e2f1',
+              borderTop: '1px solid var(--border)',
             }}>
               <button
                 onClick={() => setShowExistingFocus(prev => !prev)}
@@ -300,7 +301,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                   background: 'transparent',
                   border: 'none',
                   padding: 0,
-                  color: '#118ab2',
+                  color: 'var(--accent)',
                   fontSize: '12px',
                   fontWeight: '600',
                   cursor: 'pointer',
@@ -312,7 +313,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                 <>
                   <p style={{
                     fontSize: '13px',
-                    color: '#6b7280',
+                    color: 'var(--muted)',
                     marginBottom: '12px',
                     marginTop: '12px',
                     fontWeight: '500',
@@ -330,20 +331,20 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
                         onClick={() => handleToggleFocus(area.id, area.active)}
                         style={{
                           padding: '8px 14px',
-                          border: '2px solid #118ab2',
+                          border: '2px solid var(--accent)',
                           borderRadius: '6px',
-                          background: 'rgba(17, 138, 178, 0.08)',
+                          background: 'var(--panel)',
                           cursor: 'pointer',
                           transition: 'all 0.2s',
                           fontSize: '13px',
                           fontWeight: '500',
-                          color: '#0f172a',
+                          color: 'var(--ink)',
                         }}
                         onMouseEnter={(e) => {
-                          e.currentTarget.style.background = 'rgba(17, 138, 178, 0.12)';
+                          e.currentTarget.style.background = 'var(--surface)';
                         }}
                         onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'rgba(17, 138, 178, 0.08)';
+                          e.currentTarget.style.background = 'var(--panel)';
                         }}
                       >
                         ✓ {area.name}
@@ -363,13 +364,13 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
               padding: '14px 32px',
               fontSize: '16px',
               fontWeight: '600',
-              background: 'linear-gradient(120deg, #118ab2, #00b4d8)',
+              background: 'var(--accent)',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
               cursor: 'pointer',
               transition: 'all 0.2s',
-              boxShadow: '0 10px 20px rgba(17, 138, 178, 0.22)',
+              boxShadow: 'var(--shadow)',
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.transform = 'translateY(-1px)';

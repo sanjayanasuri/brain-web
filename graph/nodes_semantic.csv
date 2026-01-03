@@ -1,8 +1,4 @@
 node_id,name,domain,type,notes_key,lecture_key,url_slug,graph_id
-N55D928BF,TSMC,Technology,concept,,,,G0F87FFD7
-N9C0B7407,AAPL,Finance,concept,,,,G0F87FFD7
-NDE1CA39A,Meta,Technology,concept,,,,G0F87FFD7
-NE8E656C2,NVIDIA,Technology,concept,,,,G0F87FFD7
 N001,Software Architecture,Software Architecture,domain,,,,default
 N002,Web Development,Software Architecture,concept,,,,default
 N003,Front End,Software Architecture,concept,,,,default
@@ -73,6 +69,7 @@ N053,Reinforcement Learning,Machine Learning,concept,,,,default
 N054,Computer Vision,Machine Learning,concept,,,,default
 N055,Sentiment Analysis,Machine Learning,concept,,,,default
 N056,Natural Language Processing,Machine Learning,concept,,,,default
+N057,Python,Machine Learning,concept,,,,default
 N058,Pandas,Machine Learning,concept,,,,default
 N0580A477,Temporary vs Permanent Relationships,Philosophy,concept,,LECTURE_86EDCE97,,default
 N0587306C,Softmax Function,Machine Learning,concept,,LECTURE_49B80B00,,default
@@ -164,6 +161,7 @@ N141C2451,Sugarcane Industry,Agriculture,concept,,LECTURE_086E22BB,,default
 N14556BD0,Encryption,Cybersecurity,concept,,LECTURE_0FB0854B,,default
 N1489E73F,Work Breakdown Structure (WBS),Project Management,concept,,LECTURE_04B1750C,,default
 N14ABBC0B,Single Sign-On,Identity Management,concept,,LECTURE_C8BB7682,,default
+N14DF15E2,Decentralized Finance,Blockchain,concept,,LECTURE_593F5F2D,,default
 N14E82E00,Governance and Access Control,Data Governance,concept,,LECTURE_EFC871FA,,default
 N15086E6B,Overfitting,Machine Learning,concept,,LECTURE_47D8F90C,,default
 N151723B7,Elastic IP,Cloud Computing,concept,,LECTURE_183AD411,,default
@@ -195,7 +193,6 @@ N1E14FA46,Feature Engineering,Machine Learning,concept,,LECTURE_FA9195CB,,defaul
 N1E171A49,Sentiment Analysis Model,Natural Language Processing,example,,LECTURE_F9FB8E15,,default
 N1E4474CC,Ethics in Data Mining,Data Ethics,concept,,LECTURE_47D8F90C,,default
 N1E4CADC5,Cursor,general,concept,,,,default
-N1E6F2483,Meta,Technology,concept,,,,default
 N1E83052D,Quality Management,Project Management,concept,,LECTURE_04B1750C,,default
 N1EC30915,IDE,Software Architecture,domain,,LECTURE_0A79648B,,default
 N1ECA7EF9,Vitamin B12,Nutrition,concept,,LECTURE_E65B3313,,default
@@ -337,6 +334,7 @@ N44EBBF54,Centralization of the French State,Political Science,concept,,LECTURE_
 N466DDC06,Evolution,Biology,concept,,LECTURE_4A4743F0,,default
 N467CBD53,Context Engineering,AI/Agent Systems,concept,,LECTURE_D9FF5C3A,,default
 N46A79A35,DePIN,Infrastructure,concept,,LECTURE_1746DF03,,default
+N46AC35B5,Minimal Corruption,Finance,concept,,LECTURE_5EA74602,,default
 N46AD623C,MANET,Networking,concept,,LECTURE_1746DF03,,default
 N47083F39,ERP,Enterprise Resource Planning,concept,,LECTURE_183AD411,,default
 N479B1877,The Garden Bench,Film,concept,,LECTURE_8577D562,,default
@@ -420,7 +418,6 @@ N5A11C57B,Local LLM Inference,Artificial Intelligence,concept,,LECTURE_28A0E794,
 N5AEA78EF,Claude Shannon,Information Theory,concept,,LECTURE_36519C04,,default
 N5B6C4B42,Apache Flink,Data Engineering,tool,,LECTURE_AFDC7B4A,,default
 N5C251C2F,Mesh Networking,Networking,concept,,LECTURE_0B86DC14,,default
-N5C5F1230,Nvidia,general,concept,,,,default
 N5CD47714,Degree-Directed Flow,Graph Theory,concept,,LECTURE_CFC03C76,,default
 N5CFA6136,Math Tutoring Use Case,Education Technology,example,,LECTURE_B81621E9,,default
 N5D42772E,O(n^2),Computer Science,concept,,LECTURE_67A7F7C6,,default
@@ -432,6 +429,7 @@ N5ECF7934,Web Scraping,Data Science,concept,,LECTURE_208EFBD5,,default
 N5EE54EE7,RAG (Retrieval-Augmented Generation),Machine Learning,concept,,LECTURE_38EFB3AD,,default
 N5F8A2C4D,Port Number,Networking,concept,,LECTURE_4A7A895C,,default
 N5FB5E7BC,Redundancy,Information Theory,concept,,LECTURE_36519C04,,default
+N6044044E,Source of Truth,Blockchain,concept,,LECTURE_99C62DCC,,default
 N606B72F7,Mindfulness,Mental Health,concept,,LECTURE_8424A28F,,default
 N60A49D64,Convolutional Neural Network (CNN),Machine Learning,concept,,LECTURE_7DB408EE,,default
 N60BDFD52,Identity Politics,Sociology,concept,,LECTURE_F6C8F9CE,,default
@@ -481,6 +479,7 @@ N6EC702DC,Linear,Mathematics,concept,,LECTURE_785DEF4D,,default
 N6F46D2E4,Life Journey,Philosophy,concept,,LECTURE_F4C41356,,default
 N6FA8B8B3,Data Pipeline,Data Engineering,concept,,LECTURE_FA9195CB,,default
 N70037C93,Bias-Variance Tradeoff,Machine Learning,concept,,LECTURE_47D8F90C,,default
+N700C48F5,Financial Institutions,Finance,concept,,LECTURE_5EA74602,,default
 N702FEA84,Important Point,General,concept,,LECTURE_1B7CEAFE,,default
 N70924234,Apple's Continuity,Productivity Software,concept,,LECTURE_36329128,,default
 N70E2A395,Tax Cuts,Finance,concept,,LECTURE_D2E185AD,,default
@@ -490,7 +489,6 @@ N717CB032,Commitment,Personal Development,concept,,LECTURE_785DEF4D,,default
 N71B50349,Fine-Tuning,Machine Learning,concept,,LECTURE_D9FF5C3A,,default
 N71E9C600,Messaging,Software Engineering,concept,,LECTURE_519CABB9,,default
 N7211AB17,PostgreSQL,Databases,database,,LECTURE_A094096A,,default
-N722039D7,Data Structures,general,concept,,,,default
 N7223C2D6,Documentation,Productivity,concept,,LECTURE_255958CC,,default
 N72291984,Sliding Window Technique,Algorithms,concept,,LECTURE_8D7F9422,,default
 N72907BFF,Health Care Cost Shift,Health Care,concept,,LECTURE_D2E185AD,,default
@@ -553,7 +551,6 @@ N84F9BCEB,Scar Tissue in Relationships,Psychology,concept,,LECTURE_38F8528D,,def
 N851D75EC,Violence and Resistance,Philosophy,concept,,LECTURE_060FFFFC,,default
 N85C36E08,Hash Function,Computer Science,concept,,LECTURE_6C84AD16,,default
 N85FCC40C,Fats,Nutrition,concept,,LECTURE_E65B3313,,default
-N861A7DB8,Test Node,test,concept,,,,default
 N863428C3,Smoking,Health,concept,,LECTURE_785DEF4D,,default
 N86F35F2F,Cleanliness,Lifestyle,concept,,LECTURE_41473ABA,,default
 N870EE931,Learning Rate,Machine Learning,concept,,LECTURE_3EC5733B,,default
@@ -627,7 +624,6 @@ N9FBC81D9,Minimalism in Design,Design,concept,,LECTURE_54D239B1,,default
 N9FF391C3,Recursion,Computer Science,concept,,LECTURE_4EEEE106,,default
 NA0614987,State Transition,AI/Agent Systems,concept,,LECTURE_D9FF5C3A,,default
 NA0A44B66,Full-Stack Web Development,Software Engineering,concept,,LECTURE_FA9195CB,,default
-NA10A92D3,Test Node 2,test,concept,,,,default
 NA14C1C4A,Context Awareness,AI,concept,,LECTURE_712DFF13,,default
 NA1CFFC1C,Rackspace,Cloud Computing,example,,LECTURE_E6D27EEF,,default
 NA1E48922,Decentralized Finance (DeFi),Finance,concept,,LECTURE_28A0E794,,default
@@ -719,6 +715,7 @@ NBA93473F,Creative Reuse,Content Creation,concept,,LECTURE_712DFF13,,default
 NBAD12C99,HIV-1 Protease,Pharmaceuticals,concept,,LECTURE_E93CD605,,default
 NBB3DBA83,Data Security,Cybersecurity,concept,,LECTURE_66DC4789,,default
 NBBC80E10,Information Explosion,Information Theory,concept,,LECTURE_36519C04,,default
+NBBE00BDB,Cryptocurrency,Finance,concept,,LECTURE_5EA74602,,default
 NBC324770,DBMS,Databases,concept,,LECTURE_088AAFD1,,default
 NBC437B72,Italian Unification (Risorgimento),History,concept,,LECTURE_6E201DD8,,default
 NBC9674D7,John Ousterhout,Software Engineering,concept,,LECTURE_AFDC7B4A,,default
@@ -759,7 +756,6 @@ NC41FF752,Monolithic Application,Software Engineering,concept,,LECTURE_519CABB9,
 NC43CC7BE,Self-Prioritization,Psychology,concept,,LECTURE_72469D9D,,default
 NC455FCD1,Knowledge Management,Project Management,concept,,LECTURE_04B1750C,,default
 NC4C245C2,Genetic Variation,Genetics,concept,,LECTURE_1ED9F306,,default
-NC53B0A1D,TSMC,Technology,concept,,,,default
 NC5CC32B8,Change Management Plan,Project Management,concept,,LECTURE_04B1750C,,default
 NC5DF46BA,Collective Action,Sociology,concept,,LECTURE_2F7C8FAA,,default
 NC5F2027C,AWS Cloud,Cloud Computing,concept,,LECTURE_ADD11BA5,,default
@@ -836,7 +832,7 @@ ND9A5FA87,Mirror Reflection,Psychology,concept,,LECTURE_A1084227,,default
 NDA227F0E,Transitive Closure,Graph Theory,concept,,LECTURE_CFC03C76,,default
 NDA25596E,Continuous Delivery/Deployment,Software Development,concept,,LECTURE_2DBD3B21,,default
 NDA350DF2,Reinforcement Learning (RL),Machine Learning,concept,,LECTURE_FA9195CB,,default
-NDA8D4EB5,Blockchain,Technology,concept,,LECTURE_28A0E794,,default
+NDA8D4EB5,Blockchain,Technology,concept,,LECTURE_99C62DCC,,default
 NDBCB22C8,Pelvic Floor Therapy,Health,concept,,LECTURE_848696D7,,default
 NDBDF51B7,Client-Server Architecture,Software Engineering,concept,,LECTURE_519CABB9,,default
 NDC0B5B2B,Personas,User Experience,concept,,LECTURE_AAA53727,,default
@@ -868,7 +864,6 @@ NE0C20963,Stemming and Lemmatization,Natural Language Processing,concept,,LECTUR
 NE13B0E04,Collaborative Filtering,Machine Learning,concept,,LECTURE_DC4552D3,,default
 NE17DB88C,Union-Find,Data Structures,data structure,,LECTURE_F43ACB64,,default
 NE1A1DCBE,Deployment,Web Development,concept,,LECTURE_DC4552D3,,default
-NE1FDD300,C,general,concept,,,,default
 NE2C3AA90,Kruskal's Algorithm,Algorithms,algorithm,,LECTURE_AC2155EE,,default
 NE2E776A1,Notion,Productivity Software,tool,,LECTURE_36329128,,default
 NE371F5B6,GPU Parallelism,Computer Science,concept,,LECTURE_3118CDD4,,default
@@ -887,7 +882,6 @@ NE6C07994,Music Prompts,Music Technology,concept,,LECTURE_6CEC7531,,default
 NE6C6DC0C,Target Persona,User Research,concept,,LECTURE_712DFF13,,default
 NE6EB88CD,Selection Sort,Algorithms,algorithm,,LECTURE_4EEEE106,,default
 NE75AD39E,Root Cause Analysis,Operations,concept,,LECTURE_51C9C7E4,,default
-NE77D912B,Python,general,concept,,,,default
 NE7E94828,In-Q-Tel,Government,organization,,LECTURE_85899DEF,,default
 NE82DF62B,Block,Productivity Software,concept,,LECTURE_36329128,,default
 NE86250FD,San Francisco,Geography,concept,,LECTURE_AEB97E63,,default

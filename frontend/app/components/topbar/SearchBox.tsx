@@ -51,6 +51,7 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
   const [searchFocused, setSearchFocused] = useState(false);
   const [selectedResultIndex, setSelectedResultIndex] = useState(-1);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState<{ top: number; left: number; width: number } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchDropdownRef = useRef<HTMLDivElement>(null);
   const searchAbortControllerRef = useRef<AbortController | null>(null);
@@ -215,6 +216,33 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
     }
   }, [searchResults, selectedResultIndex, activeGraphId, router]);
 
+  // Calculate dropdown position when focused
+  useEffect(() => {
+    if (searchFocused && searchInputRef.current) {
+      const updatePosition = () => {
+        if (searchInputRef.current) {
+          const rect = searchInputRef.current.getBoundingClientRect();
+          setDropdownPosition({
+            top: rect.bottom + 4,
+            left: rect.left,
+            width: rect.width,
+          });
+        }
+      };
+      
+      updatePosition();
+      window.addEventListener('scroll', updatePosition, true);
+      window.addEventListener('resize', updatePosition);
+      
+      return () => {
+        window.removeEventListener('scroll', updatePosition, true);
+        window.removeEventListener('resize', updatePosition);
+      };
+    } else {
+      setDropdownPosition(null);
+    }
+  }, [searchFocused]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -246,6 +274,7 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
           borderRadius: '18px',
           border: searchFocused ? '2px solid #6366f1' : '1px solid var(--border)',
           backgroundColor: searchFocused ? '#ffffff' : '#f8f9fa',
+          color: searchFocused ? '#0f172a' : 'var(--ink)',
           fontSize: '14px',
           fontFamily: 'inherit',
           outline: 'none',
@@ -254,22 +283,21 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
       />
       
       {/* Search dropdown */}
-      {searchFocused && (searchResults.length > 0 || searchLoading) && (
+      {searchFocused && (searchResults.length > 0 || searchLoading) && dropdownPosition && (
         <div
           ref={searchDropdownRef}
           style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            marginTop: '4px',
+            position: 'fixed',
+            top: `${dropdownPosition.top}px`,
+            left: `${dropdownPosition.left}px`,
+            width: `${dropdownPosition.width}px`,
             backgroundColor: 'var(--surface)',
             border: '1px solid var(--border)',
             borderRadius: '8px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)',
             maxHeight: '400px',
             overflowY: 'auto',
-            zIndex: 1001,
+            zIndex: 9999,
           }}
         >
           {searchLoading ? (

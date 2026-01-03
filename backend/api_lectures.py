@@ -11,20 +11,25 @@ from db_neo4j import get_neo4j_session
 from models import (
     Lecture,
     LectureCreate,
+    LectureUpdate,
     LectureStepCreate,
     LectureStep,
     LectureIngestRequest,
     LectureIngestResult,
     LectureSegment,
+    LectureSegmentUpdate,
     Concept,
     Analogy,
 )
 from services_lectures import (
     create_lecture,
     get_lecture_by_id,
+    update_lecture,
     add_lecture_step,
     get_lecture_steps,
+    list_lectures,
 )
+from services_graph import update_lecture_segment
 from services_lecture_ingestion import ingest_lecture
 from services_lecture_draft import draft_next_lecture
 from services_sync import auto_export_csv
@@ -42,33 +47,76 @@ def ingest_lecture_endpoint(
     Ingest a lecture by extracting concepts and relationships using LLM.
     
     This endpoint:
-    1. Calls an LLM to extract nodes (concepts) and links (relationships) from the lecture text
-    2. Upserts nodes into the graph (creates new or updates existing by name+domain)
-    3. Creates relationships between concepts
-    4. Returns the created/updated nodes and links
+    1. SAVES the lecture immediately (prioritizing data persistence)
+    2. Processes AI extraction in background (non-blocking)
+    3. Returns the lecture with AI processing status
     
-    The LLM extracts:
+    The lecture is always saved, even if AI processing fails.
+    AI processing extracts:
     - Concepts with name, description, domain, type, examples, tags
     - Relationships with source, target, predicate, explanation, confidence
     
     Nodes are matched by name (case-insensitive) and optionally domain.
     If a node exists, its description and tags are updated if the new ones are more detailed.
     """
+    # Step 1: Save lecture immediately (prioritize persistence)
     try:
-        result = ingest_lecture(
+        lecture = create_lecture(
             session=session,
-            lecture_title=payload.lecture_title,
-            lecture_text=payload.lecture_text,
-            domain=payload.domain,
+            payload=LectureCreate(
+                title=payload.lecture_title,
+                description=None,
+                raw_text=payload.lecture_text,
+            )
         )
-        # Auto-export to CSV after ingestion
-        auto_export_csv(background_tasks)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        print(f"[Lecture Ingestion] ✓ Saved lecture {lecture.lecture_id} immediately")
     except Exception as e:
-        print(f"ERROR in lecture ingestion: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to ingest lecture: {str(e)}")
+        print(f"ERROR: Failed to save lecture: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save lecture: {str(e)}")
+    
+    # Step 2: Process AI in background (non-blocking, errors are logged but don't fail the request)
+    def process_ai_background():
+        try:
+            print(f"[Lecture Ingestion] Starting AI processing for lecture {lecture.lecture_id}")
+            result = ingest_lecture(
+                session=session,
+                lecture_title=payload.lecture_title,
+                lecture_text=payload.lecture_text,
+                domain=payload.domain,
+                existing_lecture_id=lecture.lecture_id,  # Use the already-created lecture
+            )
+            print(f"[Lecture Ingestion] ✓ AI processing completed for lecture {lecture.lecture_id}")
+            # Auto-export to CSV after ingestion
+            auto_export_csv(background_tasks)
+        except Exception as e:
+            print(f"[Lecture Ingestion] ⚠ AI processing failed for lecture {lecture.lecture_id}: {e}")
+            print(f"[Lecture Ingestion] Note: Lecture was saved successfully, AI processing can be retried later")
+            # Don't raise - lecture is already saved, AI processing is optional
+    
+    # Schedule AI processing in background
+    background_tasks.add_task(process_ai_background)
+    
+    # Step 3: Return immediately with lecture info
+    # Return a minimal result indicating the lecture was saved and AI is processing
+    return LectureIngestResult(
+        lecture_id=lecture.lecture_id,
+        nodes_created=[],
+        nodes_updated=[],
+        links_created=[],
+        concepts_created=0,
+        concepts_updated=0,
+        relationships_proposed=0,
+        segments_created=0,
+        errors=["AI processing is running in background. Lecture saved successfully."]
+    )
+
+
+@router.get("/", response_model=List[Lecture])
+def list_lectures_endpoint(session=Depends(get_neo4j_session)):
+    """
+    List all lectures in the active graph + branch.
+    """
+    return list_lectures(session)
 
 
 @router.post("/", response_model=Lecture)
@@ -88,6 +136,30 @@ def read_lecture(lecture_id: str, session=Depends(get_neo4j_session)):
     lecture = get_lecture_by_id(session, lecture_id)
     if not lecture:
         raise HTTPException(status_code=404, detail="Lecture not found")
+    return lecture
+
+
+@router.put("/{lecture_id}", response_model=Lecture)
+def update_lecture_endpoint(
+    lecture_id: str,
+    payload: LectureUpdate,
+    session=Depends(get_neo4j_session),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """
+    Update a lecture's title and/or raw_text.
+    This endpoint is used by the editor for auto-save and manual updates.
+    """
+    lecture = update_lecture(
+        session=session,
+        lecture_id=lecture_id,
+        title=payload.title,
+        raw_text=payload.raw_text,
+    )
+    if not lecture:
+        raise HTTPException(status_code=404, detail="Lecture not found")
+    # Auto-export to CSV after updating lecture
+    auto_export_csv(background_tasks)
     return lecture
 
 
@@ -288,6 +360,109 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
             )
         )
     return segments
+
+
+@router.put("/segments/{segment_id}", response_model=LectureSegment)
+def update_segment_endpoint(
+    segment_id: str,
+    payload: LectureSegmentUpdate,
+    session=Depends(get_neo4j_session),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """
+    Update a lecture segment's text and/or other fields.
+    This endpoint is used by the segment reader for saving edited text.
+    """
+    updated = update_lecture_segment(
+        session=session,
+        segment_id=segment_id,
+        text=payload.text,
+        summary=payload.summary,
+        start_time_sec=payload.start_time_sec,
+        end_time_sec=payload.end_time_sec,
+        style_tags=payload.style_tags,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    
+    # Auto-export to CSV after updating segment
+    auto_export_csv(background_tasks)
+    
+    # Fetch the full segment with concepts and analogies to return
+    from services_graph import _normalize_concept_from_db
+    
+    query = """
+    MATCH (seg:LectureSegment {segment_id: $segment_id})
+    OPTIONAL MATCH (seg)-[:COVERS]->(c:Concept)
+    OPTIONAL MATCH (seg)-[:USES_ANALOGY]->(a:Analogy)
+    OPTIONAL MATCH (lec:Lecture {lecture_id: seg.lecture_id})
+    RETURN seg.segment_id AS segment_id,
+           seg.lecture_id AS lecture_id,
+           seg.segment_index AS segment_index,
+           seg.start_time_sec AS start_time_sec,
+           seg.end_time_sec AS end_time_sec,
+           seg.text AS text,
+           seg.summary AS summary,
+           seg.style_tags AS style_tags,
+           lec.title AS lecture_title,
+           collect(DISTINCT {
+             node_id: c.node_id,
+             name: c.name,
+             domain: c.domain,
+             type: c.type,
+             description: c.description,
+             tags: c.tags,
+             notes_key: c.notes_key,
+             lecture_key: c.lecture_key,
+             url_slug: c.url_slug,
+             lecture_sources: COALESCE(c.lecture_sources, []),
+             created_by: c.created_by,
+             last_updated_by: c.last_updated_by
+           }) AS concepts,
+           collect(DISTINCT {
+             analogy_id: a.analogy_id,
+             label: a.label,
+             description: a.description,
+             tags: a.tags
+           }) AS analogies
+    LIMIT 1
+    """
+    record = session.run(query, segment_id=segment_id).single()
+    if not record:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    
+    seg_data = {
+        "segment_id": record["segment_id"],
+        "lecture_id": record["lecture_id"],
+        "segment_index": record["segment_index"] or 0,
+        "start_time_sec": record["start_time_sec"],
+        "end_time_sec": record["end_time_sec"],
+        "text": record["text"] or "",
+        "summary": record["summary"],
+        "style_tags": record["style_tags"] or [],
+    }
+    
+    if record.get("lecture_title"):
+        seg_data["lecture_title"] = record["lecture_title"]
+    
+    concepts = record["concepts"] or []
+    concept_models = []
+    for c_data in concepts:
+        if c_data and c_data.get("node_id"):
+            concept_models.append(_normalize_concept_from_db(c_data))
+    
+    analogies = record["analogies"] or []
+    analogy_models = []
+    for a_data in analogies:
+        if a_data and a_data.get("analogy_id"):
+            analogy_models.append(Analogy(**a_data))
+    
+    return LectureSegment(
+        **seg_data,
+        covered_concepts=concept_models,
+        analogies=analogy_models,
+    )
+
 
 @router.post("/draft-next")
 def draft_next_lecture_endpoint(

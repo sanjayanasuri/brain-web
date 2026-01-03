@@ -1110,13 +1110,14 @@ def ingest_lecture(
     lecture_title: str,
     lecture_text: str,
     domain: Optional[str],
+    existing_lecture_id: Optional[str] = None,
 ) -> LectureIngestResult:
     """
     Main function to ingest a lecture:
     1. Create ingestion run
     2. Call extraction engine to extract nodes and links
     3. Call chunk and claims engine to extract claims
-    4. Create Lecture node
+    4. Create/verify Lecture node (if existing_lecture_id provided, uses existing)
     5. Call segments and analogies engine
     6. Update run status
     7. Return results
@@ -1126,6 +1127,7 @@ def ingest_lecture(
         lecture_title: Title of the lecture
         lecture_text: Full text of the lecture
         domain: Optional domain hint
+        existing_lecture_id: Optional lecture_id if lecture already exists (for save-first approach)
     
     Returns:
         LectureIngestResult with created/updated nodes and links
@@ -1138,8 +1140,8 @@ def ingest_lecture(
     )
     run_id = ingestion_run.run_id
     
-    # Generate lecture_id (simple slug-based ID)
-    lecture_id = f"LECTURE_{uuid4().hex[:8].upper()}"
+    # Use existing lecture_id if provided, otherwise generate new one
+    lecture_id = existing_lecture_id or f"LECTURE_{uuid4().hex[:8].upper()}"
     
     # Step 1: Run extraction engine
     extraction_result = run_lecture_extraction_engine(
@@ -1176,28 +1178,39 @@ def ingest_lecture(
     # Merge errors from chunk/claims engine
     errors.extend(chunk_claims_result["errors"])
     
-    # Step 3: Create Lecture node
-    print(f"[Lecture Ingestion] Creating Lecture node: {lecture_id}")
-    query = """
-    MERGE (l:Lecture {lecture_id: $lecture_id})
-    ON CREATE SET l.title = $title,
-                  l.description = $description,
-                  l.primary_concept = $primary_concept,
-                  l.level = $level,
-                  l.estimated_time = $estimated_time,
-                  l.slug = $slug
-    RETURN l.lecture_id AS lecture_id
-    """
-    session.run(
-        query,
-        lecture_id=lecture_id,
-        title=lecture_title,
-        description=None,
-        primary_concept=None,
-        level=None,
-        estimated_time=None,
-        slug=None,
-    )
+    # Step 3: Create/Update Lecture node (only if it doesn't exist)
+    if existing_lecture_id:
+        print(f"[Lecture Ingestion] Using existing Lecture node: {lecture_id}")
+        # Just verify it exists
+        query = """
+        MATCH (l:Lecture {lecture_id: $lecture_id})
+        RETURN l.lecture_id AS lecture_id
+        """
+        result = session.run(query, lecture_id=lecture_id)
+        if not result.single():
+            raise ValueError(f"Lecture {lecture_id} not found - cannot process AI for non-existent lecture")
+    else:
+        print(f"[Lecture Ingestion] Creating Lecture node: {lecture_id}")
+        query = """
+        MERGE (l:Lecture {lecture_id: $lecture_id})
+        ON CREATE SET l.title = $title,
+                      l.description = $description,
+                      l.primary_concept = $primary_concept,
+                      l.level = $level,
+                      l.estimated_time = $estimated_time,
+                      l.slug = $slug
+        RETURN l.lecture_id AS lecture_id
+        """
+        session.run(
+            query,
+            lecture_id=lecture_id,
+            title=lecture_title,
+            description=None,
+            primary_concept=None,
+            level=None,
+            estimated_time=None,
+            slug=None,
+        )
     
     # Step 4: Run segments and analogies engine
     segments_models = run_segments_and_analogies_engine(

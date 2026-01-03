@@ -177,15 +177,15 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
   return (
     <div className={`notion-sync-manager ${className}`} style={{
       padding: '20px',
-      background: 'var(--bg-secondary, #f5f5f5)',
+      background: 'var(--panel)',
       borderRadius: '8px',
-      border: '1px solid var(--border, #e0e0e0)',
+      border: '1px solid var(--border)',
     }}>
       <div style={{ marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>Notion Sync & Indexing</h3>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: 'var(--muted, #666)' }}>
+            <span style={{ fontSize: '12px', color: 'var(--muted)' }}>
               {indexedCount} / {totalCount} indexed
             </span>
             <button
@@ -193,9 +193,9 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
               style={{
                 padding: '4px 12px',
                 fontSize: '12px',
-                border: '1px solid var(--border, #ccc)',
+                border: '1px solid var(--border)',
                 borderRadius: '4px',
-                background: 'white',
+                background: 'var(--surface)',
                 cursor: 'pointer',
               }}
             >
@@ -212,9 +212,9 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
             style={{
               padding: '6px 16px',
               fontSize: '13px',
-              border: '1px solid var(--border, #ccc)',
+              border: '1px solid var(--border)',
               borderRadius: '4px',
-              background: syncing ? '#ccc' : 'white',
+              background: syncing ? 'var(--muted)' : 'var(--surface)',
               cursor: syncing ? 'not-allowed' : 'pointer',
               fontWeight: '500',
             }}
@@ -227,9 +227,9 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
             style={{
               padding: '6px 16px',
               fontSize: '13px',
-              border: '1px solid var(--border, #ccc)',
+              border: '1px solid var(--border)',
               borderRadius: '4px',
-              background: syncing ? '#ccc' : 'white',
+              background: syncing ? 'var(--muted)' : 'var(--surface)',
               cursor: syncing ? 'not-allowed' : 'pointer',
             }}
           >
@@ -241,7 +241,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
             style={{
               padding: '6px 16px',
               fontSize: '13px',
-              border: '1px solid var(--border, #ccc)',
+              border: '1px solid var(--border)',
               borderRadius: '4px',
               background: 'white',
               cursor: updatingPages.size > 0 ? 'not-allowed' : 'pointer',
@@ -255,7 +255,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
             style={{
               padding: '6px 16px',
               fontSize: '13px',
-              border: '1px solid var(--border, #ccc)',
+              border: '1px solid var(--border)',
               borderRadius: '4px',
               background: 'white',
               cursor: loading ? 'not-allowed' : 'pointer',
@@ -268,7 +268,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
         {/* Progress Bar */}
         {syncing && (
           <div style={{ marginBottom: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: 'var(--muted, #666)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', fontSize: '12px', color: 'var(--muted)' }}>
               <span>Syncing pages...</span>
               {syncProgress && (
                 <span>
@@ -279,7 +279,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
             <div style={{
               width: '100%',
               height: '8px',
-              background: '#e0e0e0',
+              background: 'var(--border)',
               borderRadius: '4px',
               overflow: 'hidden',
             }}>
@@ -288,7 +288,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
                   ? `${(syncProgress.pages_ingested / Math.max(syncProgress.pages_checked, 1)) * 100}%`
                   : '0%',
                 height: '100%',
-                background: '#0a0',
+                background: 'var(--accent)',
                 transition: 'width 0.3s ease',
               }} />
             </div>
@@ -300,8 +300,8 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
           <div style={{
             padding: '12px',
             marginBottom: '16px',
-            background: syncProgress.errors.length > 0 ? '#fff3cd' : '#e8f5e9',
-            border: `1px solid ${syncProgress.errors.length > 0 ? '#ffc107' : '#4caf50'}`,
+            background: syncProgress.errors.length > 0 ? 'var(--panel)' : 'var(--panel)',
+            border: `1px solid ${syncProgress.errors.length > 0 ? 'var(--accent-2)' : 'var(--accent)'}`,
             borderRadius: '4px',
             fontSize: '12px',
           }}>
@@ -315,7 +315,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
               <div>Links created: <strong>{syncProgress.links_created}</strong></div>
             </div>
             {syncProgress.errors.length > 0 && (
-              <div style={{ marginTop: '8px', color: '#d32f2f' }}>
+              <div style={{ marginTop: '8px', color: 'var(--accent-2)' }}>
                 <strong>Errors ({syncProgress.errors.length}):</strong>
                 <ul style={{ margin: '4px 0 0 20px', padding: 0 }}>
                   {syncProgress.errors.slice(0, 3).map((err, idx) => (
@@ -332,11 +332,11 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
           <div style={{
             padding: '12px',
             marginBottom: '16px',
-            background: '#fee',
-            border: '1px solid #fcc',
+            background: 'var(--panel)',
+            border: '1px solid var(--accent-2)',
             borderRadius: '4px',
             fontSize: '12px',
-            color: '#c00',
+            color: 'var(--accent-2)',
           }}>
             {error}
           </div>
@@ -345,18 +345,18 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
 
       {/* Pages List */}
       {loading ? (
-        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted, #666)' }}>
+        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted)' }}>
           Loading pages...
         </div>
       ) : pages.length === 0 ? (
-        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted, #666)' }}>
+        <div style={{ padding: '24px', textAlign: 'center', color: 'var(--muted)' }}>
           No pages found. Make sure Notion is configured.
         </div>
       ) : (
         <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-            <thead style={{ position: 'sticky', top: 0, background: 'white', zIndex: 1 }}>
-              <tr style={{ borderBottom: '2px solid var(--border, #e0e0e0)' }}>
+            <thead style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
+              <tr style={{ borderBottom: '2px solid var(--border)' }}>
                 <th style={{ textAlign: 'left', padding: '8px', fontWeight: '600', width: '40px' }}>
                   <input
                     type="checkbox"
@@ -367,8 +367,8 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
                   />
                 </th>
                 <th style={{ textAlign: 'left', padding: '8px', fontWeight: '600' }}>Page Title</th>
-                <th style={{ textAlign: 'left', padding: '8px', fontWeight: '600', color: 'var(--muted, #666)' }}>Database</th>
-                <th style={{ textAlign: 'left', padding: '8px', fontWeight: '600', color: 'var(--muted, #666)' }}>Last Edited</th>
+                <th style={{ textAlign: 'left', padding: '8px', fontWeight: '600', color: 'var(--muted)' }}>Database</th>
+                <th style={{ textAlign: 'left', padding: '8px', fontWeight: '600', color: 'var(--muted)' }}>Last Edited</th>
                 <th style={{ textAlign: 'center', padding: '8px', fontWeight: '600', width: '100px' }}>Status</th>
               </tr>
             </thead>
@@ -379,8 +379,8 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
                   <tr
                     key={page.page_id}
                     style={{
-                      borderBottom: '1px solid var(--border, #e0e0e0)',
-                      background: page.indexed ? '#f0f8ff' : 'white',
+                      borderBottom: '1px solid var(--border)',
+                      background: page.indexed ? 'var(--panel)' : 'var(--surface)',
                     }}
                   >
                     <td style={{ padding: '8px' }}>
@@ -395,23 +395,24 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
                     <td style={{ padding: '8px', fontWeight: page.indexed ? '500' : '400' }}>
                       {page.title || `Page ${page.page_id.slice(0, 8)}...`}
                     </td>
-                    <td style={{ padding: '8px', color: 'var(--muted, #666)' }}>
+                    <td style={{ padding: '8px', color: 'var(--muted)' }}>
                       {page.database_name || 'Standalone'}
                     </td>
-                    <td style={{ padding: '8px', color: 'var(--muted, #666)', fontSize: '11px' }}>
+                    <td style={{ padding: '8px', color: 'var(--muted)', fontSize: '11px' }}>
                       {page.last_edited_time 
                         ? new Date(page.last_edited_time).toLocaleDateString() 
                         : 'Unknown'}
                     </td>
                     <td style={{ padding: '8px', textAlign: 'center' }}>
                       {isUpdating ? (
-                        <span style={{ color: 'var(--muted, #666)', fontSize: '11px' }}>Updating...</span>
+                        <span style={{ color: 'var(--muted)', fontSize: '11px' }}>Updating...</span>
                       ) : page.indexed ? (
                         <span style={{ 
-                          color: '#0a0', 
+                          color: 'var(--accent)', 
                           fontSize: '11px',
                           fontWeight: '500',
-                          background: '#e8f5e9',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           padding: '2px 8px',
                           borderRadius: '12px',
                         }}>
@@ -419,9 +420,10 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
                         </span>
                       ) : (
                         <span style={{ 
-                          color: '#666', 
+                          color: 'var(--muted)', 
                           fontSize: '11px',
-                          background: '#f5f5f5',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           padding: '2px 8px',
                           borderRadius: '12px',
                         }}>
@@ -435,7 +437,7 @@ export default function NotionSyncManager({ className = '' }: { className?: stri
             </tbody>
           </table>
           {!showAllPages && pages.length > 10 && (
-            <div style={{ padding: '12px', textAlign: 'center', fontSize: '12px', color: 'var(--muted, #666)' }}>
+            <div style={{ padding: '12px', textAlign: 'center', fontSize: '12px', color: 'var(--muted)' }}>
               Showing 10 of {pages.length} pages. Click &quot;Show All&quot; to see all pages.
             </div>
           )}

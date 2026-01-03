@@ -15,18 +15,21 @@ async function getApiBase() {
 }
 
 /**
- * Fetch quotes for current URL
+ * Fetch quotes for current URL via background script (to avoid CORS)
  */
 async function fetchQuotesForUrl(url) {
   try {
-    const apiBase = await getApiBase();
-    const response = await fetch(`${apiBase}/quotes/by_source?url=${encodeURIComponent(url)}`);
-    if (!response.ok) {
-      console.warn('[Brain Web] Failed to fetch quotes:', response.status);
+    const response = await chrome.runtime.sendMessage({
+      type: 'FETCH_QUOTES',
+      url: url
+    });
+    
+    if (response && response.error) {
+      console.warn('[Brain Web] Failed to fetch quotes:', response.error);
       return [];
     }
-    const data = await response.json();
-    return data.quotes || [];
+    
+    return response?.quotes || [];
   } catch (error) {
     console.warn('[Brain Web] Error fetching quotes:', error);
     return [];

@@ -2,15 +2,27 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables in priority order:
-# 1. backend/.env (lowest priority)
-# 2. repo_root/.env (overrides backend)
-# 3. repo_root/.env.local (highest priority - overrides everything)
-# This allows repo-level .env.local to override backend/.env
 repo_root = Path(__file__).parent.parent
 env_local = repo_root / ".env.local"
 env_file = repo_root / ".env"
 backend_env = Path(__file__).parent / ".env"
+
+# Load environment variables in priority order:
+# 1) backend/.env (lowest)
+# 2) repo_root/.env (overrides backend)
+# 3) repo_root/.env.local (highest)
+if backend_env.exists():
+    load_dotenv(dotenv_path=backend_env, override=False)
+if env_file.exists():
+    load_dotenv(dotenv_path=env_file, override=True)
+if env_local.exists():
+    load_dotenv(dotenv_path=env_local, override=True)
+
+# Neo4j configuration
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")  # required - no default
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # Load in priority order: backend first, then repo root (with override=True for repo files)
 if backend_env.exists():

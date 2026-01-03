@@ -127,16 +127,71 @@ def filter_claims_by_recency(
     """
     Filter claims by recency if recency_days is set.
     
-    Note: This is a stub - actual implementation would check SourceChunk metadata
-    for timestamps. For now, we skip filtering but keep the param wired.
+    Checks SourceDocument.published_at timestamp through the relationship chain:
+    Claim -> SUPPORTED_BY -> SourceChunk -> FROM_DOCUMENT -> SourceDocument
     """
     if recency_days is None:
         return claims
     
-    # TODO: Implement actual recency filtering based on SourceChunk metadata
-    # For now, return all claims
-    print(f"[Finance Retrieval] Recency filtering requested ({recency_days} days) but not yet implemented")
-    return claims
+    if not claims:
+        return claims
+    
+    # Calculate cutoff timestamp
+    cutoff_timestamp = int((datetime.now() - timedelta(days=recency_days)).timestamp() * 1000)
+    
+    # Fetch published_at for each claim's source document
+    claim_ids = [c.get("claim_id") for c in claims if c.get("claim_id")]
+    if not claim_ids:
+        return claims
+    
+    query = """
+    MATCH (claim:Claim {graph_id: $graph_id})
+    WHERE claim.claim_id IN $claim_ids
+    OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
+    OPTIONAL MATCH (chunk)-[:FROM_DOCUMENT]->(doc:SourceDocument {graph_id: $graph_id})
+    RETURN claim.claim_id AS claim_id, 
+           COALESCE(doc.published_at, claim.created_at, 0) AS published_at
+    """
+    
+    try:
+        result = session.run(
+            query,
+            graph_id=graph_id,
+            claim_ids=claim_ids
+        )
+        
+        # Build a map of claim_id -> published_at
+        claim_timestamps = {}
+        for record in result:
+            claim_id = record["claim_id"]
+            published_at = record["published_at"]
+            if published_at:
+                claim_timestamps[claim_id] = published_at
+        
+        # Filter claims by recency
+        filtered_claims = []
+        for claim in claims:
+            claim_id = claim.get("claim_id")
+            if not claim_id:
+                # Include claims without IDs (shouldn't happen, but be safe)
+                filtered_claims.append(claim)
+                continue
+            
+            published_at = claim_timestamps.get(claim_id)
+            if published_at is None:
+                # If we can't find published_at, include the claim (be permissive)
+                filtered_claims.append(claim)
+            elif published_at >= cutoff_timestamp:
+                # Claim is within recency window
+                filtered_claims.append(claim)
+        
+        print(f"[Finance Retrieval] Recency filtering: {len(claims)} -> {len(filtered_claims)} claims (within {recency_days} days)")
+        return filtered_claims
+        
+    except Exception as e:
+        print(f"[Finance Retrieval] WARNING: Failed to filter by recency: {e}")
+        # On error, return all claims (fail gracefully)
+        return claims
 
 
 def filter_claims_by_strictness(
@@ -463,7 +518,7 @@ def retrieve(
     # Top claims
     context_parts.append("## Top Claims (with Confidence + Sources)")
     for claim in top_claims[:30]:  # Limit to top 30 for context
-        context_parts.append(f"\n**Claim:** {claim['text']}")
+        context_parts.append(f"\nClaim: {claim['text']}")
         context_parts.append(f"Confidence: {claim.get('confidence', 0.0):.2f}")
         source_info = claim.get('source_id', 'unknown')
         source_span = claim.get('source_span')
@@ -476,11 +531,11 @@ def retrieve(
     if concepts or edges:
         context_parts.append("## Evidence Subgraph")
         if concepts:
-            context_parts.append(f"\n**Concepts ({len(concepts)}):**")
+            context_parts.append(f"\nConcepts ({len(concepts)}):")
             concept_names = [c.get("name", "unknown") for c in concepts[:20]]
             context_parts.append(", ".join(concept_names))
         if edges:
-            context_parts.append(f"\n**Edges ({len(edges)}):**")
+            context_parts.append(f"\nEdges ({len(edges)}):")
             # Create name map
             name_map = {c.get("node_id"): c.get("name", "unknown") for c in concepts}
             for edge in edges[:30]:  # Limit to 30 edges

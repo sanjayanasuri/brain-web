@@ -238,6 +238,7 @@ USER PREFERRED STYLE (CRITICAL - FOLLOW STRICTLY):
 - Be direct and conversational. Just state things, don't introduce them formally.
 - NO unnecessary transitions: Avoid "Now, zooming out,", "Let's take a step back", "At a broader level,", "At its core," unless truly necessary.
 - NO formal section headers: Never use **Big Picture:**, **Core Concept Definition:**, or stars/bold for sections.
+- NO bold formatting for concepts/nodes: When mentioning concepts or nodes from the graph, mention them naturally without using **bold** markdown. They should be implicitly referenced, not highlighted with formatting.
 - Integrate analogies naturally: Weave them into the flow, don't break paragraphs unnecessarily.
 - One expanded example > multiple examples: Pick one concrete example and expand it, don't list many.
 - Explain technical terms simply or avoid: If you use a term, explain what it means. Avoid ambiguous terms like "handle their own state" or "virtual DOM" without context.
@@ -760,13 +761,14 @@ Your job:
 
 3. If something is not in the graph, you may use your own knowledge, but still explain it in this same style and, when possible, connect it to nearby concepts.
 
-4. When you mention a concept that exists in the graph, try to keep the name exactly as it appears in the graph so the frontend can highlight it.
+4. When you mention a concept that exists in the graph, try to keep the name exactly as it appears in the graph so the frontend can highlight it. Do NOT use **bold** markdown formatting for concept names - mention them naturally without highlighting.
 
 FORMATTING REQUIREMENTS:
 - Use clear paragraphs separated by blank lines
 - Use bullet points (- or •) for lists
 - Break up long paragraphs into shorter, readable chunks
 - Use line breaks to separate major sections
+- Do NOT use **bold** markdown formatting for concepts, nodes, or section headers - mention them naturally
 
 Format your response as:
 ANSWER: <your well-formatted answer>
@@ -1043,7 +1045,7 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
             messages: [
               {
                 role: 'system',
-                content: 'You are a style rewriter. Rewrite answers to match the user\'s preferred style while preserving all factual content.',
+                content: 'You are a style rewriter. Rewrite answers to match the user\'s preferred style while preserving all factual content. CRITICAL: Do NOT use **bold** markdown formatting for concepts, nodes, or any text. Mention concepts naturally without highlighting.',
               },
               {
                 role: 'user',
@@ -1080,6 +1082,8 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
     answer = answer
       .replace(/\n\n+/g, '\n\n')
       .replace(/^[-•]\s+/gm, '• ')
+      // Remove bold markdown formatting (**text** becomes text)
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
       .trim();
 
     // Step 6: Generate answerId and store answer
@@ -1461,7 +1465,7 @@ Your task:
 1. If context is available, use it to answer the question
 2. If context is minimal or empty, respond naturally using your knowledge BUT be honest about uncertainty
 3. Cite specific claims and sources when relevant using citation tokens (if available)
-4. Reference communities when discussing related concepts (if available)
+4. Reference communities when discussing related concepts (if available) - mention them naturally without using **bold** markdown formatting
 5. Be conversational and helpful, but NEVER make up specific facts about real-world entities
 6. When uncertain, admit it clearly rather than providing generic information
 
@@ -1470,6 +1474,7 @@ FORMATTING REQUIREMENTS:
 - Use bullet points (- or •) for lists
 - Break up long paragraphs into shorter, readable chunks
 - Use line breaks to separate major sections
+- Do NOT use **bold** markdown formatting for concepts, nodes, or section headers - mention them naturally
 
 Format your response as:
 ANSWER: <your well-formatted answer>
@@ -1798,6 +1803,8 @@ Use these examples to refine your responses. Pay attention to what the user like
     answer = answer
       .replace(/\n\n+/g, '\n\n')
       .replace(/^[-•]\s+/gm, '• ')
+      // Remove bold markdown formatting (**text** becomes text)
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
       .trim();
 
     // Generate answerId

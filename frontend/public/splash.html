@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brain Web - Starting...</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            color: white;
+        }
+
+        .splash-container {
+            text-align: center;
+            animation: fadeIn 0.5s ease-in;
+        }
+
+        .logo {
+            font-size: 4rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(45deg, #fff, #e0e7ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .tagline {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 3rem;
+            font-weight: 300;
+        }
+
+        .loader {
+            display: inline-block;
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 2rem;
+        }
+
+        .status {
+            font-size: 1rem;
+            opacity: 0.8;
+            margin-top: 1rem;
+            min-height: 24px;
+        }
+
+        .progress-bar {
+            width: 300px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            margin: 2rem auto;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: white;
+            border-radius: 2px;
+            animation: progress 3s ease-in-out infinite;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes progress {
+            0% { width: 0%; }
+            50% { width: 70%; }
+            100% { width: 100%; }
+        }
+
+        .dots {
+            display: inline-block;
+        }
+
+        .dots::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+    </style>
+</head>
+<body>
+    <div class="splash-container">
+        <div class="logo">🧠 Brain Web</div>
+        <div class="tagline">Your Knowledge Graph Platform</div>
+        <div class="loader"></div>
+        <div class="progress-bar">
+            <div class="progress-fill"></div>
+        </div>
+        <div class="status" id="status">Initializing<span class="dots"></span></div>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        const statuses = [
+            'Checking Neo4j connection...',
+            'Starting backend server...',
+            'Starting frontend server...',
+            'Loading your knowledge graph...',
+            'Almost ready...'
+        ];
+
+        let currentStatus = 0;
+        
+        function updateStatus() {
+            if (currentStatus < statuses.length) {
+                statusEl.innerHTML = statuses[currentStatus] + '<span class="dots"></span>';
+                currentStatus++;
+                setTimeout(updateStatus, 2000);
+            } else {
+                statusEl.innerHTML = 'Redirecting to Brain Web...';
+                // Check if backend and frontend are ready
+                checkServices();
+            }
+        }
+
+        function checkServices() {
+            let backendReady = false;
+            let frontendReady = false;
+
+            // Check backend
+            fetch('http://localhost:8000/')
+                .then(() => { backendReady = true; checkComplete(); })
+                .catch(() => setTimeout(checkServices, 1000));
+
+            // Check frontend
+            fetch('http://localhost:3000/')
+                .then(() => { frontendReady = true; checkComplete(); })
+                .catch(() => setTimeout(checkServices, 1000));
+
+            function checkComplete() {
+                if (backendReady && frontendReady) {
+                    setTimeout(() => {
+                        window.location.href = 'http://localhost:3000';
+                    }, 500);
+                }
+            }
+        }
+
+        // Start status updates
+        setTimeout(updateStatus, 1000);
+
+        // Fallback: redirect after 30 seconds regardless
+        setTimeout(() => {
+            window.location.href = 'http://localhost:3000';
+        }, 30000);
+    </script>
+</body>
+</html>
+

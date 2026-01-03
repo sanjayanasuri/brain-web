@@ -38,7 +38,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: 'white',
+          background: 'var(--surface)',
           borderTopLeftRadius: '20px',
           borderTopRightRadius: '20px',
           width: '100%',
@@ -54,7 +54,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
           style={{
             width: '40px',
             height: '4px',
-            background: '#d1d5db',
+            background: 'var(--border)',
             borderRadius: '2px',
             margin: '0 auto 20px',
           }}
@@ -67,8 +67,8 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
             position: 'absolute',
             top: '20px',
             right: '20px',
-            background: '#f3f4f6',
-            border: 'none',
+            background: 'var(--panel)',
+            border: '1px solid var(--border)',
             borderRadius: '50%',
             width: '32px',
             height: '32px',
@@ -77,6 +77,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
             justifyContent: 'center',
             cursor: 'pointer',
             fontSize: '20px',
+            color: 'var(--ink)',
           }}
         >
           ✕
@@ -88,7 +89,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
             fontSize: '24px',
             fontWeight: '700',
             marginBottom: '8px',
-            color: '#111827',
+            color: 'var(--ink)',
             paddingRight: '40px',
           }}>
             {concept.name}
@@ -99,8 +100,9 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
               <span style={{
                 fontSize: '13px',
                 padding: '6px 12px',
-                background: '#eff6ff',
-                color: '#2563eb',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
+                color: 'var(--accent)',
                 borderRadius: '8px',
                 fontWeight: '500',
               }}>
@@ -111,8 +113,9 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
               <span style={{
                 fontSize: '13px',
                 padding: '6px 12px',
-                background: '#f3f4f6',
-                color: '#6b7280',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
+                color: 'var(--muted)',
                 borderRadius: '8px',
               }}>
                 {concept.type}
@@ -127,7 +130,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
               fontSize: '14px',
               fontWeight: '600',
               marginBottom: '8px',
-              color: '#374151',
+              color: 'var(--ink)',
               textTransform: 'uppercase',
               letterSpacing: '0.5px',
             }}>
@@ -135,7 +138,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
             </h3>
             <p style={{
               fontSize: '15px',
-              color: '#6b7280',
+              color: 'var(--muted)',
               lineHeight: '1.6',
             }}>
               {concept.description}
@@ -149,7 +152,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
               fontSize: '14px',
               fontWeight: '600',
               marginBottom: '8px',
-              color: '#374151',
+              color: 'var(--ink)',
               textTransform: 'uppercase',
               letterSpacing: '0.5px',
             }}>
@@ -161,12 +164,13 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
               rel="noopener noreferrer"
               style={{
                 fontSize: '15px',
-                color: '#3b82f6',
+                color: 'var(--accent)',
                 textDecoration: 'none',
                 wordBreak: 'break-all',
                 display: 'block',
                 padding: '12px',
-                background: '#f0f9ff',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
                 borderRadius: '8px',
               }}
             >
@@ -181,7 +185,7 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
               fontSize: '14px',
               fontWeight: '600',
               marginBottom: '8px',
-              color: '#374151',
+              color: 'var(--ink)',
               textTransform: 'uppercase',
               letterSpacing: '0.5px',
             }}>
@@ -194,8 +198,8 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
                   style={{
                     fontSize: '13px',
                     padding: '6px 12px',
-                    background: '#f3f4f6',
-                    color: '#6b7280',
+                    background: 'var(--panel)',
+                    color: 'var(--muted)',
                     borderRadius: '8px',
                   }}
                 >
@@ -208,10 +212,10 @@ export default function MobileConceptDetail({ concept, onClose }: MobileConceptD
 
         <div style={{
           padding: '16px',
-          background: '#f9fafb',
+          background: 'var(--panel)',
           borderRadius: '12px',
           fontSize: '13px',
-          color: '#6b7280',
+          color: 'var(--muted)',
         }}>
           <div style={{ marginBottom: '4px' }}>
             <strong>Node ID:</strong> {concept.node_id}

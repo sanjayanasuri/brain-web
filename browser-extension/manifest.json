@@ -1,59 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "Brain Web Capture (Local)",
-  "version": "0.1.0",
-  "description": "Capture webpages into Brain Web running on localhost.",
-  "action": {
-    "default_title": "Capture to Brain Web",
-    "default_popup": "src/popup.html"
-  },
-  "permissions": ["activeTab", "storage", "scripting"],
-  "host_permissions": [
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*",
-    "http://*/*",
-    "https://*/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["src/content_script.js", "src/highlight_quotes.js", "src/toast_ui.js"],
-      "run_at": "document_idle"
-    }
-  ],
+  "name": "Brain Web Capture",
+  "version": "0.2.0",
+  "description": "Add highlighted text to Brain Web from the context menu.",
+  "permissions": ["contextMenus", "storage", "notifications", "scripting"],
+  "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*", "https://*/*", "http://*/*"],
   "background": {
-    "service_worker": "src/service_worker.js",
+    "service_worker": "dist/background.js",
     "type": "module"
   },
-  "commands": {
-    "capture-selection": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+S",
-        "mac": "Command+Shift+S"
-      },
-      "description": "Capture selection as Quote"
-    },
-    "capture-page": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+P",
-        "mac": "Command+Shift+P"
-      },
-      "description": "Capture page"
-    },
-    "start-trail": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+T",
-        "mac": "Command+Shift+T"
-      },
-      "description": "Start / Resume Trail"
-    },
-    "extend-mode": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+E",
-        "mac": "Command+Shift+E"
-      },
-      "description": "Extend (mode picker)"
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*.png"],
+      "matches": ["<all_urls>"]
     }
-  }
+  ]
 }
 

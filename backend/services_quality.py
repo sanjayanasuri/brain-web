@@ -342,3 +342,171 @@ def compute_graph_health(
         }
     }
 
+
+def compute_narrative_metrics(
+    session: Session,
+    concept_ids: List[str],
+    graph_id: Optional[str] = None
+) -> Dict[str, Dict[str, float]]:
+    """
+    Compute narrative metrics (recency, mention frequency, centrality) for a list of concepts.
+    
+    Metrics:
+    - recencyWeight: 0-1, based on last activity/evidence timestamp (higher = more recent)
+    - mentionFrequency: 0-1, based on degree + evidence count + activity events (higher = more mentioned)
+    - centralityDelta: 0-1, based on degree relative to graph average (higher = more central)
+    
+    Returns:
+        {
+            "concept_id": {
+                "recencyWeight": float (0-1),
+                "mentionFrequency": float (0-1),
+                "centralityDelta": float (0-1)
+            },
+            ...
+        }
+    """
+    if not concept_ids:
+        return {}
+    
+    ensure_graph_scoping_initialized(session)
+    if graph_id:
+        graph_id_ctx = graph_id
+        branch_id = "main"
+    else:
+        graph_id_ctx, branch_id = get_active_graph_context(session)
+    
+    # Get user_id (demo-safe)
+    user_id = "demo"  # Could be passed as parameter if needed
+    
+    results = {}
+    now = datetime.now()
+    
+    # First, get max degree in graph for normalization
+    max_degree_query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    WHERE $branch_id IN COALESCE(c.on_branches, [])
+    OPTIONAL MATCH (c)-[r]-(:Concept)-[:BELONGS_TO]->(g)
+    WHERE $branch_id IN COALESCE(r.on_branches, [])
+    WITH c, count(DISTINCT r) AS degree
+    RETURN max(degree) AS max_degree, avg(degree) AS avg_degree
+    """
+    max_degree_result = session.run(max_degree_query, graph_id=graph_id_ctx, branch_id=branch_id)
+    max_degree_record = max_degree_result.single()
+    max_degree = max_degree_record["max_degree"] if max_degree_record and max_degree_record["max_degree"] else 1
+    avg_degree = max_degree_record["avg_degree"] if max_degree_record and max_degree_record["avg_degree"] else 0
+    
+    # Process each concept
+    for concept_id in concept_ids:
+        # Get last activity timestamp
+        activity_query = """
+        MATCH (e:ActivityEvent)
+        WHERE e.user_id = $user_id
+          AND e.concept_id = $concept_id
+          AND e.type IN ['CONCEPT_VIEWED', 'RESOURCE_OPENED', 'EVIDENCE_FETCHED']
+        RETURN e.created_at AS created_at
+        ORDER BY e.created_at DESC
+        LIMIT 1
+        """
+        activity_result = session.run(activity_query, user_id=user_id, concept_id=concept_id)
+        activity_record = activity_result.single()
+        
+        last_activity_ts = None
+        if activity_record and activity_record["created_at"]:
+            try:
+                created_at_str = activity_record["created_at"]
+                if isinstance(created_at_str, str):
+                    if 'T' in created_at_str:
+                        last_activity_ts = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                    else:
+                        last_activity_ts = datetime.fromtimestamp(float(created_at_str))
+            except (ValueError, TypeError):
+                pass
+        
+        # Get newest evidence timestamp
+        resources = get_resources_for_concept(session, concept_id, include_archived=False)
+        newest_evidence_ts = None
+        for resource in resources:
+            created_at = resource.created_at
+            if created_at:
+                try:
+                    if isinstance(created_at, str):
+                        if 'T' in created_at:
+                            dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.fromtimestamp(float(created_at))
+                    elif isinstance(created_at, (int, float)):
+                        dt = datetime.fromtimestamp(created_at)
+                    else:
+                        continue
+                    
+                    if newest_evidence_ts is None or dt > newest_evidence_ts:
+                        newest_evidence_ts = dt
+                except (ValueError, TypeError):
+                    continue
+        
+        # Calculate recency: use most recent of activity or evidence
+        most_recent_ts = None
+        if last_activity_ts and newest_evidence_ts:
+            most_recent_ts = max(last_activity_ts, newest_evidence_ts)
+        elif last_activity_ts:
+            most_recent_ts = last_activity_ts
+        elif newest_evidence_ts:
+            most_recent_ts = newest_evidence_ts
+        
+        # Recency weight: exponential decay over 90 days
+        if most_recent_ts:
+            age_days = (now - most_recent_ts.replace(tzinfo=None) if most_recent_ts.tzinfo else now - most_recent_ts).days
+            # Exponential decay: 1.0 for 0 days, ~0.37 for 30 days, ~0.05 for 90 days
+            recency_weight = max(0.0, min(1.0, 1.0 / (1.0 + age_days / 30.0)))
+        else:
+            recency_weight = 0.0
+        
+        # Get degree and evidence count for mention frequency
+        neighbors = get_neighbors_with_relationships(session, concept_id, include_proposed="all")
+        degree = len(neighbors)
+        evidence_count = len(resources)
+        
+        # Count activity events for this concept
+        activity_count_query = """
+        MATCH (e:ActivityEvent)
+        WHERE e.user_id = $user_id
+          AND e.concept_id = $concept_id
+        RETURN count(e) AS count
+        """
+        activity_count_result = session.run(activity_count_query, user_id=user_id, concept_id=concept_id)
+        activity_count_record = activity_count_result.single()
+        activity_count = activity_count_record["count"] if activity_count_record else 0
+        
+        # Mention frequency: combine degree, evidence count, and activity
+        # Normalize each component to 0-1, then average
+        # Degree: normalize by max_degree (cap at 1.0)
+        degree_norm = min(1.0, degree / max_degree) if max_degree > 0 else 0.0
+        
+        # Evidence: normalize by 10 (cap at 1.0)
+        evidence_norm = min(1.0, evidence_count / 10.0)
+        
+        # Activity: normalize by 20 (cap at 1.0)
+        activity_norm = min(1.0, activity_count / 20.0)
+        
+        # Weighted average: degree 50%, evidence 30%, activity 20%
+        mention_frequency = (degree_norm * 0.5 + evidence_norm * 0.3 + activity_norm * 0.2)
+        
+        # Centrality delta: how much above/below average degree
+        # Normalize: (degree - avg_degree) / max_degree, then scale to 0-1
+        if max_degree > 0:
+            centrality_raw = (degree - avg_degree) / max_degree
+            # Shift and scale to 0-1: (raw + 1) / 2, then clamp
+            centrality_delta = max(0.0, min(1.0, (centrality_raw + 1.0) / 2.0))
+        else:
+            centrality_delta = 0.5  # Neutral if no graph data
+        
+        results[concept_id] = {
+            "recencyWeight": round(recency_weight, 3),
+            "mentionFrequency": round(mention_frequency, 3),
+            "centralityDelta": round(centrality_delta, 3)
+        }
+    
+    return results
+

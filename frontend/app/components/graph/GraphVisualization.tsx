@@ -676,6 +676,7 @@ function GraphVisualizationInner() {
   const graphCanvasRef = useRef<HTMLDivElement | null>(null);
   const neighborCacheRef = useRef<Map<string, { nodes: Concept[]; edges: any[] }>>(new Map());
   const loadingNeighborsRef = useRef<string | null>(null);
+  const isSubmittingChatRef = useRef<boolean>(false);
   const normalize = useCallback((name: string) => name.trim().toLowerCase(), []);
 
   // Auto-highlight evidence setting (localStorage)
@@ -2027,10 +2028,28 @@ function GraphVisualizationInner() {
 
   // Chat input handler
   const handleChatSubmit = useCallback(async (message: string) => {
-    if (!message.trim() || chat.state.isChatLoading) return;
+    // Prevent duplicate submissions
+    if (!message.trim() || chat.state.isChatLoading || isSubmittingChatRef.current) {
+      return;
+    }
+    
+    // Mark as submitting immediately to prevent double submissions
+    isSubmittingChatRef.current = true;
     
     // Add user message to history immediately so it appears right away
     const userMessageId = `user-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    
+    // Check if this exact message was just added (prevent duplicates) - check ALL recent messages, not just last
+    const recentMessages = chat.state.chatHistory.slice(-3); // Check last 3 messages
+    const isDuplicate = recentMessages.some(msg => 
+      msg.question === message && (!msg.answer || msg.answer.trim() === '')
+    );
+    if (isDuplicate) {
+      // This message was already added, don't add it again
+      console.warn('[Chat] Duplicate message detected, skipping');
+      isSubmittingChatRef.current = false;
+      return;
+    }
     
     // Add pending message to history (will be updated when response arrives)
     const pendingMessage = {
@@ -2249,10 +2268,11 @@ function GraphVisualizationInner() {
       
       // Update the pending message in history with the complete answer FIRST
       // This ensures history is persisted before setting transient state
+      let messageIndex = -1;
       if (data.answer && message.trim()) {
         // Use functional update to ensure we have the latest state
         const currentHistory = chat.state.chatHistory;
-        const messageIndex = currentHistory.findIndex(msg => msg.id === userMessageId);
+        messageIndex = currentHistory.findIndex(msg => msg.id === userMessageId);
         
         if (messageIndex >= 0) {
           // Update existing message
@@ -2270,36 +2290,64 @@ function GraphVisualizationInner() {
             } : msg
           );
           chat.actions.setChatHistory(updatedHistory);
+          // Clear transient state immediately since answer is now in history
+          chat.actions.setChatAnswer(null);
+          chat.actions.setAnswerId(null);
         } else {
-          // Message not found, add it (shouldn't happen, but defensive)
-          console.warn('[Chat] Message not found in history, adding new message');
-          const newMessage: ChatMessage = {
-            id: userMessageId,
-            question: message,
-            answer: data.answer,
-            answerId: data.answerId || null,
-            answerSections: data.answer_sections || data.sections || null,
-            timestamp: Date.now(),
-            suggestedQuestions: data.suggestedQuestions || [],
-            usedNodes: data.usedNodes || [],
-            suggestedActions: data.suggestedActions || [],
-            retrievalMeta: data.retrievalMeta || null,
-            evidenceUsed: normalizedEvidence,
-          };
-          chat.actions.addChatMessage(newMessage);
+          // Message not found - check if a message with same question/answer already exists
+          const existingMessage = currentHistory.find(msg => 
+            msg.question === message && msg.answer === data.answer && msg.answer.trim() !== ''
+          );
+          
+          if (existingMessage) {
+            // Message already exists, just clear transient state
+            console.warn('[Chat] Message already exists in history, skipping duplicate');
+            chat.actions.setChatAnswer(null);
+            chat.actions.setAnswerId(null);
+          } else {
+            // Message not found, add it (shouldn't happen, but defensive)
+            console.warn('[Chat] Message not found in history, adding new message');
+            const newMessage: ChatMessage = {
+              id: userMessageId,
+              question: message,
+              answer: data.answer,
+              answerId: data.answerId || null,
+              answerSections: data.answer_sections || data.sections || null,
+              timestamp: Date.now(),
+              suggestedQuestions: data.suggestedQuestions || [],
+              usedNodes: data.usedNodes || [],
+              suggestedActions: data.suggestedActions || [],
+              retrievalMeta: data.retrievalMeta || null,
+              evidenceUsed: normalizedEvidence,
+            };
+            chat.actions.addChatMessage(newMessage);
+            // Clear transient state since answer is now in history
+            chat.actions.setChatAnswer(null);
+            chat.actions.setAnswerId(null);
+          }
         }
       }
       
-      // Set transient state (for display while answer is streaming/updating)
-      // Note: chatAnswer will be cleared once it's confirmed in history via useEffect
-      chat.actions.setChatAnswer(data.answer || '');
-      chat.actions.setAnswerId(data.answerId || null);
-      chat.actions.setAnswerSections(data.answer_sections || data.sections || null);
-      chat.actions.setUsedNodes(data.usedNodes || []);
-      chat.actions.setSuggestedQuestions(data.suggestedQuestions || []);
-      chat.actions.setSuggestedActions(data.suggestedActions || []);
-      chat.actions.setRetrievalMeta(data.retrievalMeta || null);
-      chat.actions.setEvidenceUsed(normalizedEvidence);
+      // Only set transient state if message is NOT in history (shouldn't happen in normal flow)
+      // This is a fallback for edge cases
+      if (messageIndex < 0 && data.answer) {
+        chat.actions.setChatAnswer(data.answer || '');
+        chat.actions.setAnswerId(data.answerId || null);
+        chat.actions.setAnswerSections(data.answer_sections || data.sections || null);
+        chat.actions.setUsedNodes(data.usedNodes || []);
+        chat.actions.setSuggestedQuestions(data.suggestedQuestions || []);
+        chat.actions.setSuggestedActions(data.suggestedActions || []);
+        chat.actions.setRetrievalMeta(data.retrievalMeta || null);
+        chat.actions.setEvidenceUsed(normalizedEvidence);
+      } else {
+        // Ensure transient state is cleared when answer is in history
+        chat.actions.setAnswerSections(data.answer_sections || data.sections || null);
+        chat.actions.setUsedNodes(data.usedNodes || []);
+        chat.actions.setSuggestedQuestions(data.suggestedQuestions || []);
+        chat.actions.setSuggestedActions(data.suggestedActions || []);
+        chat.actions.setRetrievalMeta(data.retrievalMeta || null);
+        chat.actions.setEvidenceUsed(normalizedEvidence);
+      }
       
       // Auto-highlight evidence if enabled
       if (autoHighlightEvidence && normalizedEvidence.length > 0) {
@@ -2350,8 +2398,9 @@ function GraphVisualizationInner() {
     } finally {
       chat.actions.setChatLoading(false);
       chat.actions.setLoadingStage('');
+      isSubmittingChatRef.current = false;
     }
-  }, [chat.actions, chat.state.isChatLoading, activeGraphId, activeBranchId, autoHighlightEvidence, applyEvidenceHighlightWithRetry, clearEvidenceHighlight]);
+  }, [chat.actions, chat.state.isChatLoading, chat.state.chatHistory, activeGraphId, activeBranchId, autoHighlightEvidence, applyEvidenceHighlightWithRetry, clearEvidenceHighlight]);
 
   // Node selection handler
   const handleNodeClick = useCallback((node: any) => {
@@ -2387,10 +2436,32 @@ function GraphVisualizationInner() {
     }
   }, [loadGraph, refreshGraphs, refreshBranches]);
 
-  // Load chat session from URL param
+  // Track if this is the initial mount to prevent auto-loading chat sessions on startup
+  const isInitialMountRef = useRef(true);
+  const initialChatParamRef = useRef<string | null>(null);
+  
+  // Load chat session from URL param (only if not initial mount)
   useEffect(() => {
     const chatSessionId = searchParams?.get('chat');
-    if (chatSessionId) {
+    const isInitialMount = isInitialMountRef.current;
+    
+    // On initial mount, just remember the chat param but don't load it
+    // This allows the app to start fresh while preserving the URL
+    if (isInitialMount) {
+      isInitialMountRef.current = false;
+      initialChatParamRef.current = chatSessionId;
+      // Clear chat history on startup to start fresh
+      chat.actions.setChatHistory([]);
+      setCurrentSessionId(null);
+      // Don't load the session on initial mount - user gets a fresh start
+      return;
+    }
+    
+    // After initial mount, only load session if:
+    // 1. There's a chat parameter in the URL
+    // 2. It's different from the initial one (user explicitly navigated to it)
+    // This allows users to navigate to chat sessions after startup
+    if (chatSessionId && chatSessionId !== initialChatParamRef.current) {
       const session = getChatSession(chatSessionId);
       if (session) {
         setCurrentSessionId(session.id);
@@ -2655,9 +2726,9 @@ function GraphVisualizationInner() {
                 return '#06d6a0';
               }
               const status = link.relationship_status || 'ACCEPTED';
-              if (status === 'PROPOSED') return 'rgba(251, 191, 36, 0.4)';
-              if (status === 'REJECTED') return 'rgba(239, 68, 68, 0.3)';
-              return 'rgba(15, 23, 42, 0.2)';
+              if (status === 'PROPOSED') return 'var(--panel)';
+              if (status === 'REJECTED') return 'var(--accent-2)';
+              return 'var(--border)';
             }}
             linkWidth={(link: any) => {
               const isEvidence = chat.state.evidenceLinkIds.has(`${link.source.node_id}-${link.target.node_id}-${link.predicate}`);
@@ -3218,9 +3289,13 @@ function GraphVisualizationInner() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
+                  // Prevent double submission
+                  if (isSubmittingChatRef.current || chat.state.isChatLoading) {
+                    return;
+                  }
                   const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
-                  if (textarea?.value) {
-                    handleChatSubmit(textarea.value);
+                  if (textarea?.value?.trim()) {
+                    handleChatSubmit(textarea.value.trim());
                     textarea.value = '';
                     textarea.style.height = 'auto';
                   }
@@ -3280,23 +3355,28 @@ function GraphVisualizationInner() {
               padding: '16px',
               display: 'flex',
               flexDirection: 'column',
-              gap: '16px',
+              gap: '24px',
             }}
           >
-            {/* Display chat history */}
-            {chat.state.chatHistory.map((msg) => (
-              <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* Display chat history - deduplicate by message ID */}
+            {chat.state.chatHistory
+              .filter((msg, index, self) => 
+                // Remove duplicates: keep only first occurrence of each message ID
+                index === self.findIndex(m => m.id === msg.id)
+              )
+              .map((msg) => (
+              <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
                 {/* User question - right aligned */}
                 <div style={{
-                  padding: '10px 14px',
-                  background: 'rgba(17, 138, 178, 0.1)',
-                  border: '1px solid rgba(17, 138, 178, 0.2)',
+                  padding: '12px 16px',
+                  background: 'var(--panel)',
+                  border: '1px solid var(--border)',
                   borderRadius: '12px 12px 4px 12px',
                   alignSelf: 'flex-end',
                   maxWidth: '75%',
                   wordWrap: 'break-word',
                 }}>
-                  <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.5', color: 'var(--ink)' }}>
+                  <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.6', color: 'var(--ink)' }}>
                     {msg.question}
                   </p>
                 </div>
@@ -3304,7 +3384,7 @@ function GraphVisualizationInner() {
                 {/* Assistant answer - left aligned */}
                 {msg.answer && (
                   <div style={{
-                    padding: '12px 14px',
+                    padding: '14px 16px',
                     background: 'var(--panel)',
                     border: '1px solid var(--border)',
                     borderRadius: '12px 12px 12px 4px',
@@ -3312,7 +3392,7 @@ function GraphVisualizationInner() {
                     maxWidth: '75%',
                     whiteSpace: 'pre-wrap',
                     fontSize: '14px',
-                    lineHeight: '1.6',
+                    lineHeight: '1.7',
                     wordWrap: 'break-word',
                   }}>
                     {msg.answer}
@@ -3479,8 +3559,8 @@ function GraphVisualizationInner() {
                         }}
                         style={{
                           padding: '8px 12px',
-                          background: 'rgba(17, 138, 178, 0.1)',
-                          border: '1px solid rgba(17, 138, 178, 0.3)',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           borderRadius: '6px',
                           cursor: 'pointer',
                           textAlign: 'left',
@@ -3505,20 +3585,20 @@ function GraphVisualizationInner() {
             )}
 
             {/* Current answer (if not yet saved to history) */}
-            {chat.state.chatAnswer && !chat.state.chatHistory.some(msg => msg.answerId === chat.state.answerId) && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {/* User question - right aligned */}
-                {chat.state.lastQuestion && (
+            {chat.state.chatAnswer && chat.state.answerId && !chat.state.chatHistory.some(msg => msg.answerId === chat.state.answerId && msg.answer && msg.answer.trim()) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px' }}>
+                {/* User question - right aligned - only show if not already in history */}
+                {chat.state.lastQuestion && !chat.state.chatHistory.some(msg => msg.question === chat.state.lastQuestion && msg.answer && msg.answer.trim()) && (
                   <div style={{
-                    padding: '10px 14px',
-                    background: 'rgba(17, 138, 178, 0.1)',
-                    border: '1px solid rgba(17, 138, 178, 0.2)',
+                    padding: '12px 16px',
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
                     borderRadius: '12px 12px 4px 12px',
                     alignSelf: 'flex-end',
                     maxWidth: '75%',
                     wordWrap: 'break-word',
                   }}>
-                    <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.5', color: 'var(--ink)' }}>
+                    <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.6', color: 'var(--ink)' }}>
                       {chat.state.lastQuestion}
                     </p>
                   </div>
@@ -3526,7 +3606,7 @@ function GraphVisualizationInner() {
                 
                 {/* Assistant answer - left aligned */}
                 <div style={{
-                  padding: '12px 14px',
+                  padding: '14px 16px',
                   background: 'var(--panel)',
                   border: '1px solid var(--border)',
                   borderRadius: '12px 12px 12px 4px',
@@ -3534,7 +3614,7 @@ function GraphVisualizationInner() {
                   maxWidth: '75%',
                   whiteSpace: 'pre-wrap',
                   fontSize: '14px',
-                  lineHeight: '1.6',
+                  lineHeight: '1.7',
                   wordWrap: 'break-word',
                 }}>
                   {chat.state.chatAnswer}
@@ -3758,8 +3838,8 @@ function GraphVisualizationInner() {
                         }}
                         style={{
                           padding: '8px 12px',
-                          background: 'rgba(17, 138, 178, 0.1)',
-                          border: '1px solid rgba(17, 138, 178, 0.3)',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
                           borderRadius: '6px',
                           cursor: 'pointer',
                           textAlign: 'left',
@@ -3812,9 +3892,13 @@ function GraphVisualizationInner() {
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
+                  // Prevent double submission
+                  if (isSubmittingChatRef.current || chat.state.isChatLoading) {
+                    return;
+                  }
                   const textarea = e.currentTarget.querySelector('textarea') as HTMLTextAreaElement;
-                  if (textarea?.value) {
-                    handleChatSubmit(textarea.value);
+                  if (textarea?.value?.trim()) {
+                    handleChatSubmit(textarea.value.trim());
                     textarea.value = '';
                     textarea.style.height = 'auto';
                   }

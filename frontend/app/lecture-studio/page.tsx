@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { 
   getLecture, 
   getLectureSegments, 
+  ingestLecture,
   type Lecture, 
   type LectureSegment,
   type Concept,
@@ -34,6 +35,10 @@ function LectureStudioPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState<number | null>(null);
   const [highlightedConcepts, setHighlightedConcepts] = useState<Set<string>>(new Set());
+  const [showIngestModal, setShowIngestModal] = useState(false);
+  const [ingestText, setIngestText] = useState('');
+  const [ingestDomain, setIngestDomain] = useState('');
+  const [ingesting, setIngesting] = useState(false);
 
   useEffect(() => {
     const id = lectureId;
@@ -94,6 +99,41 @@ function LectureStudioPageInner() {
     router.push(`/concepts/${concept.node_id}`);
   };
 
+  const handleIngestLecture = async () => {
+    if (!ingestText.trim() || !lectureId) return;
+    
+    try {
+      setIngesting(true);
+      await ingestLecture({
+        lecture_title: lecture?.title || 'Untitled Lecture',
+        lecture_text: ingestText.trim(),
+        domain: ingestDomain.trim() || undefined,
+      });
+      
+      // Reload the lecture data to show new segments
+      const [lectureData, segmentsData] = await Promise.all([
+        getLecture(lectureId),
+        getLectureSegments(lectureId),
+      ]);
+      setLecture(lectureData);
+      setSegments(segmentsData);
+      
+      // Close modal and reset form
+      setShowIngestModal(false);
+      setIngestText('');
+      setIngestDomain('');
+    } catch (err) {
+      console.error('Failed to ingest lecture:', err);
+      alert('Failed to ingest lecture. Please try again.');
+    } finally {
+      setIngesting(false);
+    }
+  };
+
+  const handleSegmentClickToReader = (segment: LectureSegment) => {
+    router.push(`/reader/segment?lectureId=${lectureId}&segmentIndex=${segment.segment_index}`);
+  };
+
   if (loading) {
     return (
       <div style={{ padding: '40px', textAlign: 'center' }}>
@@ -116,7 +156,7 @@ function LectureStudioPageInner() {
   return (
     <div style={{ 
       minHeight: '100vh', 
-      background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+      background: 'var(--page-bg)',
       padding: '20px',
     }}>
       <div style={{ maxWidth: '1600px', margin: '0 auto' }}>
@@ -125,11 +165,63 @@ function LectureStudioPageInner() {
           <Link href="/" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '14px' }}>
             ← Back to Graph
           </Link>
-          <h1 style={{ fontSize: '32px', fontWeight: '700', marginTop: '12px', marginBottom: '8px' }}>
+          <h1 
+            onClick={() => {
+              if (segments.length > 0) {
+                router.push(`/reader/segment?lectureId=${lectureId}&segmentIndex=0`);
+              } else {
+                setShowIngestModal(true);
+              }
+            }}
+            style={{ 
+              fontSize: '32px', 
+              fontWeight: '700', 
+              marginTop: '12px', 
+              marginBottom: '8px',
+              cursor: 'pointer',
+              transition: 'opacity 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+            title={segments.length > 0 ? 'Click to open in File Reader Studio' : 'Click to add content'}
+          >
             {lecture.title}
           </h1>
           {lecture.description && (
             <p style={{ color: 'var(--muted)', fontSize: '16px' }}>{lecture.description}</p>
+          )}
+          {segments.length === 0 && (
+            <div style={{
+              marginTop: '16px',
+              padding: '12px 16px',
+              background: 'var(--panel)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              fontSize: '14px',
+            }}>
+              <strong>Getting Started:</strong> This lecture has no content yet. 
+              <button
+                onClick={() => setShowIngestModal(true)}
+                style={{
+                  marginLeft: '8px',
+                  padding: '6px 12px',
+                  background: 'var(--accent)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                }}
+              >
+                Add Content
+              </button>
+              {' '}or go to{' '}
+              <Link href="/reader/segment" style={{ color: 'var(--accent)' }}>
+                File Reader Studio
+              </Link>
+              {' '}to browse and annotate existing lectures.
+            </div>
           )}
         </div>
 
@@ -144,24 +236,76 @@ function LectureStudioPageInner() {
             maxHeight: 'calc(100vh - 200px)',
             overflowY: 'auto',
           }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>Timeline</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: '600' }}>Timeline</h2>
+              {segments.length === 0 && (
+                <button
+                  onClick={() => setShowIngestModal(true)}
+                  style={{
+                    padding: '6px 12px',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                  }}
+                >
+                  + Add Content
+                </button>
+              )}
+            </div>
             {segments.length === 0 ? (
-              <div style={{ color: 'var(--muted)', fontSize: '14px' }}>No segments available</div>
+              <div style={{ 
+                color: 'var(--muted)', 
+                fontSize: '14px',
+                padding: '20px',
+                textAlign: 'center',
+                background: 'var(--surface)',
+                borderRadius: '8px',
+                border: '1px dashed var(--border)',
+              }}>
+                <div style={{ marginBottom: '12px' }}>No segments available</div>
+                <button
+                  onClick={() => setShowIngestModal(true)}
+                  style={{
+                    padding: '10px 20px',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Add Lecture Content
+                </button>
+                <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--muted)' }}>
+                  Or go to <Link href="/reader/segment" style={{ color: 'var(--accent)' }}>File Reader Studio</Link> to browse and annotate
+                </div>
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {segments.map((segment, index) => (
                   <div
                     key={segment.segment_id}
-                    onClick={() => handleSegmentClick(index, segment)}
                     style={{
                       padding: '12px',
                       borderRadius: '8px',
                       border: selectedSegmentIndex === index ? '2px solid var(--accent)' : '1px solid var(--border)',
-                      background: selectedSegmentIndex === index ? 'rgba(17, 138, 178, 0.05)' : 'transparent',
-                      cursor: 'pointer',
+                      background: selectedSegmentIndex === index ? 'var(--panel)' : 'transparent',
                       transition: 'all 0.2s',
                     }}
                   >
+                    <div
+                      onClick={() => handleSegmentClick(index, segment)}
+                      style={{
+                        cursor: 'pointer',
+                        marginBottom: '8px',
+                      }}
+                    >
                     <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '4px' }}>
                       Segment #{segment.segment_index + 1}
                     </div>
@@ -180,7 +324,8 @@ function LectureStudioPageInner() {
                             style={{
                               fontSize: '11px',
                               padding: '2px 8px',
-                              background: 'rgba(17, 138, 178, 0.1)',
+                              background: 'var(--panel)',
+                              border: '1px solid var(--border)',
                               borderRadius: '12px',
                               color: 'var(--accent)',
                             }}
@@ -204,7 +349,8 @@ function LectureStudioPageInner() {
                               padding: '2px 8px',
                               background: highlightedConcepts.has(concept.node_id)
                                 ? 'var(--accent)'
-                                : 'rgba(17, 138, 178, 0.1)',
+                                : 'var(--panel)',
+                              border: highlightedConcepts.has(concept.node_id) ? 'none' : '1px solid var(--border)',
                               color: highlightedConcepts.has(concept.node_id) ? 'white' : 'var(--accent)',
                               borderRadius: '12px',
                               cursor: 'pointer',
@@ -215,6 +361,23 @@ function LectureStudioPageInner() {
                         ))}
                       </div>
                     )}
+                    </div>
+                    <button
+                      onClick={() => handleSegmentClickToReader(segment)}
+                      style={{
+                        marginTop: '8px',
+                        padding: '6px 12px',
+                        background: 'var(--surface)',
+                        color: 'var(--accent)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        cursor: 'pointer',
+                        width: '100%',
+                      }}
+                    >
+                      Open in Reader →
+                    </button>
                   </div>
                 ))}
               </div>
@@ -254,7 +417,7 @@ function LectureStudioPageInner() {
                           ? '2px solid var(--accent)'
                           : '1px solid var(--border)',
                         background: highlightedConcepts.has(concept.node_id)
-                          ? 'rgba(17, 138, 178, 0.05)'
+                          ? 'var(--panel)'
                           : 'transparent',
                         cursor: 'pointer',
                         transition: 'all 0.2s',
@@ -310,9 +473,9 @@ function LectureStudioPageInner() {
                       key={analogy.analogy_id}
                       style={{
                         padding: '10px',
-                        background: 'rgba(17, 138, 178, 0.05)',
+                        background: 'var(--panel)',
                         borderRadius: '6px',
-                        border: '1px solid rgba(17, 138, 178, 0.2)',
+                        border: '1px solid var(--border)',
                       }}
                     >
                       <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '4px' }}>
@@ -371,20 +534,43 @@ function LectureStudioPageInner() {
               )}
             </div>
 
-            {/* Draft Follow-up Lecture Button */}
-            <div>
+            {/* Actions */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {segments.length > 0 && (
+                <Link
+                  href={`/reader/segment?lectureId=${lectureId}&segmentIndex=0`}
+                  style={{
+                    display: 'inline-block',
+                    padding: '12px 20px',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    borderRadius: '8px',
+                    textDecoration: 'none',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    transition: 'opacity 0.2s',
+                    textAlign: 'center',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+                  onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+                >
+                  Open in File Reader Studio →
+                </Link>
+              )}
               <Link
                 href={`/lecture-studio/draft?lectureId=${lectureId}`}
                 style={{
                   display: 'inline-block',
                   padding: '12px 20px',
-                  background: 'var(--accent)',
-                  color: 'white',
+                  background: segments.length > 0 ? 'var(--surface)' : 'var(--accent)',
+                  color: segments.length > 0 ? 'var(--ink)' : 'white',
+                  border: segments.length > 0 ? '1px solid var(--border)' : 'none',
                   borderRadius: '8px',
                   textDecoration: 'none',
                   fontSize: '14px',
                   fontWeight: '600',
                   transition: 'opacity 0.2s',
+                  textAlign: 'center',
                 }}
                 onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
                 onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
@@ -395,6 +581,165 @@ function LectureStudioPageInner() {
           </div>
         </div>
       </div>
+
+      {/* Ingest Lecture Modal */}
+      {showIngestModal && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000,
+            }}
+            onClick={() => !ingesting && setShowIngestModal(false)}
+            onKeyDown={(e) => {
+              // Don't interfere with keyboard events - let them bubble to inputs
+              if (e.key === 'Escape' && !ingesting) {
+                setShowIngestModal(false);
+              }
+            }}
+          >
+          <div
+            style={{
+              background: 'var(--panel)',
+              borderRadius: '12px',
+              padding: '24px',
+              width: '90%',
+              maxWidth: '600px',
+              border: '1px solid var(--border)',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 20px 0' }}>
+              Add Lecture Content
+            </h2>
+            <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
+              Paste or type your lecture content below. The system will automatically extract concepts, create segments, and link them to your knowledge graph.
+            </p>
+            <div style={{ 
+              padding: '12px', 
+              background: 'var(--surface)', 
+              borderRadius: '8px', 
+              border: '1px solid var(--border)',
+              marginBottom: '20px',
+              fontSize: '13px',
+              color: 'var(--ink)',
+            }}>
+              <strong>Note:</strong> This will create a new lecture with segments. After ingestion, you can view and annotate the segments in <Link href="/reader/segment" style={{ color: 'var(--accent)' }}>File Reader Studio</Link>.
+            </div>
+            
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                Domain/Topic (optional)
+              </label>
+              <input
+                type="text"
+                value={ingestDomain}
+                onChange={(e) => setIngestDomain(e.target.value)}
+                placeholder="e.g., Software Engineering, Finance, etc."
+                disabled={ingesting}
+                onKeyDown={(e) => {
+                  // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
+                  if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
+                    // Allow default behavior for select all, copy, paste, cut
+                    return;
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'var(--surface)',
+                  color: 'var(--ink)',
+                  fontSize: '14px',
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                Lecture Content *
+              </label>
+              <textarea
+                value={ingestText}
+                onChange={(e) => setIngestText(e.target.value)}
+                placeholder="Paste or type your lecture content here..."
+                disabled={ingesting}
+                rows={12}
+                onKeyDown={(e) => {
+                  // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
+                  if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
+                    // Allow default behavior for select all, copy, paste, cut
+                    return;
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'var(--surface)',
+                  color: 'var(--ink)',
+                  fontSize: '14px',
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => {
+                  if (!ingesting) {
+                    setShowIngestModal(false);
+                    setIngestText('');
+                    setIngestDomain('');
+                  }
+                }}
+                disabled={ingesting}
+                style={{
+                  padding: '10px 20px',
+                  background: 'transparent',
+                  color: 'var(--muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  cursor: ingesting ? 'not-allowed' : 'pointer',
+                  opacity: ingesting ? 0.5 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleIngestLecture}
+                disabled={!ingestText.trim() || ingesting}
+                style={{
+                  padding: '10px 20px',
+                  background: ingestText.trim() && !ingesting ? 'var(--accent)' : 'var(--muted)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: ingestText.trim() && !ingesting ? 'pointer' : 'not-allowed',
+                  opacity: ingestText.trim() && !ingesting ? 1 : 0.5,
+                }}
+              >
+                {ingesting ? 'Processing...' : 'Add Content'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

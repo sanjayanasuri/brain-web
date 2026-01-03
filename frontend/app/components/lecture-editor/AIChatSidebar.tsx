@@ -1,0 +1,257 @@
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+
+interface AIChatSidebarProps {
+  lectureId?: string | null;
+  lectureTitle?: string;
+}
+
+export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
+  const searchParams = useSearchParams();
+  const [message, setMessage] = useState('');
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const graphId = searchParams?.get('graph_id') || undefined;
+  const branchId = searchParams?.get('branch_id') || undefined;
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!message.trim() || isLoading) return;
+
+    const userMessage = message.trim();
+    setMessage('');
+    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/brain-web/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMessage,
+          mode: 'graphrag',
+          graph_id: graphId,
+          branch_id: branchId,
+          focus_concept_id: undefined,
+          response_prefs: {
+            mode: 'compact',
+            ask_question_policy: 'at_most_one',
+            end_with_next_step: false,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
+      }
+
+      const data = await response.json();
+      const answer = data.answer || 'I apologize, but I could not generate a response.';
+
+      setMessages((prev) => [...prev, { role: 'assistant', content: answer }]);
+    } catch (error) {
+      console.error('Chat error:', error);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' },
+      ]);
+    } finally {
+      setIsLoading(false);
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    }
+  };
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        background: 'var(--surface)',
+        borderLeft: '1px solid var(--border)',
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          padding: '16px',
+          borderBottom: '1px solid var(--border)',
+        }}
+      >
+        <div
+          style={{
+            fontSize: '14px',
+            fontWeight: 600,
+            color: 'var(--ink)',
+            marginBottom: '4px',
+          }}
+        >
+          AI Assistant
+        </div>
+        {lectureTitle && (
+          <div
+            style={{
+              fontSize: '12px',
+              color: 'var(--muted)',
+            }}
+          >
+            {lectureTitle}
+          </div>
+        )}
+      </div>
+
+      {/* Messages */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+        }}
+      >
+        {messages.length === 0 && (
+          <div
+            style={{
+              color: 'var(--muted)',
+              fontSize: '13px',
+              textAlign: 'center',
+              padding: '20px',
+            }}
+          >
+            Ask me anything about your lecture or concepts in your knowledge graph.
+          </div>
+        )}
+        {messages.map((msg, idx) => (
+          <div
+            key={idx}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}
+          >
+            <div
+              style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                color: 'var(--muted)',
+                textTransform: 'uppercase',
+              }}
+            >
+              {msg.role === 'user' ? 'You' : 'Assistant'}
+            </div>
+            <div
+              style={{
+                padding: '12px',
+                background: msg.role === 'user' ? 'var(--accent)' : 'var(--panel)',
+                color: msg.role === 'user' ? 'white' : 'var(--ink)',
+                borderRadius: '8px',
+                fontSize: '14px',
+                lineHeight: '1.6',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {msg.content}
+            </div>
+          </div>
+        ))}
+        {isLoading && (
+          <div
+            style={{
+              padding: '12px',
+              background: 'var(--panel)',
+              borderRadius: '8px',
+              fontSize: '14px',
+              color: 'var(--muted)',
+            }}
+          >
+            Thinking...
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          padding: '16px',
+          borderTop: '1px solid var(--border)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'flex-end',
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Type your message..."
+            disabled={isLoading}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit(e);
+              }
+            }}
+            onInput={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              target.style.height = 'auto';
+              target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+            }}
+            style={{
+              flex: 1,
+              padding: '10px 14px',
+              fontSize: '14px',
+              minHeight: '44px',
+              maxHeight: '200px',
+              resize: 'none',
+              fontFamily: 'inherit',
+              lineHeight: '1.5',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              background: 'var(--surface)',
+              color: 'var(--ink)',
+              outline: 'none',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={isLoading || !message.trim()}
+            style={{
+              padding: '10px 20px',
+              background: isLoading || !message.trim() ? 'var(--muted)' : 'var(--accent)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              cursor: isLoading || !message.trim() ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            {isLoading ? '...' : 'Send'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+

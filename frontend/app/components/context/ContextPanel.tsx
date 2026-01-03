@@ -1001,7 +1001,7 @@ export default function ContextPanel({
   const fetchEmpty = currentFetchState.status === 'empty';
   const fetchError = currentFetchState.status === 'error';
 
-  const domainColor = domainColors.get(selectedNode.domain) || '#0f172a';
+  const domainColor = domainColors.get(selectedNode.domain) || 'var(--ink)';
 
   return (
     <div className="context-panel" style={{
@@ -1887,8 +1887,8 @@ export default function ContextPanel({
 
             {/* Error State */}
             {resourceError && (
-              <div style={{ padding: '12px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '6px', marginBottom: '12px' }}>
-                <p style={{ fontSize: '13px', margin: 0, color: 'rgb(239, 68, 68)' }}>{resourceError}</p>
+              <div style={{ padding: '12px', background: 'var(--panel)', border: '1px solid var(--accent-2)', borderRadius: '6px', marginBottom: '12px' }}>
+                <p style={{ fontSize: '13px', margin: 0, color: 'var(--accent-2)' }}>{resourceError}</p>
               </div>
             )}
 
@@ -2097,7 +2097,7 @@ export default function ContextPanel({
               </h4>
               <div style={{ 
                 padding: '12px', 
-                background: 'rgba(0, 0, 0, 0.02)', 
+                background: 'var(--panel)', 
                 borderRadius: '8px',
                 border: '1px dashed var(--border)',
                 marginBottom: '12px',
@@ -2152,7 +2152,7 @@ export default function ContextPanel({
                     key={idx}
                     style={{
                       padding: '12px',
-                      background: 'rgba(0, 0, 0, 0.02)',
+                      background: 'var(--panel)',
                       borderRadius: '8px',
                       border: '1px solid var(--border)',
                     }}
@@ -2212,7 +2212,7 @@ export default function ContextPanel({
                       onClick={() => router.push(`/concepts/${connection.node_id}`)}
                       style={{
                         border: 'none',
-                        background: 'rgba(17, 138, 178, 0.12)',
+                        background: 'var(--panel)',
                         color: 'var(--accent)',
                         fontSize: '12px',
                         fontWeight: '600',
@@ -2242,7 +2242,7 @@ export default function ContextPanel({
                     key={event.id}
                     style={{
                       padding: '12px',
-                      background: 'rgba(0, 0, 0, 0.02)',
+                      background: 'var(--panel)',
                       borderRadius: '8px',
                       border: '1px solid var(--border)',
                     }}

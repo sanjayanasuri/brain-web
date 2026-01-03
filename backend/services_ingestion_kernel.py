@@ -219,6 +219,42 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
                         error_msg = f"Segments and analogies extraction failed: {str(e)}"
                         errors.append(error_msg)
                         print(f"[Ingestion Kernel] ERROR: {error_msg}")
+                    
+                    # Create Lecture node if requested (properly scoped to graph + branch)
+                    if payload.actions.create_lecture_node and lecture_id:
+                        try:
+                            # Create or update Lecture node with proper graph scoping
+                            # graph_id and branch_id are already available from Step 2
+                            lecture_query = """
+                            MATCH (g:GraphSpace {graph_id: $graph_id})
+                            MERGE (l:Lecture {lecture_id: $lecture_id})
+                            ON CREATE SET l.graph_id = $graph_id,
+                                          l.on_branches = [$branch_id],
+                                          l.title = $title,
+                                          l.raw_text = $raw_text
+                            ON MATCH SET l.title = COALESCE(l.title, $title),
+                                         l.raw_text = COALESCE(l.raw_text, $raw_text),
+                                         l.graph_id = COALESCE(l.graph_id, $graph_id),
+                                         l.on_branches = CASE
+                                           WHEN $branch_id IN COALESCE(l.on_branches, []) THEN l.on_branches
+                                           ELSE COALESCE(l.on_branches, []) + $branch_id
+                                         END
+                            MERGE (l)-[:BELONGS_TO]->(g)
+                            RETURN l.lecture_id AS lecture_id
+                            """
+                            session.run(
+                                lecture_query,
+                                graph_id=graph_id,
+                                branch_id=branch_id,
+                                lecture_id=lecture_id,
+                                title=lecture_title,
+                                raw_text=lecture_text,
+                            )
+                            print(f"[Ingestion Kernel] Created/updated Lecture node: {lecture_id} (scoped to graph {graph_id}, branch {branch_id})")
+                        except Exception as e:
+                            error_msg = f"Failed to create Lecture node: {str(e)}"
+                            errors.append(error_msg)
+                            print(f"[Ingestion Kernel] ERROR: {error_msg}")
                         
                 except Exception as e:
                     error_msg = f"Lecture extraction failed: {str(e)}"

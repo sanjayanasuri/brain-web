@@ -32,6 +32,7 @@ from api_graphs import router as graphs_router
 from api_branches import router as branches_router
 from api_snapshots import router as snapshots_router
 from api_events import router as events_router, sessions_router
+from api_events_replay import router as events_replay_router
 from api_review import router as review_router
 from api_suggestions import router as suggestions_router
 from api_connectors import router as connectors_router
@@ -45,6 +46,9 @@ from api_quotes import router as quotes_router
 from api_claims_from_quotes import router as claims_from_quotes_router
 from api_extend import router as extend_router
 from api_trails import router as trails_router
+from api_offline import router as offline_router
+from api_sync import router as sync_router
+
 
 from demo_mode import (
     FixedWindowRateLimiter,
@@ -199,6 +203,7 @@ app.include_router(branches_router)
 app.include_router(snapshots_router)
 app.include_router(events_router)
 app.include_router(sessions_router)
+app.include_router(events_replay_router)
 app.include_router(review_router)
 app.include_router(suggestions_router)
 app.include_router(finance_router)
@@ -213,6 +218,10 @@ app.include_router(claims_from_quotes_router)
 app.include_router(extend_router)
 # Phase 4: Trails system
 app.include_router(trails_router)
+# Phase 5: Offline system
+app.include_router(offline_router)
+# Sync system (capture selection, events)
+app.include_router(sync_router)
 
 # In demo mode we do not mount private/admin/debug/test/ingestion surfaces.
 if not demo_settings.demo_mode:

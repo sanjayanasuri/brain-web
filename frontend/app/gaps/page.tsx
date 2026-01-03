@@ -132,7 +132,7 @@ export default function GapsViewPage() {
   return (
     <div style={{ 
       minHeight: '100vh', 
-      background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+      background: 'var(--page-bg)',
       padding: '20px',
     }}>
       <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
@@ -150,8 +150,8 @@ export default function GapsViewPage() {
           {graphQuality && (
             <div style={{
               padding: '12px 16px',
-              background: 'rgba(17, 138, 178, 0.05)',
-              border: '1px solid rgba(17, 138, 178, 0.2)',
+              background: 'var(--panel)',
+              border: '1px solid var(--border)',
               borderRadius: '8px',
               fontSize: '13px',
               color: 'var(--ink)',

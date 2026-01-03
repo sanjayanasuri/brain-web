@@ -244,7 +244,7 @@ export default function ReviewPage() {
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+      background: 'var(--page-bg)',
       padding: '20px',
     }}>
       <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
@@ -261,7 +261,7 @@ export default function ReviewPage() {
         {/* Ingestion Run Filter Banner */}
         {ingestionRunId && (
           <div style={{
-            background: 'rgba(17, 138, 178, 0.1)',
+            background: 'var(--panel)',
             border: '1px solid var(--accent)',
             borderRadius: '8px',
             padding: '12px 16px',
@@ -391,7 +391,7 @@ export default function ReviewPage() {
                   onClick={handleBatchReject}
                   style={{
                     padding: '8px 16px',
-                    background: '#ef476f',
+                    background: 'var(--accent-2)',
                     color: 'white',
                     border: 'none',
                     borderRadius: '6px',
@@ -424,10 +424,10 @@ export default function ReviewPage() {
         {error && (
           <div style={{
             padding: '12px',
-            background: '#fee',
-            border: '1px solid #fcc',
+            background: 'var(--panel)',
+            border: '1px solid var(--accent-2)',
             borderRadius: '8px',
-            color: '#c33',
+            color: 'var(--accent-2)',
             marginBottom: '24px',
           }}>
             {error}
@@ -491,7 +491,7 @@ export default function ReviewPage() {
                       padding: '16px',
                       borderRadius: '8px',
                       border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border)',
-                      background: isSelected ? 'rgba(17, 138, 178, 0.05)' : 'white',
+                      background: isSelected ? 'var(--panel)' : 'var(--surface)',
                     }}
                   >
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'start' }}>
@@ -564,7 +564,8 @@ export default function ReviewPage() {
                             <>
                               <span style={{
                                 padding: '4px 10px',
-                                background: 'rgba(17, 138, 178, 0.1)',
+                                background: 'var(--panel)',
+                                border: '1px solid var(--border)',
                                 color: 'var(--accent)',
                                 borderRadius: '12px',
                                 fontSize: '12px',
@@ -604,7 +605,8 @@ export default function ReviewPage() {
                         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
                           <span style={{
                             padding: '2px 8px',
-                            background: `rgba(17, 138, 178, ${rel.confidence * 0.2})`,
+                            background: 'var(--panel)',
+                            border: '1px solid var(--border)',
                             color: 'var(--accent)',
                             borderRadius: '12px',
                             fontSize: '11px',
@@ -614,7 +616,8 @@ export default function ReviewPage() {
                           </span>
                           <span style={{
                             padding: '2px 8px',
-                            background: 'rgba(107, 114, 128, 0.1)',
+                            background: 'var(--panel)',
+                            border: '1px solid var(--border)',
                             color: 'var(--muted)',
                             borderRadius: '12px',
                             fontSize: '11px',
@@ -624,7 +627,7 @@ export default function ReviewPage() {
                           {rel.source_id && (
                             <span style={{
                               padding: '2px 8px',
-                              background: 'rgba(107, 114, 128, 0.05)',
+                              background: 'var(--panel)',
                               color: 'var(--muted)',
                               borderRadius: '12px',
                               fontSize: '11px',
@@ -670,7 +673,7 @@ export default function ReviewPage() {
                             onClick={() => handleReject(id)}
                             style={{
                               padding: '6px 12px',
-                              background: '#ef476f',
+                              background: 'var(--accent-2)',
                               color: 'white',
                               border: 'none',
                               borderRadius: '6px',

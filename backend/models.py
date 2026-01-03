@@ -126,6 +126,7 @@ class Lecture(BaseModel):
     level: Optional[str] = None            # e.g. "beginner", "intermediate"
     estimated_time: Optional[int] = None   # minutes
     slug: Optional[str] = None
+    raw_text: Optional[str] = None  # Full lecture content (saved immediately, before AI processing)
 
 """
 the lecture create class defines how lectures are created.
@@ -139,6 +140,12 @@ class LectureCreate(BaseModel):
     level: Optional[str] = None
     estimated_time: Optional[int] = None
     slug: Optional[str] = None
+    raw_text: Optional[str] = None  # Full lecture content
+
+
+class LectureUpdate(BaseModel):
+    title: Optional[str] = None
+    raw_text: Optional[str] = None  # Full lecture content
 
 """
 the lecture step create class defines how lecture steps are created.
@@ -241,6 +248,15 @@ class LectureSegment(BaseModel):
     covered_concepts: List[Concept] = []     # resolved concept objects
     analogies: List[Analogy] = []            # analogies used in this segment
     lecture_title: Optional[str] = None      # Title of the lecture this segment belongs to
+
+
+class LectureSegmentUpdate(BaseModel):
+    """Update payload for a lecture segment."""
+    text: Optional[str] = None
+    summary: Optional[str] = None
+    start_time_sec: Optional[float] = None
+    end_time_sec: Optional[float] = None
+    style_tags: Optional[List[str]] = None
 
 
 class LectureIngestResult(BaseModel):

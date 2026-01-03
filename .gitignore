@@ -2,6 +2,8 @@
 .env
 .env.local
 .env*.local
+.env.local.backup
+.env.local.fixed
 backend/.env
 backend/.env.local
 backend/.env.backup
@@ -38,6 +40,9 @@ frontend/.pnp.js
 # OS
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+Brain Web.app/
 
 # Logs
 *.log

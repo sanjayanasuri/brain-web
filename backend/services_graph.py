@@ -2357,6 +2357,72 @@ def create_lecture_segment(
     return result.single().data()
 
 
+def update_lecture_segment(
+    session: Session,
+    segment_id: str,
+    text: Optional[str] = None,
+    summary: Optional[str] = None,
+    start_time_sec: Optional[float] = None,
+    end_time_sec: Optional[float] = None,
+    style_tags: Optional[List[str]] = None,
+) -> Optional[dict]:
+    """
+    Update a LectureSegment node by segment_id.
+    Returns: dict with segment_id and updated fields, or None if not found.
+    """
+    # Build SET clauses dynamically
+    set_clauses = []
+    params = {
+        "segment_id": segment_id,
+    }
+
+    if text is not None:
+        set_clauses.append("seg.text = $text")
+        params["text"] = text
+
+    if summary is not None:
+        set_clauses.append("seg.summary = $summary")
+        params["summary"] = summary
+
+    if start_time_sec is not None:
+        set_clauses.append("seg.start_time_sec = $start_time_sec")
+        params["start_time_sec"] = start_time_sec
+
+    if end_time_sec is not None:
+        set_clauses.append("seg.end_time_sec = $end_time_sec")
+        params["end_time_sec"] = end_time_sec
+
+    if style_tags is not None:
+        set_clauses.append("seg.style_tags = $style_tags")
+        params["style_tags"] = style_tags
+
+    if not set_clauses:
+        # Nothing to update
+        return None
+
+    # Always update the updated_at timestamp
+    set_clauses.append("seg.updated_at = datetime()")
+
+    query = f"""
+    MATCH (seg:LectureSegment {{segment_id: $segment_id}})
+    SET {', '.join(set_clauses)}
+    RETURN seg.segment_id AS segment_id,
+           seg.lecture_id AS lecture_id,
+           seg.segment_index AS segment_index,
+           seg.text AS text,
+           seg.summary AS summary,
+           seg.start_time_sec AS start_time_sec,
+           seg.end_time_sec AS end_time_sec,
+           seg.style_tags AS style_tags
+    LIMIT 1
+    """
+    result = session.run(query, **params)
+    record = result.single()
+    if not record:
+        return None
+    return record.data()
+
+
 def link_segment_to_concept(
     session: Session,
     segment_id: str,
@@ -2447,8 +2513,9 @@ def upsert_source_chunk(
     // Create FROM_DOCUMENT relationship if source_id matches a SourceDocument
     OPTIONAL MATCH (d:SourceDocument {graph_id: $graph_id, doc_id: $source_id})
     WITH s, g, d
-    WHERE d IS NOT NULL
-    MERGE (s)-[:FROM_DOCUMENT]->(d)
+    FOREACH (x IN CASE WHEN d IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (s)-[:FROM_DOCUMENT]->(d)
+    )
     RETURN s.chunk_id AS chunk_id,
            s.source_id AS source_id,
            s.chunk_index AS chunk_index

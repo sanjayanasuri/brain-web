@@ -88,7 +88,7 @@ export default function ControlPanel() {
   }, [graphs, searchQuery, templateFilter, sortMode]);
 
   return (
-    <div style={{ minHeight: 'calc(100vh - 56px)', background: 'radial-gradient(circle at top left, #eef2ff 0%, #fef9f0 45%, #f8fafc 100%)' }}>
+    <div style={{ minHeight: 'calc(100vh - 56px)', background: 'var(--page-bg)' }}>
       <div style={{ padding: '32px 28px 48px', position: 'relative' }}>
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.5 }}>
           <div className="control-panel__glow" />
@@ -96,7 +96,7 @@ export default function ControlPanel() {
         <div style={{ position: 'relative', zIndex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
             <div>
-              <div style={{ fontSize: '12px', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#6366f1', fontWeight: 600 }}>
+              <div style={{ fontSize: '12px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 600 }}>
                 Workspace Library
               </div>
               <h1 style={{ margin: '6px 0 8px', fontSize: '32px', color: 'var(--ink)' }}>Manage graphs</h1>
@@ -108,7 +108,7 @@ export default function ControlPanel() {
               type="button"
               onClick={() => router.push('/')}
               style={{
-                background: 'linear-gradient(135deg, #6366f1, #4338ca)',
+                background: 'var(--accent)',
                 color: 'white',
                 border: 'none',
                 borderRadius: '999px',
@@ -116,7 +116,7 @@ export default function ControlPanel() {
                 fontSize: '13px',
                 fontWeight: 600,
                 cursor: 'pointer',
-                boxShadow: '0 12px 24px rgba(67, 56, 202, 0.25)',
+                boxShadow: 'var(--shadow)',
               }}
             >
               Create new graph
@@ -147,9 +147,9 @@ export default function ControlPanel() {
                 flex: '1 1 220px',
                 minWidth: '220px',
                 borderRadius: '999px',
-                border: '1px solid rgba(99, 102, 241, 0.2)',
+                border: '1px solid var(--border)',
                 padding: '10px 16px',
-                backgroundColor: 'white',
+                backgroundColor: 'var(--surface)',
                 fontSize: '13px',
                 color: 'var(--ink)',
               }}
@@ -159,9 +159,9 @@ export default function ControlPanel() {
               onChange={(event) => setTemplateFilter(event.target.value)}
               style={{
                 borderRadius: '999px',
-                border: '1px solid rgba(99, 102, 241, 0.2)',
+                border: '1px solid var(--border)',
                 padding: '10px 14px',
-                backgroundColor: 'white',
+                backgroundColor: 'var(--surface)',
                 fontSize: '13px',
                 color: 'var(--ink)',
               }}
@@ -178,9 +178,9 @@ export default function ControlPanel() {
               onChange={(event) => setSortMode(event.target.value as SortMode)}
               style={{
                 borderRadius: '999px',
-                border: '1px solid rgba(99, 102, 241, 0.2)',
+                border: '1px solid var(--border)',
                 padding: '10px 14px',
-                backgroundColor: 'white',
+                backgroundColor: 'var(--surface)',
                 fontSize: '13px',
                 color: 'var(--ink)',
               }}
@@ -214,13 +214,13 @@ export default function ControlPanel() {
                         <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{graph.graph_id}</div>
                       </div>
                       {isActive && (
-                        <div style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#ecfeff', color: '#0e7490', fontWeight: 600 }}>
+                        <div style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', background: 'var(--panel)', border: '1px solid var(--border)', color: 'var(--accent)', fontWeight: 600 }}>
                           Active
                         </div>
                       )}
                     </div>
                     <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#eef2ff', color: '#4338ca', fontWeight: 600 }}>
+                      <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', background: 'var(--panel)', border: '1px solid var(--border)', color: 'var(--accent)', fontWeight: 600 }}>
                         {templateLabel}
                       </span>
                       {templateTags.slice(0, 2).map((tag) => (
@@ -258,7 +258,7 @@ export default function ControlPanel() {
                           padding: '8px 12px',
                           borderRadius: '999px',
                           border: 'none',
-                          backgroundColor: '#111827',
+                          background: 'var(--accent)',
                           color: 'white',
                           fontSize: '12px',
                           cursor: 'pointer',
@@ -294,38 +294,42 @@ export default function ControlPanel() {
           right: -80px;
           width: 320px;
           height: 320px;
-          background: radial-gradient(circle at center, rgba(99, 102, 241, 0.25), transparent 70%);
+          background: radial-gradient(circle at center, rgba(17, 138, 178, 0.15), transparent 70%);
           filter: blur(10px);
+        }
+        
+        :root.dark .control-panel__glow {
+          background: radial-gradient(circle at center, rgba(56, 189, 248, 0.15), transparent 70%);
         }
 
         .control-panel__stat {
-          background: rgba(255, 255, 255, 0.8);
+          background: var(--panel);
           border-radius: 16px;
           padding: 14px 16px;
-          border: 1px solid rgba(148, 163, 184, 0.2);
-          box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+          border: 1px solid var(--border);
+          box-shadow: var(--shadow);
         }
 
         .control-panel__stat-label {
           font-size: 11px;
           text-transform: uppercase;
           letter-spacing: 0.14em;
-          color: #64748b;
+          color: var(--muted);
         }
 
         .control-panel__stat-value {
           font-size: 20px;
           font-weight: 600;
-          color: #0f172a;
+          color: var(--ink);
           margin-top: 4px;
         }
 
         .control-panel__card {
-          background: rgba(255, 255, 255, 0.9);
+          background: var(--panel);
           border-radius: 18px;
           padding: 16px;
-          border: 1px solid rgba(148, 163, 184, 0.2);
-          box-shadow: 0 16px 30px rgba(15, 23, 42, 0.08);
+          border: 1px solid var(--border);
+          box-shadow: var(--shadow);
           transform: translateY(8px);
           opacity: 0;
           animation: floatIn 0.5s ease forwards;

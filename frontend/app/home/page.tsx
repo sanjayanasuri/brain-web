@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
-import { getGapsOverview, type GapsOverview, getSuggestions, type Suggestion, type SuggestionType, listGraphs, type GraphSummary, getSuggestedPaths, type SuggestedPath, getConcept, getNeighborsWithRelationships, getResourcesForConcept, getClaimsForConcept, getSourcesForConcept, getSegmentsByConcept, getConceptQuality } from '../api-client';
+import { getGapsOverview, type GapsOverview, getSuggestions, type Suggestion, type SuggestionType, listGraphs, type GraphSummary, getSuggestedPaths, type SuggestedPath, getConcept, getNeighborsWithRelationships, getResourcesForConcept, getClaimsForConcept, getSourcesForConcept, getSegmentsByConcept, getConceptQuality, getNarrativeMetrics, type NarrativeMetricsResponse } from '../api-client';
 import { fetchEvidenceForConcept } from '../lib/evidenceFetch';
 import {
   getLastSession,
@@ -223,6 +223,7 @@ export default function HomePage() {
   const [secondaryLoaded, setSecondaryLoaded] = useState(false);
   const [activeTrailId, setActiveTrailIdState] = useState<string | null>(null);
   const [showResumePrompt, setShowResumePrompt] = useState(false);
+  const [narrativeMetrics, setNarrativeMetrics] = useState<NarrativeMetricsResponse>({});
 
   useEffect(() => {
     router.prefetch('/');
@@ -572,6 +573,45 @@ export default function HomePage() {
         
         if (signalSuggestionsResult.status === 'fulfilled' && isMounted) {
           setSignalSuggestions(signalSuggestionsResult.value);
+        }
+        
+        // Fetch narrative metrics for all concept IDs from gaps and suggestions
+        if (isMounted && (gapsResult.status === 'fulfilled' || suggestionsResult.status === 'fulfilled')) {
+          const conceptIds: string[] = [];
+          
+          // Collect concept IDs from suggestions
+          if (suggestionsResult.status === 'fulfilled') {
+            suggestionsResult.value.forEach(s => {
+              if (s.concept_id) {
+                conceptIds.push(s.concept_id);
+              }
+            });
+          }
+          
+          // Collect concept IDs from gaps
+          if (gapsResult.status === 'fulfilled' && gapsResult.value) {
+            gapsResult.value.high_interest_low_coverage.forEach(g => conceptIds.push(g.node_id));
+            gapsResult.value.missing_descriptions.forEach(g => conceptIds.push(g.node_id));
+            gapsResult.value.low_connectivity.forEach(g => conceptIds.push(g.node_id));
+          }
+          
+          // Fetch metrics for unique concept IDs
+          if (conceptIds.length > 0) {
+            const uniqueConceptIds = Array.from(new Set(conceptIds));
+            getNarrativeMetrics(uniqueConceptIds, lastSession?.graph_id)
+              .then(metrics => {
+                if (isMounted) {
+                  setNarrativeMetrics(metrics);
+                }
+              })
+              .catch(err => {
+                console.warn('Failed to load narrative metrics:', err);
+                // Use empty metrics object as fallback
+                if (isMounted) {
+                  setNarrativeMetrics({});
+                }
+              });
+          }
         }
         
         if (pathsResult.status === 'fulfilled' && isMounted) {
@@ -1123,11 +1163,12 @@ export default function HomePage() {
     // Map suggestions to "takingShape" section
     prioritizedSuggestions.forEach(suggestion => {
       const narrative = mapSuggestionToNarrative(suggestion);
+      const metrics = suggestion.concept_id ? narrativeMetrics[suggestion.concept_id] : null;
       items.push({
         ...narrative,
-        recencyWeight: 0.5, // TODO: Calculate from actual recency
-        mentionFrequency: 0.3, // TODO: Calculate from actual mentions
-        centralityDelta: 0.2, // TODO: Calculate from graph centrality
+        recencyWeight: metrics?.recencyWeight ?? 0.5,
+        mentionFrequency: metrics?.mentionFrequency ?? 0.3,
+        centralityDelta: metrics?.centralityDelta ?? 0.2,
       });
     });
     
@@ -1136,39 +1177,42 @@ export default function HomePage() {
       // High interest low coverage -> takingShape
       gaps.high_interest_low_coverage.slice(0, 3).forEach(gap => {
         const narrative = mapGapToNarrative({ ...gap, type: 'high_interest_low_coverage' });
+        const metrics = narrativeMetrics[gap.node_id];
         items.push({
           id: `gap-${gap.node_id}`,
           ...narrative,
           section: 'takingShape',
-          recencyWeight: 0.6,
-          mentionFrequency: 0.4,
-          centralityDelta: 0.3,
+          recencyWeight: metrics?.recencyWeight ?? 0.6,
+          mentionFrequency: metrics?.mentionFrequency ?? 0.4,
+          centralityDelta: metrics?.centralityDelta ?? 0.3,
         });
       });
       
       // Missing descriptions -> unsettled
       gaps.missing_descriptions.slice(0, 3).forEach(gap => {
         const narrative = mapGapToNarrative({ ...gap, type: 'missing_description' });
+        const metrics = narrativeMetrics[gap.node_id];
         items.push({
           id: `gap-${gap.node_id}`,
           ...narrative,
           section: 'unsettled',
-          recencyWeight: 0.3,
-          mentionFrequency: 0.2,
-          centralityDelta: 0.1,
+          recencyWeight: metrics?.recencyWeight ?? 0.3,
+          mentionFrequency: metrics?.mentionFrequency ?? 0.2,
+          centralityDelta: metrics?.centralityDelta ?? 0.1,
         });
       });
       
       // Low connectivity -> unsettled
       gaps.low_connectivity.slice(0, 2).forEach(gap => {
         const narrative = mapGapToNarrative({ ...gap, type: 'low_connectivity' });
+        const metrics = narrativeMetrics[gap.node_id];
         items.push({
           id: `gap-${gap.node_id}`,
           ...narrative,
           section: 'unsettled',
-          recencyWeight: 0.3,
-          mentionFrequency: 0.2,
-          centralityDelta: 0.1,
+          recencyWeight: metrics?.recencyWeight ?? 0.3,
+          mentionFrequency: metrics?.mentionFrequency ?? 0.2,
+          centralityDelta: metrics?.centralityDelta ?? 0.1,
         });
       });
     }
@@ -2621,16 +2665,47 @@ export default function HomePage() {
           if (step.kind === 'page' && step.ref_id) {
             window.open(step.ref_id, '_blank');
           } else if (step.kind === 'quote' && step.ref_id) {
-            // TODO: Open quote view or scroll to quote on page
-            console.log('Quote clicked:', step.ref_id);
+            // Fetch quote details and navigate to source URL
+            const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+            fetch(`${apiBase}/retrieval/focus-context?focus_quote_id=${encodeURIComponent(step.ref_id)}`)
+              .then(res => res.json())
+              .then(data => {
+                if (data.source_url) {
+                  window.open(data.source_url, '_blank');
+                } else {
+                  console.warn('Quote source URL not found:', step.ref_id);
+                }
+              })
+              .catch(err => {
+                console.error('Failed to fetch quote details:', err);
+              });
           } else if (step.kind === 'concept' && step.ref_id) {
             router.push(`/?select=${step.ref_id}`);
           } else if (step.kind === 'claim' && step.ref_id) {
-            // TODO: Open claim view
-            console.log('Claim clicked:', step.ref_id);
+            // For claims, navigate to the concept page with claims tab
+            // Claim ref_id might be a claim_id, we need to find the associated concept
+            // For now, try to navigate to a concept that might have this claim
+            // A better implementation would fetch the claim and find its concept
+            const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+            fetch(`${apiBase}/claims/${encodeURIComponent(step.ref_id)}`)
+              .then(res => res.ok ? res.json() : null)
+              .then(claim => {
+                if (claim && claim.concept_id) {
+                  router.push(`/concepts/${claim.concept_id}?tab=claims`);
+                } else {
+                  // Fallback: try to find concept from claim_id pattern or show in a modal
+                  console.log('Claim clicked:', step.ref_id);
+                  // Could show a modal with claim details here
+                }
+              })
+              .catch(() => {
+                console.log('Claim clicked:', step.ref_id);
+              });
           } else if (step.kind === 'search' && step.ref_id) {
-            // TODO: Show search results
-            console.log('Search clicked:', step.ref_id);
+            // Show search results by setting search query in the search bar
+            const searchQuery = decodeURIComponent(step.ref_id);
+            // Could trigger search in the TopBar component
+            console.log('Search query:', searchQuery);
           }
         }}
       />

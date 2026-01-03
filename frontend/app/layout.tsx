@@ -5,6 +5,7 @@ import { SidebarProvider } from './components/context-providers/SidebarContext';
 import QueryProvider from './components/context-providers/QueryProvider';
 import { ThemeProvider } from './components/context-providers/ThemeProvider';
 import RouteTransition from './components/ui/RouteTransition';
+import OfflineSyncInitializer from './components/offline/OfflineSyncInitializer';
 
 export const metadata: Metadata = {
   title: 'Brain Web - Knowledge Graph Explorer',
@@ -37,6 +38,7 @@ export default function RootLayout({
           <QueryProvider>
             <RouteTransition />
             <SidebarProvider>
+              <OfflineSyncInitializer />
               <TopBarWrapper>{children}</TopBarWrapper>
             </SidebarProvider>
           </QueryProvider>

@@ -1,3 +1,4 @@
+# services_branch_explorer.py
 from __future__ import annotations
 
 import datetime
@@ -6,8 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import Session
-from config import DEMO_MODE, DEMO_ALLOW_WRITES, DEMO_GRAPH_ID
 
+from config import DEMO_MODE, DEMO_ALLOW_WRITES, DEMO_GRAPH_ID
 
 DEFAULT_GRAPH_ID = "default"
 DEFAULT_BRANCH_ID = "main"
@@ -66,7 +67,7 @@ def ensure_schema_constraints(session: Session) -> None:
             ):
                 session.run(f"DROP CONSTRAINT {name} IF EXISTS").consume()
 
-        # Create constraints if missing (by schema, not by name).
+        # --- Core constraints ---
         if not _has("Concept", ["node_id"], "UNIQUENESS"):
             session.run(
                 "CREATE CONSTRAINT concept_node_id_unique IF NOT EXISTS "
@@ -103,7 +104,82 @@ def ensure_schema_constraints(session: Session) -> None:
                 "FOR (a:Artifact) REQUIRE (a.graph_id, a.url, a.content_hash) IS NODE KEY"
             ).consume()
 
+        if not _has("Event", ["event_id"], "UNIQUENESS"):
+            session.run(
+                "CREATE CONSTRAINT bw_event_id_unique IF NOT EXISTS "
+                "FOR (e:Event) REQUIRE e.event_id IS UNIQUE"
+            ).consume()
+
+        # --- Graph-scoped node keys (domain entities) ---
+        if not _has("Quote", ["graph_id", "quote_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT quote_graph_quote_id_node_key IF NOT EXISTS "
+                "FOR (q:Quote) REQUIRE (q.graph_id, q.quote_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Claim", ["graph_id", "claim_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT claim_graph_claim_id_node_key IF NOT EXISTS "
+                "FOR (c:Claim) REQUIRE (c.graph_id, c.claim_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("SourceChunk", ["graph_id", "chunk_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT chunk_graph_chunk_id_node_key IF NOT EXISTS "
+                "FOR (s:SourceChunk) REQUIRE (s.graph_id, s.chunk_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("SourceDocument", ["graph_id", "doc_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT sourcedoc_graph_doc_id_node_key IF NOT EXISTS "
+                "FOR (d:SourceDocument) REQUIRE (d.graph_id, d.doc_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Community", ["graph_id", "community_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT community_graph_comm_id_node_key IF NOT EXISTS "
+                "FOR (k:Community) REQUIRE (k.graph_id, k.community_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Branch", ["graph_id", "branch_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT branch_graph_branch_id_node_key IF NOT EXISTS "
+                "FOR (b:Branch) REQUIRE (b.graph_id, b.branch_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Trail", ["graph_id", "trail_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT trail_graph_trail_id_node_key IF NOT EXISTS "
+                "FOR (t:Trail) REQUIRE (t.graph_id, t.trail_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("TrailStep", ["graph_id", "step_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT trailstep_graph_step_id_node_key IF NOT EXISTS "
+                "FOR (s:TrailStep) REQUIRE (s.graph_id, s.step_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Snapshot", ["graph_id", "snapshot_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT snapshot_graph_snapshot_id_node_key IF NOT EXISTS "
+                "FOR (s:Snapshot) REQUIRE (s.graph_id, s.snapshot_id) IS NODE KEY"
+            ).consume()
+
+        if not _has("Resource", ["graph_id", "resource_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT resource_graph_resource_id_node_key IF NOT EXISTS "
+                "FOR (r:Resource) REQUIRE (r.graph_id, r.resource_id) IS NODE KEY"
+            ).consume()
+
+        # --- Idempotency for offline sync ---
+        if not _has("ClientEvent", ["graph_id", "event_id"], "NODE_KEY"):
+            session.run(
+                "CREATE CONSTRAINT client_event_graph_event_node_key IF NOT EXISTS "
+                "FOR (e:ClientEvent) REQUIRE (e.graph_id, e.event_id) IS NODE KEY"
+            ).consume()
+
         _SCHEMA_INITIALIZED = True
+
     except Exception:
         # Best-effort only. If Neo4j is temporarily unavailable or the user
         # doesn't have permissions to manage constraints, we don't want to break
@@ -132,14 +208,13 @@ def ensure_graphspace_exists(session: Session, graph_id: str, name: Optional[str
                 "created_at": g.get("created_at"),
                 "updated_at": g.get("updated_at"),
             }
-        # If it doesn't exist in read-only mode, return defaults
         return {
             "graph_id": graph_id,
             "name": name or graph_id,
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
         }
-    
+
     query = """
     MERGE (g:GraphSpace {graph_id: $graph_id})
     ON CREATE SET g.name = COALESCE($name, $graph_id),
@@ -177,7 +252,6 @@ def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: 
                 "created_at": b.get("created_at"),
                 "updated_at": b.get("updated_at"),
             }
-        # If it doesn't exist in read-only mode, return defaults
         return {
             "branch_id": branch_id,
             "graph_id": graph_id,
@@ -185,7 +259,7 @@ def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: 
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
         }
-    
+
     query = """
     MERGE (g:GraphSpace {graph_id: $graph_id})
     ON CREATE SET g.name = COALESCE($name, $graph_id),
@@ -225,6 +299,7 @@ def ensure_default_context(session: Session) -> Tuple[str, str]:
         ensure_graphspace_exists(session, graph_id, name="Demo")
         ensure_branch_exists(session, graph_id, DEFAULT_BRANCH_ID, name="Main")
         return graph_id, DEFAULT_BRANCH_ID
+
     ensure_graphspace_exists(session, DEFAULT_GRAPH_ID, name="Default")
     ensure_branch_exists(session, DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID, name="Main")
     return DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID
@@ -248,7 +323,7 @@ def _get_user_learning_prefs(session: Session) -> Dict[str, Any]:
             if isinstance(lp, dict):
                 return lp
         return {}
-    
+
     query = """
     MERGE (u:UserProfile {id: 'default'})
     ON CREATE SET u.name = 'Sanjay',
@@ -261,6 +336,7 @@ def _get_user_learning_prefs(session: Session) -> Dict[str, Any]:
     empty_json = json.dumps({})
     rec = session.run(query, empty_json=empty_json).single()
     lp = rec["learning_preferences"] if rec else "{}"
+
     if isinstance(lp, str):
         try:
             return json.loads(lp)
@@ -292,7 +368,6 @@ def get_active_graph_context(session: Session) -> Tuple[str, str]:
         prefs = _get_user_learning_prefs(session)
         graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
         branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
-
 
     ensure_graphspace_exists(session, graph_id)
     ensure_branch_exists(session, graph_id, branch_id)
@@ -334,7 +409,7 @@ def list_graphs(session: Session) -> List[Dict[str, Any]]:
     OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
     OPTIONAL MATCH (s:Concept)-[r]->(t:Concept)
     WHERE r.graph_id = g.graph_id
-    WITH g, 
+    WITH g,
          count(DISTINCT c) AS node_count,
          count(DISTINCT r) AS edge_count
     RETURN g, node_count, edge_count
@@ -345,22 +420,21 @@ def list_graphs(session: Session) -> List[Dict[str, Any]]:
         g = rec["g"]
         node_count = rec["node_count"] or 0
         edge_count = rec["edge_count"] or 0
-        # Convert Neo4j DateTime objects to ISO format strings
+
         created_at = g.get("created_at")
         updated_at = g.get("updated_at")
-        # Neo4j DateTime objects can be converted using to_native() or str()
+
         if created_at:
-            if hasattr(created_at, 'to_native'):
-                # Convert Neo4j DateTime to Python datetime, then to ISO string
+            if hasattr(created_at, "to_native"):
                 created_at = created_at.to_native().isoformat()
             else:
                 created_at = str(created_at)
         if updated_at:
-            if hasattr(updated_at, 'to_native'):
-                # Convert Neo4j DateTime to Python datetime, then to ISO string
+            if hasattr(updated_at, "to_native"):
                 updated_at = updated_at.to_native().isoformat()
             else:
                 updated_at = str(updated_at)
+
         out.append(
             {
                 "graph_id": g.get("graph_id"),
@@ -392,6 +466,7 @@ def create_graph(
     ensure_schema_constraints(session)
     graph_id = f"G{uuid4().hex[:8].upper()}"
     g = ensure_graphspace_exists(session, graph_id, name=name)
+
     if template_id or template_label or template_description or template_tags or intent:
         query = """
         MATCH (g:GraphSpace {graph_id: $graph_id})
@@ -418,6 +493,7 @@ def create_graph(
         ).single()
         if rec:
             g = rec["g"]
+
     ensure_branch_exists(session, graph_id, DEFAULT_BRANCH_ID, name="Main")
     return {
         "graph_id": g.get("graph_id"),
@@ -457,7 +533,6 @@ def delete_graph(session: Session, graph_id: str) -> None:
     if graph_id == DEFAULT_GRAPH_ID:
         raise ValueError("Cannot delete default graph")
 
-    # Delete concepts in this graph; relationships between them are removed by DETACH.
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
     OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
@@ -480,17 +555,16 @@ def ensure_graph_scoping_initialized(session: Session) -> None:
     This is intentionally conservative:
     - Only touches Concepts that do not already belong to a GraphSpace
     - Only touches relationships that do not already have graph_id/on_branches
+    - Best-effort backfill for Resources + HAS_RESOURCE scoping
     """
     # Skip write operations in read-only demo mode
     if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        # Just ensure default context exists (read-only check)
         try:
             ensure_default_context(session)
         except Exception:
-            # If it doesn't exist, that's okay in read-only mode
             pass
         return
-    
+
     ensure_schema_constraints(session)
     ensure_default_context(session)
 
@@ -532,3 +606,27 @@ def ensure_graph_scoping_initialized(session: Session) -> None:
     RETURN count(r) AS updated
     """
     session.run(query_rels_branches, branch_id=DEFAULT_BRANCH_ID).consume()
+
+    # Backfill Resources that aren't scoped.
+    session.run(
+        """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        MATCH (r:Resource)
+        WHERE r.graph_id IS NULL OR NOT (r)-[:BELONGS_TO]->(:GraphSpace)
+        MERGE (r)-[:BELONGS_TO]->(g)
+        SET r.graph_id = $graph_id
+        """,
+        graph_id=DEFAULT_GRAPH_ID,
+    ).consume()
+
+    # Backfill HAS_RESOURCE relationship scoping.
+    session.run(
+        """
+        MATCH (c:Concept)-[rel:HAS_RESOURCE]->(r:Resource)
+        WHERE rel.graph_id IS NULL
+        SET rel.graph_id = COALESCE(c.graph_id, $graph_id),
+            rel.on_branches = COALESCE(rel.on_branches, [$branch_id])
+        """,
+        graph_id=DEFAULT_GRAPH_ID,
+        branch_id=DEFAULT_BRANCH_ID,
+    ).consume()

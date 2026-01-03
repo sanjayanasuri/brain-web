@@ -686,7 +686,7 @@ def retrieve_graphrag_context(
     # Diverse Supporting Claims section
     context_parts.append("## Diverse Supporting Claims (Evidence)")
     for claim in selected_claims:
-        context_parts.append(f"\n**Claim:** {claim['text']}")
+        context_parts.append(f"\nClaim: {claim['text']}")
         context_parts.append(f"Confidence: {claim['confidence']:.2f}")
         source_info = claim.get('source_id', 'unknown')
         chunk_id = claim.get('chunk_id')
@@ -724,7 +724,7 @@ def retrieve_graphrag_context(
                 context_parts.append(f"Anchor concepts: {', '.join(anchor_names)}")
         
         if edges:
-            context_parts.append("\n**Edges:**")
+            context_parts.append("\nEdges:")
             # Create a name map for quick lookup
             name_map = {c["node_id"]: c["name"] for c in concepts}
             for edge in edges[:80]:  # Cap at 80 edges
@@ -738,7 +738,7 @@ def retrieve_graphrag_context(
     if concepts:
         context_parts.append("## Relevant Concept Details")
         for concept in concepts[:25]:  # Cap at 25
-            context_parts.append(f"\n**{concept['name']}**")
+            context_parts.append(f"\n{concept['name']}")
             if concept.get("description"):
                 context_parts.append(concept["description"])
             if concept.get("tags"):

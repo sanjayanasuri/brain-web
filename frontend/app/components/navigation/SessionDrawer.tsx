@@ -839,6 +839,32 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
           >
             Profile Customization
           </Link>
+          <Link
+            href="/control-panel"
+            style={{
+              padding: '8px 12px',
+              borderRadius: '6px',
+              color: pathname === '/control-panel' ? 'var(--accent)' : 'var(--ink)',
+              fontSize: '14px',
+              textDecoration: 'none',
+              background: pathname === '/control-panel' ? 'var(--surface)' : 'transparent',
+            }}
+          >
+            Workspace Library
+          </Link>
+          <Link
+            href="/reader/segment"
+            style={{
+              padding: '8px 12px',
+              borderRadius: '6px',
+              color: pathname?.startsWith('/reader/segment') ? 'var(--accent)' : 'var(--ink)',
+              fontSize: '14px',
+              textDecoration: 'none',
+              background: pathname?.startsWith('/reader/segment') ? 'var(--surface)' : 'transparent',
+            }}
+          >
+            File Reader Studio
+          </Link>
         </div>
       </div>
     </div>

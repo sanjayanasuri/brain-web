@@ -89,7 +89,19 @@ export async function listGraphs(): Promise<GraphListResponse> {
       }
       throw new Error(`Failed to list graphs: ${res.statusText}`);
     }
-    return res.json();
+    const data = await res.json();
+    // Store active graph_id and branch_id for offline use
+    if (typeof window !== 'undefined') {
+      try {
+        if (data.active_graph_id) {
+          sessionStorage.setItem('brainweb:activeGraphId', data.active_graph_id);
+        }
+        if (data.active_branch_id) {
+          sessionStorage.setItem('brainweb:activeBranchId', data.active_branch_id);
+        }
+      } catch {}
+    }
+    return data;
   } catch (error) {
     console.error('Error fetching graphs:', error);
     // Return demo graph as fallback
@@ -275,8 +287,25 @@ export async function restoreSnapshot(snapshotId: string): Promise<any> {
  * Fetch a concept by its node_id
  */
 export async function getConcept(nodeId: string): Promise<Concept> {
+  // Try offline cache first if offline
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const { getConceptOffline } = await import('../lib/offline/api_wrapper');
+    const cached = await getConceptOffline(nodeId);
+    if (cached) {
+      return cached;
+    }
+    // If no cache, throw error
+    throw new Error('Concept not available offline');
+  }
+
   const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}`);
   if (!response.ok) {
+    // If online request fails, try offline cache as fallback
+    const { getConceptOffline } = await import('../lib/offline/api_wrapper');
+    const cached = await getConceptOffline(nodeId);
+    if (cached) {
+      return cached;
+    }
     throw new Error(`Failed to fetch concept: ${response.statusText}`);
   }
   return response.json();
@@ -491,11 +520,26 @@ export async function getGraphOverview(
   limitNodes: number = 300,
   limitEdges: number = 600
 ): Promise<GraphData & { meta?: { node_count?: number; edge_count?: number; sampled?: boolean } }> {
+  // Try offline cache first if offline
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const { getGraphDataOffline } = await import('../lib/offline/api_wrapper');
+    const cached = await getGraphDataOffline();
+    if (cached) {
+      return { ...cached, meta: { sampled: true } };
+    }
+  }
+
   try {
     const response = await fetch(
       `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/overview?limit_nodes=${limitNodes}&limit_edges=${limitEdges}`
     );
     if (!response.ok) {
+      // If online request fails, try offline cache as fallback
+      const { getGraphDataOffline } = await import('../lib/offline/api_wrapper');
+      const cached = await getGraphDataOffline();
+      if (cached) {
+        return { ...cached, meta: { sampled: true } };
+      }
       throw new Error(`Failed to fetch graph overview: ${response.statusText}`);
     }
     const data = await response.json();
@@ -856,15 +900,34 @@ export async function searchConcepts(
  */
 export async function searchResources(
   query: string,
-  graphId?: string,
-  limit: number = 20
+  graphIdOrLimit?: string | number,
+  limit?: number
 ): Promise<Resource[]> {
   const params = new URLSearchParams();
   params.set('query', query);
+  
+  // Handle overloaded calls:
+  // - searchResources(query, limit) -> graphIdOrLimit is number, limit is undefined
+  // - searchResources(query, graphId, limit) -> graphIdOrLimit is string, limit is number
+  let graphId: string | undefined;
+  let actualLimit: number;
+  
+  if (typeof graphIdOrLimit === 'number') {
+    // Called as searchResources(query, limit)
+    actualLimit = graphIdOrLimit;
+  } else if (typeof graphIdOrLimit === 'string') {
+    // Called as searchResources(query, graphId, limit)
+    graphId = graphIdOrLimit;
+    actualLimit = limit ?? 20;
+  } else {
+    // Called as searchResources(query) only
+    actualLimit = 20;
+  }
+  
   if (graphId) {
     params.set('graph_id', graphId);
   }
-  params.set('limit', limit.toString());
+  params.set('limit', actualLimit.toString());
   const response = await fetch(`${API_BASE_URL}/resources/search?${params.toString()}`);
   if (!response.ok) {
     throw new Error(`Failed to search resources: ${response.statusText}`);
@@ -1020,11 +1083,69 @@ export interface Lecture {
   slug?: string | null;
 }
 
+/**
+ * List all lectures
+ */
+export async function listLectures(): Promise<Lecture[]> {
+  const response = await fetch(`${API_BASE_URL}/lectures/`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to list lectures: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
 export async function getLecture(lectureId: string): Promise<Lecture> {
   const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}`);
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Failed to fetch lecture: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Create a new lecture
+ */
+export async function createLecture(payload: {
+  title: string;
+  description?: string | null;
+  primary_concept?: string | null;
+  level?: string | null;
+  estimated_time?: number | null;
+  slug?: string | null;
+  raw_text?: string | null;
+}): Promise<Lecture> {
+  const response = await fetch(`${API_BASE_URL}/lectures/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create lecture: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Update a lecture's title and/or raw_text
+ */
+export async function updateLecture(
+  lectureId: string,
+  payload: {
+    title?: string | null;
+    raw_text?: string | null;
+  }
+): Promise<Lecture> {
+  const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update lecture: ${response.statusText} - ${errorText}`);
   }
   return response.json();
 }
@@ -1037,6 +1158,31 @@ export async function getLectureSegments(lectureId: string): Promise<LectureSegm
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Failed to fetch lecture segments: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Update a lecture segment's text and/or other fields
+ */
+export async function updateSegment(
+  segmentId: string,
+  payload: {
+    text?: string | null;
+    summary?: string | null;
+    start_time_sec?: number | null;
+    end_time_sec?: number | null;
+    style_tags?: string[] | null;
+  }
+): Promise<LectureSegment> {
+  const response = await fetch(`${API_BASE_URL}/lectures/segments/${segmentId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update segment: ${response.statusText} - ${errorText}`);
   }
   return response.json();
 }
@@ -1333,15 +1479,40 @@ export interface Resource {
   created_at?: string | null; // ISO format timestamp
 }
 
+
 /**
  * Fetch all resources attached to a concept
  */
 export async function getResourcesForConcept(conceptId: string): Promise<Resource[]> {
-  const res = await fetch(`${API_BASE_URL}/resources/by-concept/${encodeURIComponent(conceptId)}`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch resources for concept ${conceptId}: ${res.statusText}`);
+  // Try offline cache first if offline
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    const { getResourcesForConceptOffline } = await import('../lib/offline/api_wrapper');
+    const cached = await getResourcesForConceptOffline(conceptId);
+    if (cached.length > 0) {
+      return cached;
+    }
+    // If no cache, return empty array (don't throw - resources are optional)
+    return [];
   }
-  return res.json();
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/resources/by-concept/${encodeURIComponent(conceptId)}`);
+    if (!res.ok) {
+      // If online request fails, try offline cache as fallback
+      const { getResourcesForConceptOffline } = await import('../lib/offline/api_wrapper');
+      const cached = await getResourcesForConceptOffline(conceptId);
+      if (cached.length > 0) {
+        return cached;
+      }
+      throw new Error(`Failed to fetch resources for concept ${conceptId}: ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    // Network error - try offline cache
+    const { getResourcesForConceptOffline } = await import('../lib/offline/api_wrapper');
+    const cached = await getResourcesForConceptOffline(conceptId);
+    return cached; // Return cached or empty array
+  }
 }
 
 /**
@@ -1968,6 +2139,40 @@ export async function getGraphQuality(graphId: string): Promise<GraphQuality> {
   const res = await fetch(`${API_BASE_URL}/quality/graphs/${encodeURIComponent(graphId)}`);
   if (!res.ok) {
     throw new Error(`Failed to get graph quality: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export interface NarrativeMetrics {
+  recencyWeight: number;
+  mentionFrequency: number;
+  centralityDelta: number;
+}
+
+export interface NarrativeMetricsResponse {
+  [conceptId: string]: NarrativeMetrics;
+}
+
+export async function getNarrativeMetrics(
+  conceptIds: string[],
+  graphId?: string
+): Promise<NarrativeMetricsResponse> {
+  if (conceptIds.length === 0) {
+    return {};
+  }
+  const params = new URLSearchParams();
+  if (graphId) {
+    params.set('graph_id', graphId);
+  }
+  const res = await fetch(`${API_BASE_URL}/quality/narrative-metrics?${params.toString()}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ concept_ids: conceptIds }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to get narrative metrics: ${res.statusText}`);
   }
   return res.json();
 }
