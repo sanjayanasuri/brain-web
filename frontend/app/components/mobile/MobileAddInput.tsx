@@ -180,7 +180,7 @@ export default function MobileAddInput({ onAdd, isLoading }: MobileAddInputProps
           color: '#6b7280',
           lineHeight: '1.8',
         }}>
-          <li>Type a concept name like "Machine Learning"</li>
+          <li>Type a concept name like &quot;Machine Learning&quot;</li>
           <li>Paste a URL to create a resource link</li>
           <li>Press Enter to quickly add</li>
           <li>You can add descriptions and links later</li>

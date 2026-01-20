@@ -7,6 +7,7 @@ import {
   getLecture, 
   getLectureSegments, 
   ingestLecture,
+  listLectures,
   type Lecture, 
   type LectureSegment,
   type Concept,
@@ -20,6 +21,70 @@ export default function LectureStudioPage() {
     <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center' }}>Loading…</div>}>
       <LectureStudioPageInner />
     </Suspense>
+  );
+}
+
+// Lecture Card Component for Landing Page
+function LectureCard({ lecture, router }: { lecture: Lecture; router: any }) {
+  // Use segment_count from lecture if available, otherwise default to 0
+  const segmentCount = lecture.segment_count ?? 0;
+
+  return (
+    <div
+      onClick={() => router.push(`/lecture-editor?lectureId=${lecture.lecture_id}`)}
+      style={{
+        background: 'var(--panel)',
+        borderRadius: '12px',
+        padding: '20px',
+        border: '1px solid var(--border)',
+        cursor: 'pointer',
+        transition: 'all 0.2s',
+        boxShadow: 'var(--shadow)',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = 'translateY(-2px)';
+        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = 'translateY(0)';
+        e.currentTarget.style.boxShadow = 'var(--shadow)';
+      }}
+    >
+      <h3 style={{
+        fontSize: '18px',
+        fontWeight: '600',
+        marginBottom: '8px',
+        color: 'var(--ink)',
+      }}>
+        {lecture.title}
+      </h3>
+      {lecture.description && (
+        <p style={{
+          fontSize: '14px',
+          color: 'var(--muted)',
+          marginBottom: '12px',
+          lineHeight: '1.5',
+        }}>
+          {lecture.description.length > 120 
+            ? lecture.description.substring(0, 120) + '...'
+            : lecture.description}
+        </p>
+      )}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        fontSize: '12px',
+        color: 'var(--muted)',
+      }}>
+        <span>
+          {segmentCount} segment{segmentCount !== 1 ? 's' : ''}
+        </span>
+        <span style={{ color: 'var(--accent)' }}>
+          Open →
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -39,26 +104,45 @@ function LectureStudioPageInner() {
   const [ingestText, setIngestText] = useState('');
   const [ingestDomain, setIngestDomain] = useState('');
   const [ingesting, setIngesting] = useState(false);
+  
+  // Landing page state (when no lectureId)
+  const [allLectures, setAllLectures] = useState<Lecture[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     const id = lectureId;
     if (!id) {
-      setError('No lecture ID provided');
-      setLoading(false);
+      // Load all lectures for landing page
+      async function loadAllLectures() {
+        try {
+          setLoading(true);
+          const lectures = await listLectures();
+          setAllLectures(lectures);
+        } catch (err) {
+          console.error('Failed to load lectures:', err);
+          setError(err instanceof Error ? err.message : 'Failed to load lectures');
+        } finally {
+          setLoading(false);
+        }
+      }
+      loadAllLectures();
       return;
     }
 
     async function loadData(lectureId: string) {
       try {
         setLoading(true);
-        const [lectureData, segmentsData, styleData] = await Promise.all([
+        // Load lecture and segments first (critical data)
+        const [lectureData, segmentsData] = await Promise.all([
           getLecture(lectureId),
           getLectureSegments(lectureId),
-          getTeachingStyle().catch(() => null), // Optional, don't fail if missing
         ]);
         setLecture(lectureData);
         setSegments(segmentsData);
-        setTeachingStyle(styleData);
+        // Load teaching style lazily in background (non-critical)
+        getTeachingStyle()
+          .then(styleData => setTeachingStyle(styleData))
+          .catch(() => setTeachingStyle(null)); // Silently fail if missing
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load lecture');
       } finally {
@@ -130,9 +214,104 @@ function LectureStudioPageInner() {
     }
   };
 
-  const handleSegmentClickToReader = (segment: LectureSegment) => {
-    router.push(`/reader/segment?lectureId=${lectureId}&segmentIndex=${segment.segment_index}`);
+  const handleSegmentClickToEditor = (segment: LectureSegment) => {
+    router.push(`/lecture-editor?lectureId=${lectureId}`);
   };
+
+  // Show landing page when no lectureId
+  if (!lectureId) {
+    const filteredLectures = allLectures.filter(lecture =>
+      lecture.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      lecture.description?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    return (
+      <div style={{ 
+        minHeight: '100vh', 
+        background: 'var(--page-bg)',
+        padding: '40px 20px',
+      }}>
+        <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+          {/* Header */}
+          <div style={{ marginBottom: '32px' }}>
+            <h1 style={{ 
+              fontSize: '32px', 
+              fontWeight: '700', 
+              marginBottom: '8px',
+              color: 'var(--ink)',
+            }}>
+              Lecture Studio
+            </h1>
+            <p style={{ color: 'var(--muted)', fontSize: '16px' }}>
+              Organize and manage all your lectures and notes
+            </p>
+          </div>
+
+          {/* Search bar */}
+          <div style={{ marginBottom: '24px' }}>
+            <input
+              type="text"
+              placeholder="Search lectures..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                width: '100%',
+                maxWidth: '600px',
+                padding: '12px 16px',
+                border: '2px solid var(--border)',
+                borderRadius: '8px',
+                background: 'var(--surface)',
+                color: 'var(--ink)',
+                fontSize: '14px',
+                outline: 'none',
+                transition: 'border-color 0.2s',
+              }}
+              onFocus={(e) => e.currentTarget.style.borderColor = 'var(--accent)'}
+              onBlur={(e) => e.currentTarget.style.borderColor = 'var(--border)'}
+            />
+          </div>
+
+          {/* Lectures grid */}
+          {loading ? (
+            <div style={{ padding: '40px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', color: 'var(--muted)' }}>Loading lectures...</div>
+            </div>
+          ) : error ? (
+            <div style={{ padding: '40px', textAlign: 'center' }}>
+              <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error}</div>
+            </div>
+          ) : filteredLectures.length === 0 ? (
+            <div style={{ 
+              padding: '60px 40px', 
+              textAlign: 'center',
+              background: 'var(--panel)',
+              borderRadius: '12px',
+              border: '1px dashed var(--border)',
+            }}>
+              <div style={{ fontSize: '18px', color: 'var(--muted)', marginBottom: '12px' }}>
+                {searchQuery ? 'No lectures found' : 'No lectures yet'}
+              </div>
+              {!searchQuery && (
+                <div style={{ fontSize: '14px', color: 'var(--muted)' }}>
+                  Create your first lecture by adding content to the graph
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+              gap: '20px',
+            }}>
+              {filteredLectures.map((lecture) => (
+                <LectureCard key={lecture.lecture_id} lecture={lecture} router={router} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -146,8 +325,8 @@ function LectureStudioPageInner() {
     return (
       <div style={{ padding: '40px', textAlign: 'center' }}>
         <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error || 'Lecture not found'}</div>
-        <Link href="/" style={{ marginTop: '20px', display: 'inline-block', color: 'var(--accent)' }}>
-          ← Back to Graph
+        <Link href="/lecture-studio" style={{ marginTop: '20px', display: 'inline-block', color: 'var(--accent)' }}>
+          ← Back to Lectures
         </Link>
       </div>
     );
@@ -167,11 +346,7 @@ function LectureStudioPageInner() {
           </Link>
           <h1 
             onClick={() => {
-              if (segments.length > 0) {
-                router.push(`/reader/segment?lectureId=${lectureId}&segmentIndex=0`);
-              } else {
-                setShowIngestModal(true);
-              }
+              router.push(`/lecture-editor?lectureId=${lectureId}`);
             }}
             style={{ 
               fontSize: '32px', 
@@ -183,7 +358,7 @@ function LectureStudioPageInner() {
             }}
             onMouseEnter={(e) => e.currentTarget.style.opacity = '0.8'}
             onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
-            title={segments.length > 0 ? 'Click to open in File Reader Studio' : 'Click to add content'}
+            title="Click to open in editor"
           >
             {lecture.title}
           </h1>
@@ -216,11 +391,7 @@ function LectureStudioPageInner() {
               >
                 Add Content
               </button>
-              {' '}or go to{' '}
-              <Link href="/reader/segment" style={{ color: 'var(--accent)' }}>
-                File Reader Studio
-              </Link>
-              {' '}to browse and annotate existing lectures.
+              {' '}to add content to this lecture.
             </div>
           )}
         </div>
@@ -283,7 +454,7 @@ function LectureStudioPageInner() {
                   Add Lecture Content
                 </button>
                 <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--muted)' }}>
-                  Or go to <Link href="/reader/segment" style={{ color: 'var(--accent)' }}>File Reader Studio</Link> to browse and annotate
+                  Click &quot;Add Lecture Content&quot; above to get started
                 </div>
               </div>
             ) : (
@@ -363,7 +534,7 @@ function LectureStudioPageInner() {
                     )}
                     </div>
                     <button
-                      onClick={() => handleSegmentClickToReader(segment)}
+                      onClick={() => handleSegmentClickToEditor(segment)}
                       style={{
                         marginTop: '8px',
                         padding: '6px 12px',
@@ -376,7 +547,7 @@ function LectureStudioPageInner() {
                         width: '100%',
                       }}
                     >
-                      Open in Reader →
+                      Open in Editor →
                     </button>
                   </div>
                 ))}
@@ -536,27 +707,25 @@ function LectureStudioPageInner() {
 
             {/* Actions */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {segments.length > 0 && (
-                <Link
-                  href={`/reader/segment?lectureId=${lectureId}&segmentIndex=0`}
-                  style={{
-                    display: 'inline-block',
-                    padding: '12px 20px',
-                    background: 'var(--accent)',
-                    color: 'white',
-                    borderRadius: '8px',
-                    textDecoration: 'none',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    transition: 'opacity 0.2s',
-                    textAlign: 'center',
-                  }}
-                  onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
-                  onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
-                >
-                  Open in File Reader Studio →
-                </Link>
-              )}
+              <Link
+                href={`/lecture-editor?lectureId=${lectureId}`}
+                style={{
+                  display: 'inline-block',
+                  padding: '12px 20px',
+                  background: 'var(--accent)',
+                  color: 'white',
+                  borderRadius: '8px',
+                  textDecoration: 'none',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  transition: 'opacity 0.2s',
+                  textAlign: 'center',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+                onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+              >
+                Open in Editor →
+              </Link>
               <Link
                 href={`/lecture-studio/draft?lectureId=${lectureId}`}
                 style={{
@@ -633,7 +802,7 @@ function LectureStudioPageInner() {
               fontSize: '13px',
               color: 'var(--ink)',
             }}>
-              <strong>Note:</strong> This will create a new lecture with segments. After ingestion, you can view and annotate the segments in <Link href="/reader/segment" style={{ color: 'var(--accent)' }}>File Reader Studio</Link>.
+              <strong>Note:</strong> This will create a new lecture with segments. After ingestion, you can edit the lecture in the editor.
             </div>
             
             <div style={{ marginBottom: '16px' }}>

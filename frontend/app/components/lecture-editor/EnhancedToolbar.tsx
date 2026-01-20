@@ -5,6 +5,8 @@ import { Editor } from '@tiptap/react';
 
 interface EnhancedToolbarProps {
   editor: Editor | null;
+  wikipediaHoverEnabled?: boolean;
+  onToggleWikipediaHover?: () => void;
 }
 
 const FONT_FAMILIES = [
@@ -31,7 +33,7 @@ const HIGHLIGHT_COLORS = [
   '#99ccff', '#66ccff', '#99ffcc', '#ccff99', '#ffff99', '#ffffff',
 ];
 
-export function EnhancedToolbar({ editor }: EnhancedToolbarProps) {
+export function EnhancedToolbar({ editor, wikipediaHoverEnabled = true, onToggleWikipediaHover }: EnhancedToolbarProps) {
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
   const [showFontPicker, setShowFontPicker] = useState(false);
@@ -64,6 +66,7 @@ export function EnhancedToolbar({ editor }: EnhancedToolbarProps) {
         padding: '8px 16px',
         display: 'flex',
         alignItems: 'center',
+        justifyContent: 'center',
         gap: '8px',
         flexWrap: 'wrap',
       }}
@@ -391,7 +394,7 @@ export function EnhancedToolbar({ editor }: EnhancedToolbarProps) {
         }}
         title="Quote"
       >
-        "
+        &quot;
       </button>
       <button
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
@@ -409,6 +412,31 @@ export function EnhancedToolbar({ editor }: EnhancedToolbarProps) {
       >
         {'</>'}
       </button>
+
+      <div style={{ width: '1px', height: '24px', background: 'var(--border)' }} />
+
+      {/* Wikipedia Hover Toggle */}
+      {onToggleWikipediaHover && (
+        <button
+          onClick={onToggleWikipediaHover}
+          style={{
+            background: wikipediaHoverEnabled ? 'var(--accent)' : 'transparent',
+            border: '1px solid var(--border)',
+            borderRadius: '6px',
+            color: wikipediaHoverEnabled ? 'white' : 'var(--ink)',
+            cursor: 'pointer',
+            fontSize: '14px',
+            padding: '6px 10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+          }}
+          title={wikipediaHoverEnabled ? 'Disable Wikipedia Hover' : 'Enable Wikipedia Hover'}
+        >
+          <span>📚</span>
+          <span style={{ fontSize: '12px' }}>Wiki</span>
+        </button>
+      )}
     </div>
   );
 }

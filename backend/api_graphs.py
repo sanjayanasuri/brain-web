@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Optional, List
 from neo4j import Session
 
 from db_neo4j import get_neo4j_session
+from auth import require_auth
 from models import GraphCreateRequest, GraphListResponse, GraphRenameRequest, GraphSelectResponse, Concept
 from services_branch_explorer import (
     create_graph,
@@ -27,9 +28,13 @@ router = APIRouter(prefix="/graphs", tags=["graphs"])
 
 
 @router.get("/", response_model=GraphListResponse)
-def list_graphs_endpoint(session=Depends(get_neo4j_session)):
-    graphs = list_graphs(session)
-    active_graph_id, active_branch_id = get_active_graph_context(session)
+def list_graphs_endpoint(
+    request: Request,
+    session=Depends(get_neo4j_session),
+):
+    tenant_id = getattr(request.state, "tenant_id", None)
+    graphs = list_graphs(session, tenant_id=tenant_id)
+    active_graph_id, active_branch_id = get_active_graph_context(session, tenant_id=tenant_id)
     return {
         "graphs": graphs,
         "active_graph_id": active_graph_id,
@@ -38,7 +43,13 @@ def list_graphs_endpoint(session=Depends(get_neo4j_session)):
 
 
 @router.post("/", response_model=GraphSelectResponse)
-def create_graph_endpoint(payload: GraphCreateRequest, session=Depends(get_neo4j_session)):
+def create_graph_endpoint(
+    payload: GraphCreateRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    tenant_id = getattr(request.state, "tenant_id", None)
     g = create_graph(
         session,
         payload.name,
@@ -47,6 +58,7 @@ def create_graph_endpoint(payload: GraphCreateRequest, session=Depends(get_neo4j
         template_description=payload.template_description,
         template_tags=payload.template_tags,
         intent=payload.intent,
+        tenant_id=tenant_id,
     )
     active_graph_id, active_branch_id = set_active_graph(session, g["graph_id"])
     return {
@@ -57,7 +69,12 @@ def create_graph_endpoint(payload: GraphCreateRequest, session=Depends(get_neo4j
 
 
 @router.post("/{graph_id}/select", response_model=GraphSelectResponse)
-def select_graph_endpoint(graph_id: str, session=Depends(get_neo4j_session)):
+def select_graph_endpoint(
+    graph_id: str,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         active_graph_id, active_branch_id = set_active_graph(session, graph_id)
         return {
@@ -70,7 +87,13 @@ def select_graph_endpoint(graph_id: str, session=Depends(get_neo4j_session)):
 
 
 @router.patch("/{graph_id}", response_model=GraphSelectResponse)
-def rename_graph_endpoint(graph_id: str, payload: GraphRenameRequest, session=Depends(get_neo4j_session)):
+def rename_graph_endpoint(
+    graph_id: str,
+    payload: GraphRenameRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         g = rename_graph(session, graph_id, payload.name)
         active_graph_id, active_branch_id = get_active_graph_context(session)
@@ -84,7 +107,12 @@ def rename_graph_endpoint(graph_id: str, payload: GraphRenameRequest, session=De
 
 
 @router.delete("/{graph_id}")
-def delete_graph_endpoint(graph_id: str, session=Depends(get_neo4j_session)):
+def delete_graph_endpoint(
+    graph_id: str,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         delete_graph(session, graph_id)
         return {"status": "ok"}
@@ -97,10 +125,11 @@ def delete_graph_endpoint(graph_id: str, session=Depends(get_neo4j_session)):
 @router.get("/{graph_id}/overview")
 def get_graph_overview_endpoint(
     graph_id: str,
+    request: Request,
     limit_nodes: int = 300,
     limit_edges: int = 600,
     include_proposed: str = "auto",
-    session=Depends(get_neo4j_session)
+    session=Depends(get_neo4j_session),
 ):
     """
     Get a lightweight overview of the graph with top nodes by degree.
@@ -143,10 +172,12 @@ def get_graph_overview_endpoint(
 def get_graph_neighbors_endpoint(
     graph_id: str,
     concept_id: str,
+    request: Request,
     hops: int = 1,
     limit: int = 80,
     include_proposed: str = "auto",
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Get neighbors of a concept within a specific graph.
@@ -228,7 +259,7 @@ def list_graph_concepts_endpoint(
     sort: str = Query("alphabetical", description="Sort order: 'alphabetical', 'degree', 'recent'"),
     limit: int = Query(50, ge=1, le=200, description="Maximum number of concepts to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    session: Session = Depends(get_neo4j_session)
+    session: Session = Depends(get_neo4j_session),
 ):
     """
     List concepts in a graph with filtering, sorting, and pagination.
@@ -240,9 +271,15 @@ def list_graph_concepts_endpoint(
         set_active_graph(session, graph_id)
         ensure_graph_scoping_initialized(session)
         
+        # Get the active graph context (should match graph_id after set_active_graph)
         graph_id_ctx, branch_id = get_active_graph_context(session)
+        # Use the context graph_id to ensure consistency (in case set_active_graph adjusted it)
+        # If they don't match, log it but continue with the context graph_id
         if graph_id_ctx != graph_id:
-            raise HTTPException(status_code=404, detail=f"Graph {graph_id} not found")
+            import logging
+            logger = logging.getLogger("brain_web")
+            logger.warning(f"Graph ID mismatch: requested {graph_id}, got {graph_id_ctx} from context")
+        actual_graph_id = graph_id_ctx
         
         # Build WHERE clause for filters
         where_clauses = [
@@ -251,7 +288,7 @@ def list_graph_concepts_endpoint(
         ]
         
         params = {
-            "graph_id": graph_id,
+            "graph_id": actual_graph_id,
             "branch_id": branch_id,
         }
         

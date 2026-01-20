@@ -123,34 +123,63 @@ def fetch_claims_with_mentions(
     graph_id: str,
     branch_id: str,
     community_ids: List[str],
-    limit_per_comm: int = 60
+    limit_per_comm: int = 60,
+    evidence_strictness: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch claims with embeddings and mentioned concept node_ids.
     
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID
+        branch_id: Branch ID
+        community_ids: List of community IDs
+        limit_per_comm: Max claims per community
+        evidence_strictness: Optional strictness mode ("high", "medium", "low")
+            - "high": Only VERIFIED claims (status = "VERIFIED")
+            - "medium": VERIFIED + high-confidence PROPOSED (confidence >= 0.7)
+            - "low": All claims (VERIFIED + all PROPOSED)
+            - None: All claims (backward compatibility)
+    
     Returns:
         List of claim dicts with: claim_id, text, confidence, source_id, source_span,
-        embedding, mentioned_node_ids, community_id
+        embedding, mentioned_node_ids, community_id, status, evidence_ids
     """
     if not community_ids:
         return []
     
+    # Build status filter clause based on strictness
+    status_filter = ""
+    if evidence_strictness == "high":
+        status_filter = "AND COALESCE(claim.status, 'PROPOSED') = 'VERIFIED'"
+    elif evidence_strictness == "medium":
+        status_filter = """AND (
+            COALESCE(claim.status, 'PROPOSED') = 'VERIFIED'
+            OR (COALESCE(claim.status, 'PROPOSED') = 'PROPOSED' AND COALESCE(claim.confidence, 0.0) >= 0.7)
+        )"""
+    # "low" or None: no status filter (include all)
+    
     # OPTIMIZED: Fetch all communities in a single batched query using UNWIND
     # This reduces database round trips from N queries to 1 query
-    query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    query = f"""
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
     UNWIND $community_ids AS comm_id
-    MATCH (k:Community {graph_id: $graph_id, community_id: comm_id})-[:BELONGS_TO]->(g)
-    MATCH (c:Concept {graph_id: $graph_id})-[:IN_COMMUNITY]->(k)
-    MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(c)
+    MATCH (k:Community {{graph_id: $graph_id, community_id: comm_id}})-[:BELONGS_TO]->(g)
+    MATCH (c:Concept {{graph_id: $graph_id}})-[:IN_COMMUNITY]->(k)
+    MATCH (claim:Claim {{graph_id: $graph_id}})-[:MENTIONS]->(c)
     WHERE $branch_id IN COALESCE(claim.on_branches, [])
+      {status_filter}
     WITH k.community_id AS comm_id, claim
     ORDER BY comm_id, claim.confidence DESC
     WITH comm_id, collect(claim)[0..$limit] AS claims
     UNWIND claims AS claim
-    OPTIONAL MATCH (claim)-[:MENTIONS]->(mentioned:Concept {graph_id: $graph_id})
-    OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
-    WITH comm_id, claim, collect(mentioned.node_id) AS mentioned_node_ids, chunk.chunk_id AS chunk_id
+    OPTIONAL MATCH (claim)-[:MENTIONS]->(mentioned:Concept {{graph_id: $graph_id}})
+    OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {{graph_id: $graph_id}})
+    OPTIONAL MATCH (claim)-[:EVIDENCED_BY]->(quote:Quote {{graph_id: $graph_id}})
+    WITH comm_id, claim, 
+         collect(DISTINCT mentioned.node_id) AS mentioned_node_ids, 
+         chunk.chunk_id AS chunk_id,
+         collect(DISTINCT quote.quote_id) AS quote_ids
     RETURN comm_id, 
            claim.claim_id AS claim_id,
            claim.text AS text,
@@ -158,7 +187,10 @@ def fetch_claims_with_mentions(
            claim.source_id AS source_id,
            claim.source_span AS source_span,
            claim.embedding AS embedding,
+           COALESCE(claim.status, 'PROPOSED') AS status,
+           COALESCE(claim.evidence_ids, []) AS evidence_ids,
            chunk_id,
+           quote_ids,
            mentioned_node_ids
     """
     
@@ -181,6 +213,9 @@ def fetch_claims_with_mentions(
             "source_span": record.get("source_span"),
             "chunk_id": record.get("chunk_id"),
             "embedding": record.get("embedding"),
+            "status": record.get("status", "PROPOSED"),
+            "evidence_ids": record.get("evidence_ids", []),
+            "quote_ids": record.get("quote_ids", []),
             "mentioned_node_ids": record.get("mentioned_node_ids", []),
             "community_id": record.get("comm_id"),
         })
@@ -395,7 +430,8 @@ def retrieve_graphrag_context(
     question: str,
     community_k: int = 5,
     claims_per_comm: int = 12,
-    max_neighbors_per_concept: int = 8
+    max_neighbors_per_concept: int = 8,
+    evidence_strictness: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Retrieve GraphRAG context: communities -> claims -> evidence subgraph.
@@ -409,15 +445,20 @@ def retrieve_graphrag_context(
         community_k: Number of top communities to retrieve
         claims_per_comm: Maximum claims per community
         max_neighbors_per_concept: Maximum neighbors per concept in evidence subgraph (legacy, not used)
+        evidence_strictness: Optional strictness mode ("high", "medium", "low")
+            - "high": Only VERIFIED claims
+            - "medium": VERIFIED + high-confidence PROPOSED
+            - "low": All claims (default)
     
     Returns:
         Dict with:
-        - context_text: Formatted context string
+        - context_text: Formatted context string (or "no evidence" message if insufficient)
         - communities: List of community dicts
         - claims: List of claim dicts
         - concepts: List of concept dicts
         - edges: List of edge dicts
         - debug: Optional debug info
+        - has_evidence: bool indicating if sufficient evidence was found
     """
     ensure_graph_scoping_initialized(session)
     
@@ -466,17 +507,36 @@ def retrieve_graphrag_context(
         print(f"[GraphRAG] Detected {len(anchor_node_ids)} anchor concepts, is_two_entity={is_two_entity}")
     
     # Step 4: Fetch claims with embeddings and mentioned concepts
-    print(f"[GraphRAG] Step 2: Fetching claims with embeddings for {len(community_ids)} communities")
+    print(f"[GraphRAG] Step 2: Fetching claims with embeddings for {len(community_ids)} communities (strictness: {evidence_strictness or 'low'})")
     candidate_limit = community_k * 60
     all_candidate_claims = fetch_claims_with_mentions(
         session=session,
         graph_id=graph_id,
         branch_id=branch_id,
         community_ids=community_ids,
-        limit_per_comm=candidate_limit // len(community_ids) if community_ids else 60
+        limit_per_comm=candidate_limit // len(community_ids) if community_ids else 60,
+        evidence_strictness=evidence_strictness,
     )
     
     print(f"[GraphRAG] Found {len(all_candidate_claims)} candidate claims")
+    
+    # Check for insufficient evidence (especially in strict mode)
+    has_evidence = len(all_candidate_claims) > 0
+    if not has_evidence:
+        print("[GraphRAG] WARNING: No claims found with current strictness settings")
+        return {
+            "context_text": "No evidence found for this query. Try:\n- Lowering evidence strictness\n- Expanding your knowledge graph\n- Using more exploratory search terms",
+            "communities": communities,
+            "claims": [],
+            "concepts": [],
+            "edges": [],
+            "has_evidence": False,
+            "debug": {
+                "strictness": evidence_strictness,
+                "communities_searched": len(community_ids),
+                "reason": "no_claims_found"
+            },
+        }
     
     # Step 5: Compute combined relevance scores for claims
     print(f"[GraphRAG] Step 3: Computing claim relevance scores")
@@ -817,12 +877,35 @@ def retrieve_graphrag_context(
     except Exception as e:
         print(f"[GraphRAG] WARNING: Failed to log event: {e}")
     
+    # Check if we have sufficient evidence (at least 3 claims with evidence)
+    verified_claims = [c for c in selected_claims if c.get("status") == "VERIFIED"]
+    has_evidence = len(selected_claims) >= 3 or len(verified_claims) > 0
+    
+    # Enhance with signal-aware retrieval
+    try:
+        from services_retrieval_signals import enhance_retrieval_with_signals, format_signal_context
+        signal_info = enhance_retrieval_with_signals(
+            session=session,
+            concepts=concepts,
+            include_reflections=True,
+            include_emphasis=True,
+        )
+        signal_context = format_signal_context(signal_info)
+        
+        # Append signal context to formatted context
+        if signal_context:
+            context_text += "\n\n--- User Context ---\n" + signal_context
+    except Exception as e:
+        print(f"[GraphRAG] WARNING: Failed to enhance with signals: {e}")
+        # Continue without signal enhancement
+    
     return {
         "context_text": context_text,
         "communities": communities,
         "claims": selected_claims,
         "concepts": concepts,
         "edges": edges,
+        "has_evidence": has_evidence,
         "debug": debug_info,
     }
 

@@ -7,6 +7,359 @@ import { fetchRecentSessions, type SessionSummary } from '../../lib/eventsClient
 import { getLastSession } from '../../lib/sessionState';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { getChatSessions, getChatSession, setCurrentSessionId, type ChatSession } from '../../lib/chatSessions';
+import { listGraphs, type GraphSummary } from '../../api-client';
+
+// Todo List Component
+function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
+  // Initialize state from localStorage immediately to prevent empty state flash
+  const [todos, setTodos] = useState<Array<{ id: string; text: string; completed: boolean }>>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const savedTodos = localStorage.getItem('brain-web-todos');
+      if (savedTodos) {
+        const parsed = JSON.parse(savedTodos);
+        // Validate that it's an array
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load todos on init:', e);
+    }
+    return [];
+  });
+  const [newTodo, setNewTodo] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Load todos from localStorage on mount (backup in case initial state didn't work)
+  useEffect(() => {
+    if (typeof window === 'undefined' || isInitialized) return;
+    
+    try {
+      const savedTodos = localStorage.getItem('brain-web-todos');
+      if (savedTodos) {
+        const parsed = JSON.parse(savedTodos);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTodos(parsed);
+        }
+      }
+      setIsInitialized(true);
+    } catch (e) {
+      console.error('Failed to load todos:', e);
+      setIsInitialized(true);
+    }
+  }, [isInitialized]);
+
+  // Save todos to localStorage whenever they change (but skip initial empty state)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isInitialized) return;
+    
+    try {
+      const todosToSave = JSON.stringify(todos);
+      localStorage.setItem('brain-web-todos', todosToSave);
+      console.log('[TodoList] Saved todos to localStorage:', todos.length, 'items');
+    } catch (e) {
+      console.error('Failed to save todos:', e);
+      // If storage is full, try to clear old data
+      if (e instanceof DOMException && e.code === 22) {
+        console.warn('[TodoList] Storage quota exceeded, clearing old todos');
+        try {
+          // Keep only last 50 todos
+          const trimmed = todos.slice(-50);
+          localStorage.setItem('brain-web-todos', JSON.stringify(trimmed));
+          setTodos(trimmed);
+        } catch (clearErr) {
+          console.error('[TodoList] Failed to clear old todos:', clearErr);
+        }
+      }
+    }
+  }, [todos, isInitialized]);
+
+  const addTodo = () => {
+    if (newTodo.trim()) {
+      const todo = {
+        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        text: newTodo.trim(),
+        completed: false,
+      };
+      const newTodos = [...todos, todo];
+      setTodos(newTodos);
+      setNewTodo('');
+      // Force immediate save
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
+          console.log('[TodoList] Immediately saved new todo');
+        } catch (e) {
+          console.error('[TodoList] Failed to immediately save todo:', e);
+        }
+      }
+    }
+  };
+
+  const toggleTodo = (id: string) => {
+    const newTodos = todos.map(todo => 
+      todo.id === id ? { ...todo, completed: !todo.completed } : todo
+    );
+    setTodos(newTodos);
+    // Force immediate save
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
+      } catch (e) {
+        console.error('[TodoList] Failed to save toggle:', e);
+      }
+    }
+  };
+
+  const deleteTodo = (id: string) => {
+    const newTodos = todos.filter(todo => todo.id !== id);
+    setTodos(newTodos);
+    // Force immediate save
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
+      } catch (e) {
+        console.error('[TodoList] Failed to save delete:', e);
+      }
+    }
+  };
+
+  const startEdit = (id: string, text: string) => {
+    setEditingId(id);
+    setEditText(text);
+  };
+
+  const saveEdit = (id: string) => {
+    if (editText.trim()) {
+      const newTodos = todos.map(todo => 
+        todo.id === id ? { ...todo, text: editText.trim() } : todo
+      );
+      setTodos(newTodos);
+      // Force immediate save
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
+        } catch (e) {
+          console.error('[TodoList] Failed to save edit:', e);
+        }
+      }
+    }
+    setEditingId(null);
+    setEditText('');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText('');
+  };
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{
+        padding: '16px',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}>
+        <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Todo</h2>
+        {onToggleCollapse && (
+          <button
+            onClick={onToggleCollapse}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              color: 'var(--muted)',
+              fontSize: '14px',
+            }}
+            aria-label="Collapse sidebar"
+            title="Collapse sidebar"
+          >
+            ←
+          </button>
+        )}
+      </div>
+
+      {/* Todo List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+        {/* Add Todo Input */}
+        <div style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
+          <input
+            type="text"
+            value={newTodo}
+            onChange={(e) => setNewTodo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                addTodo();
+              }
+            }}
+            placeholder="Add a task..."
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              fontSize: '13px',
+              background: 'var(--surface)',
+              color: 'var(--ink)',
+              outline: 'none',
+            }}
+          />
+          <button
+            onClick={addTodo}
+            style={{
+              padding: '8px 12px',
+              background: 'var(--accent)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: '500',
+            }}
+          >
+            Add
+          </button>
+        </div>
+
+        {/* Todo Items */}
+        {todos.length === 0 ? (
+          <div style={{ color: 'var(--muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>
+            No tasks yet. Add one above!
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {todos.map((todo) => (
+              <div
+                key={todo.id}
+                style={{
+                  padding: '10px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                  background: todo.completed ? 'var(--surface)' : 'var(--background)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  opacity: todo.completed ? 0.6 : 1,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={todo.completed}
+                  onChange={() => toggleTodo(todo.id)}
+                  style={{
+                    cursor: 'pointer',
+                    width: '16px',
+                    height: '16px',
+                  }}
+                />
+                {editingId === todo.id ? (
+                  <div style={{ flex: 1, display: 'flex', gap: '4px' }}>
+                    <input
+                      type="text"
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          saveEdit(todo.id);
+                        } else if (e.key === 'Escape') {
+                          cancelEdit();
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: '4px 8px',
+                        border: '1px solid var(--border)',
+                        borderRadius: '4px',
+                        fontSize: '13px',
+                        background: 'var(--surface)',
+                        color: 'var(--ink)',
+                        outline: 'none',
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => saveEdit(todo.id)}
+                      style={{
+                        padding: '4px 8px',
+                        background: 'var(--accent)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                      }}
+                    >
+                      ✓
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      style={{
+                        padding: '4px 8px',
+                        background: 'transparent',
+                        color: 'var(--muted)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      onClick={() => startEdit(todo.id, todo.text)}
+                      style={{
+                        flex: 1,
+                        fontSize: '13px',
+                        color: 'var(--ink)',
+                        textDecoration: todo.completed ? 'line-through' : 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {todo.text}
+                    </div>
+                    <button
+                      onClick={() => deleteTodo(todo.id)}
+                      style={{
+                        padding: '4px 8px',
+                        background: 'transparent',
+                        color: 'var(--muted)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        borderRadius: '4px',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'var(--surface)';
+                        e.currentTarget.style.color = 'var(--accent-2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.color = 'var(--muted)';
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface SessionDrawerProps {
   isCollapsed?: boolean;
@@ -22,6 +375,8 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const [loading, setLoading] = useState(true);
   const [lastSession, setLastSession] = useState<{ graph_id?: string; concept_id?: string } | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [activeGraphId, setActiveGraphId] = useState<string>('');
+  const [graphs, setGraphs] = useState<GraphSummary[]>([]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -40,6 +395,11 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
         setRecentSessions(sessions);
         const localLastSession = getLastSession();
         setLastSession(localLastSession);
+        
+        // Load graphs to get active graph
+        const graphsData = await listGraphs();
+        setActiveGraphId(graphsData.active_graph_id || '');
+        setGraphs(graphsData.graphs || []);
         
         // Load chat sessions
         const chats = getChatSessions();
@@ -80,15 +440,15 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     router.push(`/${queryString ? `?${queryString}` : ''}`);
   };
 
-  const handleResume = () => {
+  const handleMostRecentGraph = () => {
     const mostRecentSession = recentSessions[0];
-    if (mostRecentSession) {
+    if (mostRecentSession?.graph_id) {
       navigateToExplorer({
         conceptId: mostRecentSession.last_concept_id,
         graphId: mostRecentSession.graph_id,
       });
-    } else if (lastSession?.concept_id) {
-      navigateToExplorer({ conceptId: lastSession.concept_id, graphId: lastSession.graph_id });
+    } else if (activeGraphId) {
+      navigateToExplorer({ graphId: activeGraphId });
     } else {
       navigateToExplorer();
     }
@@ -102,7 +462,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   };
 
   const handleLoadChatSession = (chatSession: ChatSession) => {
-    // Set as current session and navigate to explorer
+    // Set as current session and navigate to explorer with chat
     setCurrentSessionId(chatSession.id);
     navigateToExplorer({
       graphId: chatSession.graphId,
@@ -173,8 +533,57 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     return groups.filter(group => group.sessions.length > 0);
   };
 
-  const hasLastSession = recentSessions.length > 0 || (lastSession && (lastSession.concept_id || lastSession.graph_id));
   const sessionGroups = groupSessionsByDate(recentSessions);
+  const mostRecentGraphSession = recentSessions[0];
+  
+  // Get graph name for display
+  const getGraphName = (graphId?: string): string => {
+    if (!graphId) return '';
+    const graph = graphs.find(g => g.graph_id === graphId);
+    return graph?.name || graphId;
+  };
+  
+  // Find the most recent session for the graph we want to display
+  const getMostRecentGraphInfo = () => {
+    const targetGraphId = mostRecentGraphSession?.graph_id || activeGraphId;
+    if (!targetGraphId) return null;
+    
+    // Find all sessions for this graph
+    const graphSessions = recentSessions.filter(s => s.graph_id === targetGraphId);
+    const latestSession = graphSessions[0] || mostRecentGraphSession;
+    
+    if (!latestSession) return null;
+    
+    return {
+      name: getGraphName(targetGraphId),
+      session: latestSession,
+      graphId: targetGraphId,
+    };
+  };
+  
+  const mostRecentGraphInfo = getMostRecentGraphInfo();
+  const mostRecentGraphName = mostRecentGraphInfo?.name || '';
+  
+  // Format time for graph session display
+  const formatGraphSessionTime = (endAt: string): string => {
+    try {
+      const date = new Date(endAt);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+
+      if (diffMins < 1) return 'Just now';
+      if (diffMins < 60) return `${diffMins}m ago`;
+      if (diffHours < 24) return `${diffHours}h ago`;
+      if (diffDays < 7) return `${diffDays}d ago`;
+      
+      return date.toLocaleDateString();
+    } catch (e) {
+      return 'Recent';
+    }
+  };
 
   // On mobile, hide sidebar unless explicitly opened
   if (isMobile && !isMobileSidebarOpen) {
@@ -209,130 +618,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
           zIndex: 1000,
           boxShadow: '2px 0 8px rgba(0, 0, 0, 0.1)',
         }}>
-          {/* Mobile header with close button */}
-          <div style={{
-            padding: '16px',
-            borderBottom: '1px solid var(--border)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-          }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Sessions</h2>
-            <button
-              onClick={() => setIsMobileSidebarOpen(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '4px 8px',
-                borderRadius: '4px',
-                color: 'var(--muted)',
-                fontSize: '18px',
-              }}
-              aria-label="Close sidebar"
-              title="Close sidebar"
-            >
-              ×
-            </button>
-          </div>
-          {/* Rest of sidebar content - reuse the same structure */}
-          {hasLastSession && (
-            <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Continue
-              </div>
-              <button
-                onClick={() => {
-                  handleResume();
-                  setIsMobileSidebarOpen(false);
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 16px',
-                  background: 'var(--accent)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                }}
-              >
-                Resume last
-              </button>
-            </div>
-          )}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
-            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              Sessions
-            </div>
-            {loading ? (
-              <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '8px' }}>Loading...</div>
-            ) : sessionGroups.length === 0 ? (
-              <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '8px' }}>No recent sessions</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {sessionGroups.map((group) => (
-                  <div key={group.label}>
-                    <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {group.label}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      {group.sessions.map((session) => (
-                        <div
-                          key={session.session_id}
-                          onClick={() => {
-                            handleResumeSession(session);
-                            setIsMobileSidebarOpen(false);
-                          }}
-                          style={{
-                            padding: '10px',
-                            borderRadius: '8px',
-                            border: '1px solid var(--border)',
-                            cursor: 'pointer',
-                            transition: 'background 0.2s',
-                            background: 'var(--background)',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = 'var(--surface)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'var(--background)';
-                          }}
-                        >
-                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
-                            {formatSessionTimeRange(session.start_at, session.end_at)}
-                          </div>
-                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '6px' }}>
-                            {session.summary}
-                          </div>
-                          {session.top_concepts.length > 0 && (
-                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
-                              {session.top_concepts.slice(0, 2).map((concept) => (
-                                <span
-                                  key={concept.concept_id}
-                                  style={{
-                                    fontSize: '10px',
-                                    padding: '2px 6px',
-                                    background: 'var(--surface)',
-                                    borderRadius: '4px',
-                                    color: 'var(--ink)',
-                                    border: '1px solid var(--border)',
-                                  }}
-                                >
-                                  {concept.concept_name || concept.concept_id}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <TodoList onToggleCollapse={() => setIsMobileSidebarOpen(false)} />
           <div style={{ padding: '16px', borderTop: '1px solid var(--border)' }}>
             <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               Quick Links
@@ -353,7 +639,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
                 Home
               </Link>
               <Link
-                href="/"
+                href={`/?graph_id=${activeGraphId || 'default'}`}
                 onClick={() => setIsMobileSidebarOpen(false)}
                 style={{
                   padding: '8px 12px',
@@ -488,29 +774,6 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
           →
         </button>
         <div style={{ width: '100%', height: '1px', background: 'var(--border)' }} />
-        {hasLastSession && (
-          <button
-            onClick={handleResume}
-            style={{
-              background: 'var(--accent)',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '8px',
-              borderRadius: '6px',
-              color: 'white',
-              fontSize: '16px',
-              width: '40px',
-              height: '40px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            aria-label="Resume last session"
-            title="Resume last session"
-          >
-            ↻
-          </button>
-        )}
         <Link
           href="/home"
           style={{
@@ -581,179 +844,17 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
 
   return (
     <div style={{
-      width: '260px',
+      width: '280px',
       background: 'var(--panel)',
       borderRight: '1px solid var(--border)',
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
       overflowY: 'auto',
+      flexShrink: 0,
     }}>
-      {/* Header */}
-      <div style={{
-        padding: '16px',
-        borderBottom: '1px solid var(--border)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-      }}>
-        <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Sessions</h2>
-        <button
-          onClick={onToggleCollapse}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: '4px 8px',
-            borderRadius: '4px',
-            color: 'var(--muted)',
-            fontSize: '14px',
-          }}
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar"
-        >
-          ←
-        </button>
-      </div>
-
-      {/* Continue Section */}
-      {hasLastSession && (
-        <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Continue
-          </div>
-          <button
-            onClick={handleResume}
-            style={{
-              width: '100%',
-              padding: '10px 16px',
-              background: 'var(--accent)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '14px',
-              fontWeight: '600',
-              cursor: 'pointer',
-            }}
-          >
-            Resume last
-          </button>
-        </div>
-      )}
-
-      {/* Sessions Section */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
-        {/* Chat Sessions */}
-        {chatSessions.length > 0 && (
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              Chat Sessions
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {chatSessions.map((chatSession) => (
-                <div
-                  key={chatSession.id}
-                  onClick={() => handleLoadChatSession(chatSession)}
-                  style={{
-                    padding: '10px',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border)',
-                    cursor: 'pointer',
-                    transition: 'background 0.2s',
-                    background: 'var(--background)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'var(--surface)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'var(--background)';
-                  }}
-                >
-                  <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--ink)', marginBottom: '4px' }}>
-                    {chatSession.title}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
-                    {formatChatSessionTime(chatSession.updatedAt)} • {chatSession.messages.length} message{chatSession.messages.length !== 1 ? 's' : ''}
-                  </div>
-                  {chatSession.messages.length > 0 && (
-                    <div style={{ fontSize: '12px', color: 'var(--muted)', fontStyle: 'italic' }}>
-                      "{chatSession.messages[0].question.substring(0, 60)}{chatSession.messages[0].question.length > 60 ? '...' : ''}"
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Graph Sessions */}
-        <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Graph Sessions
-        </div>
-        {loading ? (
-          <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '8px' }}>Loading...</div>
-        ) : sessionGroups.length === 0 ? (
-          <div style={{ color: 'var(--muted)', fontSize: '13px', padding: '8px' }}>No recent sessions</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {sessionGroups.map((group) => (
-              <div key={group.label}>
-                <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  {group.label}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {group.sessions.map((session) => (
-                    <div
-                      key={session.session_id}
-                      onClick={() => handleResumeSession(session)}
-                      style={{
-                        padding: '10px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        cursor: 'pointer',
-                        transition: 'background 0.2s',
-                        background: 'var(--background)',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'var(--surface)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'var(--background)';
-                      }}
-                    >
-                      <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
-                        {formatSessionTimeRange(session.start_at, session.end_at)}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '6px' }}>
-                        {session.summary}
-                      </div>
-                      {session.top_concepts.length > 0 && (
-                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
-                          {session.top_concepts.slice(0, 2).map((concept) => (
-                            <span
-                              key={concept.concept_id}
-                              style={{
-                                fontSize: '10px',
-                                padding: '2px 6px',
-                                background: 'var(--surface)',
-                                borderRadius: '4px',
-                                color: 'var(--ink)',
-                                border: '1px solid var(--border)',
-                              }}
-                            >
-                              {concept.concept_name || concept.concept_id}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Todo List Section */}
+      <TodoList onToggleCollapse={onToggleCollapse} />
 
       {/* Quick Links Section */}
       <div style={{ padding: '16px', borderTop: '1px solid var(--border)' }}>
@@ -851,19 +952,6 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
             }}
           >
             Workspace Library
-          </Link>
-          <Link
-            href="/reader/segment"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname?.startsWith('/reader/segment') ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname?.startsWith('/reader/segment') ? 'var(--surface)' : 'transparent',
-            }}
-          >
-            File Reader Studio
           </Link>
         </div>
       </div>

@@ -12,6 +12,9 @@ from cache_utils import get_cached, set_cached
 from typing import Dict, Any, List, Optional
 from neo4j import Session
 import hashlib
+from auth import require_auth
+from audit_log import log_retrieval_access
+from fastapi import Request
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -216,7 +219,9 @@ def fetch_focus_context(
 @router.post("/retrieve", response_model=RetrievalResult)
 def retrieve_endpoint(
     payload: RetrievalRequest,
-    session=Depends(get_neo4j_session)
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Intent-based retrieval orchestrator.
@@ -392,8 +397,56 @@ def retrieve_endpoint(
                 "plan_version": result.plan_version,
             }
         )
+        
+        # Audit log: track data access for security/compliance
+        log_retrieval_access(
+            request=request,
+            graph_id=graph_id,
+            branch_id=branch_id,
+            intent=intent,
+            evidence_ids=trace_ids.get("used_claim_ids", []),
+            concept_ids=trace_ids.get("used_concept_ids", []),
+        )
     except Exception as e:
         print(f"[Retrieval API] WARNING: Failed to log event: {e}")
+    
+    # Emit event for chat message creation
+    try:
+        from events.emitter import emit_event
+        from events.schema import EventType, ObjectRef
+        from projectors.session_context import SessionContextProjector
+        
+        session_id = getattr(request.state, "session_id", None) or "unknown"
+        actor_id = getattr(request.state, "user_id", None)
+        
+        # Extract mentioned concepts from result
+        mentioned_concepts = []
+        if result.context.get("focus_entities"):
+            for entity in result.context["focus_entities"][:10]:  # Top 10
+                mentioned_concepts.append({
+                    "concept_id": entity.get("node_id"),
+                    "name": entity.get("name"),
+                })
+        
+        # Emit event
+        emit_event(
+            event_type=EventType.CHAT_MESSAGE_CREATED,
+            session_id=session_id,
+            actor_id=actor_id,
+            payload={
+                "message": payload.message[:500],  # Truncate for payload
+                "intent": intent,
+                "answer_summary": result.context.get("summary", "")[:500],
+                "mentioned_concepts": mentioned_concepts,
+                "evidence_count": len(result.context.get("evidence_used", [])),
+            },
+            trace_id=getattr(request.state, "request_id", None),
+        )
+        
+        # Projection is now handled asynchronously via background task queue
+        # No need to update synchronously here
+    except Exception:
+        pass  # Don't fail on event emission
     
     return result
 

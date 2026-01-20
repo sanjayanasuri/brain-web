@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from db_neo4j import get_neo4j_session
+from auth import require_auth
 from models import (
     BranchCompareResponse,
     BranchCreateRequest,
@@ -16,20 +17,35 @@ router = APIRouter(prefix="/branches", tags=["branches"])
 
 
 @router.get("/")
-def list_branches_endpoint(session=Depends(get_neo4j_session)):
-    graph_id, active_branch_id = get_active_graph_context(session)
+def list_branches_endpoint(
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    tenant_id = getattr(request.state, "tenant_id", None)
+    graph_id, active_branch_id = get_active_graph_context(session, tenant_id=tenant_id)
     branches = list_branches(session)
     return {"graph_id": graph_id, "active_branch_id": active_branch_id, "branches": branches}
 
 
 @router.post("/create")
-def create_branch_endpoint(payload: BranchCreateRequest, session=Depends(get_neo4j_session)):
+def create_branch_endpoint(
+    payload: BranchCreateRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     b = create_branch(session, payload.name)
     return b
 
 
 @router.post("/{branch_id}/select")
-def select_branch_endpoint(branch_id: str, session=Depends(get_neo4j_session)):
+def select_branch_endpoint(
+    branch_id: str,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         graph_id, active_branch_id = set_active_branch(session, branch_id)
         return {"graph_id": graph_id, "active_branch_id": active_branch_id}
@@ -42,6 +58,8 @@ def fork_from_node_endpoint(
     branch_id: str,
     node_id: str,
     payload: BranchForkRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
     try:
@@ -51,7 +69,12 @@ def fork_from_node_endpoint(
 
 
 @router.get("/{branch_id}/paths")
-def get_paths_endpoint(branch_id: str, session=Depends(get_neo4j_session)):
+def get_paths_endpoint(
+    branch_id: str,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         return get_branch_graph(session, branch_id)
     except Exception as e:
@@ -59,7 +82,13 @@ def get_paths_endpoint(branch_id: str, session=Depends(get_neo4j_session)):
 
 
 @router.post("/{branch_id}/compare/{other_branch_id}", response_model=BranchCompareResponse)
-def compare_endpoint(branch_id: str, other_branch_id: str, session=Depends(get_neo4j_session)):
+def compare_endpoint(
+    branch_id: str,
+    other_branch_id: str,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         return compare_branches(session, branch_id, other_branch_id)
     except Exception as e:
@@ -67,7 +96,12 @@ def compare_endpoint(branch_id: str, other_branch_id: str, session=Depends(get_n
 
 
 @router.post("/compare", response_model=BranchLLMCompareResponse)
-def llm_compare_endpoint(payload: BranchLLMCompareRequest, session=Depends(get_neo4j_session)):
+def llm_compare_endpoint(
+    payload: BranchLLMCompareRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     try:
         a = get_branch_graph(session, payload.branch_id)
         b = get_branch_graph(session, payload.other_branch_id)

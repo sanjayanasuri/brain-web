@@ -39,7 +39,7 @@ export async function ensureFreshOfflineCache(params: { graph_id: string; branch
 
   // If stale, re-bootstrap and overwrite caches
   const freshBootstrap = await fetchJSON(
-    `/offline/bootstrap?graph_id=${encodeURIComponent(graph_id)}&branch_id=${encodeURIComponent(branch_id)}`
+    `/api/offline/bootstrap?graph_id=${encodeURIComponent(graph_id)}&branch_id=${encodeURIComponent(branch_id)}`
   );
   await cacheBootstrap(graph_id, branch_id, freshBootstrap);
 

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, type CreateGraphOptions, type GraphSummary, type Concept, type Resource } from '../../api-client';
+import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, createConcept, deleteConcept, createRelationshipByIds, type CreateGraphOptions, type GraphSummary, type Concept, type Resource } from '../../api-client';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { useTheme } from '../context-providers/ThemeProvider';
 import { setLastSession, getRecentConceptViews, pushRecentConceptView, getLastSession } from '../../lib/sessionState';
@@ -1327,6 +1327,30 @@ export default function TopBar() {
         command: '/paths',
         icon: '🛤️',
       },
+      {
+        type: 'action',
+        id: 'add-node',
+        label: 'Add node',
+        description: 'Add a new node to the graph (e.g., /add node "Concept Name")',
+        command: '/add node',
+        icon: '➕',
+      },
+      {
+        type: 'action',
+        id: 'link-node',
+        label: 'Link nodes',
+        description: 'Link two nodes together (e.g., /link "Source" to "Target")',
+        command: '/link',
+        icon: '🔗',
+      },
+      {
+        type: 'action',
+        id: 'remove-node',
+        label: 'Remove node',
+        description: 'Remove a node from the graph (e.g., /remove node "Concept Name")',
+        command: '/remove node',
+        icon: '🗑️',
+      },
     ];
 
     if (!isCommand && normalizedQuery.length === 0) {
@@ -1337,6 +1361,17 @@ export default function TopBar() {
     if (baseCommand === 'lens' || baseCommand === '') {
       if (argString === '' || argString === 'none' || argString === 'learning' || argString === 'finance') {
         return allActions.filter(a => a.id.startsWith('lens-'));
+      }
+    }
+
+    // Special handling for add/link/remove commands - show them when user types the base command
+    if (baseCommand === 'add' || baseCommand === 'link' || baseCommand === 'remove' || baseCommand === 'delete') {
+      if (baseCommand === 'add') {
+        return allActions.filter(a => a.id === 'add-node');
+      } else if (baseCommand === 'link') {
+        return allActions.filter(a => a.id === 'link-node');
+      } else if (baseCommand === 'remove' || baseCommand === 'delete') {
+        return allActions.filter(a => a.id === 'remove-node');
       }
     }
 
@@ -1388,33 +1423,248 @@ export default function TopBar() {
     }
   }, [selectedResultIndex, searchResults]);
 
-  // Keyboard navigation in search
-  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSelectedResultIndex(prev => 
-        prev < searchResults.length - 1 ? prev + 1 : prev
-      );
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSelectedResultIndex(prev => prev > -1 ? prev - 1 : -1);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      const isSecondary = e.metaKey || e.ctrlKey;
-      if (selectedResultIndex >= 0 && searchResults[selectedResultIndex]) {
-        handleSelectResult(searchResults[selectedResultIndex], isSecondary);
-      } else if (searchResults.length > 0) {
-        // Select first result if none selected
-        handleSelectResult(searchResults[0], isSecondary);
+  // Define these callbacks first (in dependency order)
+  const handleFetchEvidence = useCallback(async (conceptId: string, conceptName: string) => {
+    try {
+      const result = await fetchEvidenceForConcept(conceptId, conceptName, activeGraphId || undefined);
+      if (result.error) {
+        console.error('Failed to fetch evidence:', result.error);
+        alert(`Failed to fetch evidence: ${result.error}`);
+      } else {
+        // Navigate to explorer with concept selected to show new evidence
+        const params = new URLSearchParams();
+        params.set('select', conceptId);
+        if (activeGraphId) {
+          params.set('graph_id', activeGraphId);
+        }
+        router.push(`/?${params.toString()}`);
       }
-    } else if (e.key === 'Escape') {
-      setSearchFocused(false);
-      setSearchQuery('');
-      setSearchResults([]);
-      setPreviewConcept(null);
-      searchInputRef.current?.blur();
+    } catch (error) {
+      console.error('Error fetching evidence:', error);
+      alert('Failed to fetch evidence');
     }
-  }, [searchResults, selectedResultIndex]);
+  }, [router, activeGraphId]);
+
+  const executeAction = useCallback(async (actionId: string, command: string, graphId: string) => {
+    const params = new URLSearchParams();
+    if (graphId) {
+      params.set('graph_id', graphId);
+    }
+
+    // Parse command arguments - handle quoted strings
+    const parts = command.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+    const baseCommand = parts[0]?.slice(1).toLowerCase() || '';
+    const args = parts.slice(1).map(arg => arg.replace(/^"|"$/g, ''));
+
+    switch (actionId) {
+      case 'digest':
+        router.push('/digest');
+        break;
+      case 'saved':
+        router.push('/saved');
+        break;
+      case 'review':
+        params.set('status', 'PROPOSED');
+        router.push(`/review?${params.toString()}`);
+        break;
+      case 'ingest':
+        router.push('/source-management');
+        break;
+      case 'browse-graph':
+        if (graphId) {
+          router.push(`/graphs/${graphId}`);
+        } else {
+          router.push('/');
+        }
+        break;
+      case 'switch-graph':
+        setGraphSwitcherOpen(true);
+        break;
+      case 'clear-highlights':
+        // Clear highlights - this would need to be implemented in the graph visualization
+        console.log('Clear highlights - to be implemented');
+        break;
+      case 'fetch-evidence':
+        // Navigate to explorer - user can select concept and fetch evidence
+        router.push(`/?${params.toString()}`);
+        break;
+      case 'paths':
+        // Navigate to home page where paths are shown
+        router.push(`/home?${params.toString()}`);
+        break;
+      case 'add-node': {
+        // Parse: /add node "Name" [domain] or /add "Name" [domain] or /add node Name [domain]
+        let nodeName = '';
+        let domain = 'general';
+        
+        if (baseCommand === 'add' && args.length > 0) {
+          // Check if first arg is "node"
+          if (args[0]?.toLowerCase() === 'node' && args.length > 1) {
+            nodeName = args[1];
+            domain = args[2] || 'general';
+          } else {
+            // First arg is the node name
+            nodeName = args[0];
+            domain = args[1] || 'general';
+          }
+        }
+        
+        if (!nodeName) {
+          // Prompt user for node name
+          const name = prompt('Enter node name:');
+          if (!name) return;
+          nodeName = name.trim();
+          const domainInput = prompt('Enter domain (optional, default: general):');
+          if (domainInput) domain = domainInput.trim();
+        }
+        
+        if (nodeName && graphId) {
+          try {
+            await selectGraph(graphId);
+            const newConcept = await createConcept({
+              name: nodeName,
+              domain: domain,
+              type: 'concept',
+              graph_id: graphId,
+            });
+            // Navigate to the new node
+            params.set('select', newConcept.node_id);
+            router.push(`/?${params.toString()}`);
+          } catch (err) {
+            console.error('Failed to add node:', err);
+            alert(`Failed to add node: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          }
+        } else if (!graphId) {
+          alert('Please select a graph first');
+        }
+        break;
+      }
+      case 'link-node': {
+        // Parse: /link "Source" to "Target" or /link "Source" "Target" or /link Source Target
+        let sourceName = '';
+        let targetName = '';
+        
+        if (args.length >= 2) {
+          sourceName = args[0];
+          // Check if second arg is "to"
+          if (args[1]?.toLowerCase() === 'to' && args.length >= 3) {
+            targetName = args[2];
+          } else {
+            targetName = args[1];
+          }
+        }
+        
+        if (!sourceName || !targetName) {
+          const sourceInput = prompt('Enter source node name:');
+          if (!sourceInput) return;
+          sourceName = sourceInput.trim();
+          
+          const targetInput = prompt('Enter target node name:');
+          if (!targetInput) return;
+          targetName = targetInput.trim();
+        }
+        
+        if (sourceName && targetName && graphId) {
+          try {
+            await selectGraph(graphId);
+            // Search for both concepts
+            const [sourceResults, targetResults] = await Promise.all([
+              searchConcepts(sourceName, graphId, 5),
+              searchConcepts(targetName, graphId, 5),
+            ]);
+            
+            const sourceConcept = sourceResults.results.find(c => 
+              c.name.toLowerCase() === sourceName.toLowerCase()
+            ) || sourceResults.results[0];
+            
+            const targetConcept = targetResults.results.find(c => 
+              c.name.toLowerCase() === targetName.toLowerCase()
+            ) || targetResults.results[0];
+            
+            if (!sourceConcept) {
+              alert(`Source node "${sourceName}" not found`);
+              return;
+            }
+            if (!targetConcept) {
+              alert(`Target node "${targetName}" not found`);
+              return;
+            }
+            
+            // Create relationship (default predicate: "related_to")
+            await createRelationshipByIds(
+              sourceConcept.node_id,
+              targetConcept.node_id,
+              'related_to'
+            );
+            
+            // Navigate to show the link
+            params.set('select', sourceConcept.node_id);
+            router.push(`/?${params.toString()}`);
+          } catch (err) {
+            console.error('Failed to link nodes:', err);
+            alert(`Failed to link nodes: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          }
+        } else if (!graphId) {
+          alert('Please select a graph first');
+        }
+        break;
+      }
+      case 'remove-node': {
+        // Parse: /remove node "Name" or /delete node "Name" or /remove "Name" or /delete "Name"
+        let nodeName = '';
+        
+        if (args.length > 0) {
+          // Check if first arg is "node"
+          if (args[0]?.toLowerCase() === 'node' && args.length > 1) {
+            nodeName = args[1];
+          } else {
+            nodeName = args[0];
+          }
+        }
+        
+        if (!nodeName) {
+          const name = prompt('Enter node name to remove:');
+          if (!name) return;
+          nodeName = name.trim();
+        }
+        
+        if (nodeName && graphId) {
+          try {
+            await selectGraph(graphId);
+            // Search for the concept
+            const searchResults = await searchConcepts(nodeName, graphId, 5);
+            const concept = searchResults.results.find(c => 
+              c.name.toLowerCase() === nodeName.toLowerCase()
+            ) || searchResults.results[0];
+            
+            if (!concept) {
+              alert(`Node "${nodeName}" not found`);
+              return;
+            }
+            
+            // Confirm deletion
+            if (!confirm(`Are you sure you want to delete "${concept.name}"? This will remove the node and all its relationships.`)) {
+              return;
+            }
+            
+            await deleteConcept(concept.node_id);
+            // Dispatch event for confirmation button
+            window.dispatchEvent(new CustomEvent('graph-action', { detail: { type: 'deleted' } }));
+            // Navigate back to explorer
+            router.push(`/?${params.toString()}`);
+          } catch (err) {
+            console.error('Failed to remove node:', err);
+            alert(`Failed to remove node: ${err instanceof Error ? err.message : 'Unknown error'}`);
+          }
+        } else if (!graphId) {
+          alert('Please select a graph first');
+        }
+        break;
+      }
+      default:
+        console.warn('Unknown action:', actionId);
+    }
+  }, [router]);
 
   const handleSelectResult = useCallback((result: SearchResult, isSecondary: boolean = false) => {
     // Log telemetry
@@ -1494,97 +1744,55 @@ export default function TopBar() {
         router.push(`/?${params.toString()}`);
       }
     } else if (result.type === 'action') {
-      // Execute action
+      // Execute action - use the full search query if it's a command, otherwise use the base command
+      const fullCommand = searchQuery.trim().startsWith('/') || searchQuery.trim().startsWith('>') 
+        ? searchQuery.trim() 
+        : result.command;
       addOmniboxRecentCommand({
         id: result.id,
         label: result.label,
-        command: result.command,
+        command: fullCommand,
       });
-      executeAction(result.id, result.command, activeGraphId);
+      executeAction(result.id, fullCommand, activeGraphId);
     }
     setSearchFocused(false);
     setSearchQuery('');
     setSearchResults([]);
     setPreviewConcept(null);
     searchInputRef.current?.blur();
-  }, [router, activeGraphId]);
+  }, [router, activeGraphId, searchQuery, executeAction, handleFetchEvidence]);
 
-  const handleFetchEvidence = useCallback(async (conceptId: string, conceptName: string) => {
-    try {
-      const result = await fetchEvidenceForConcept(conceptId, conceptName, activeGraphId || undefined);
-      if (result.error) {
-        console.error('Failed to fetch evidence:', result.error);
-        alert(`Failed to fetch evidence: ${result.error}`);
-      } else {
-        // Navigate to explorer with concept selected to show new evidence
-        const params = new URLSearchParams();
-        params.set('select', conceptId);
-        if (activeGraphId) {
-          params.set('graph_id', activeGraphId);
-        }
-        router.push(`/?${params.toString()}`);
+  // Keyboard navigation in search
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedResultIndex(prev => 
+        prev < searchResults.length - 1 ? prev + 1 : prev
+      );
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedResultIndex(prev => prev > -1 ? prev - 1 : -1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const isSecondary = e.metaKey || e.ctrlKey;
+      if (selectedResultIndex >= 0 && searchResults[selectedResultIndex]) {
+        handleSelectResult(searchResults[selectedResultIndex], isSecondary);
+      } else if (searchResults.length > 0) {
+        // Select first result if none selected
+        handleSelectResult(searchResults[0], isSecondary);
       }
-    } catch (error) {
-      console.error('Error fetching evidence:', error);
-      alert('Failed to fetch evidence');
+    } else if (e.key === 'Escape') {
+      setSearchFocused(false);
+      setSearchQuery('');
+      setSearchResults([]);
+      setPreviewConcept(null);
+      searchInputRef.current?.blur();
     }
-  }, [router, activeGraphId]);
+  }, [searchResults, selectedResultIndex, handleSelectResult]);
 
   const handlePinConcept = useCallback((concept: Concept) => {
     togglePinConcept({ id: concept.node_id, name: concept.name }, activeGraphId || undefined);
   }, [activeGraphId]);
-
-  const executeAction = useCallback((actionId: string, command: string, graphId: string) => {
-    const params = new URLSearchParams();
-    if (graphId) {
-      params.set('graph_id', graphId);
-    }
-
-    // Parse command arguments
-    const parts = command.toLowerCase().split(/\s+/);
-    const baseCommand = parts[0]?.slice(1) || '';
-    const arg = parts.slice(1).join(' ');
-
-    switch (actionId) {
-      case 'digest':
-        router.push('/digest');
-        break;
-      case 'saved':
-        router.push('/saved');
-        break;
-      case 'review':
-        params.set('status', 'PROPOSED');
-        router.push(`/review?${params.toString()}`);
-        break;
-      case 'ingest':
-        router.push('/source-management');
-        break;
-      case 'browse-graph':
-        if (graphId) {
-          router.push(`/graphs/${graphId}`);
-        } else {
-          router.push('/');
-        }
-        break;
-      case 'switch-graph':
-        setGraphSwitcherOpen(true);
-        break;
-      case 'clear-highlights':
-        // Clear highlights - this would need to be implemented in the graph visualization
-        console.log('Clear highlights - to be implemented');
-        break;
-      case 'fetch-evidence':
-        // Navigate to explorer - user can select concept and fetch evidence
-        router.push(`/?${params.toString()}`);
-        break;
-      case 'paths':
-        // Navigate to home page where paths are shown
-        router.push(`/home?${params.toString()}`);
-        break;
-      default:
-        console.warn('Unknown action:', actionId);
-    }
-  }, [router]);
 
   // Graph switching
   const handleSelectGraph = useCallback(async (graphId: string) => {
@@ -1788,7 +1996,7 @@ export default function TopBar() {
             ☰
           </button>
         )}
-        <Link href="/home" style={{ 
+        <Link href="/" style={{ 
           fontSize: isMobile ? '16px' : '18px', 
           fontWeight: 600, 
           color: 'var(--ink)',
@@ -1798,17 +2006,56 @@ export default function TopBar() {
           Brain Web
         </Link>
         {!isMobile && (
-          <Link href="/" style={{
-            fontSize: '14px',
-            color: 'var(--muted)',
-            textDecoration: 'none',
-            transition: 'color 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--ink)'}
-          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--muted)'}
-          >
-            Explorer
-          </Link>
+          <>
+            <Link href="/home" style={{
+              fontSize: '14px',
+              color: pathname === '/home' ? 'var(--ink)' : 'var(--muted)',
+              textDecoration: 'none',
+              transition: 'color 0.2s',
+              fontWeight: pathname === '/home' ? 500 : 400,
+            }}
+            onMouseEnter={(e) => {
+              if (pathname !== '/home') e.currentTarget.style.color = 'var(--ink)';
+            }}
+            onMouseLeave={(e) => {
+              if (pathname !== '/home') e.currentTarget.style.color = 'var(--muted)';
+            }}
+            >
+              Home
+            </Link>
+            <Link href={`/?graph_id=${activeGraphId || 'default'}`} style={{
+              fontSize: '14px',
+              color: pathname === '/' ? 'var(--ink)' : 'var(--muted)',
+              textDecoration: 'none',
+              transition: 'color 0.2s',
+              fontWeight: pathname === '/' ? 500 : 400,
+            }}
+            onMouseEnter={(e) => {
+              if (pathname !== '/') e.currentTarget.style.color = 'var(--ink)';
+            }}
+            onMouseLeave={(e) => {
+              if (pathname !== '/') e.currentTarget.style.color = 'var(--muted)';
+            }}
+            >
+              Explorer
+            </Link>
+            <Link href="/lecture-studio" style={{
+              fontSize: '14px',
+              color: pathname === '/lecture-studio' ? 'var(--ink)' : 'var(--muted)',
+              textDecoration: 'none',
+              transition: 'color 0.2s',
+              fontWeight: pathname === '/lecture-studio' ? 500 : 400,
+            }}
+            onMouseEnter={(e) => {
+              if (pathname !== '/lecture-studio') e.currentTarget.style.color = 'var(--ink)';
+            }}
+            onMouseLeave={(e) => {
+              if (pathname !== '/lecture-studio') e.currentTarget.style.color = 'var(--muted)';
+            }}
+            >
+              Studio
+            </Link>
+          </>
         )}
       </div>
 

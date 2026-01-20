@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from neo4j import Session
 
-from config import DEMO_MODE, DEMO_ALLOW_WRITES, DEMO_GRAPH_ID
 
 DEFAULT_GRAPH_ID = "default"
 DEFAULT_BRANCH_ID = "main"
@@ -191,75 +190,46 @@ def _now_iso() -> str:
     return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
 
 
-def ensure_graphspace_exists(session: Session, graph_id: str, name: Optional[str] = None) -> Dict[str, Any]:
-    """Ensure a GraphSpace exists; returns its properties."""
-    # In read-only demo mode, just check if it exists
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        query = """
-        MATCH (g:GraphSpace {graph_id: $graph_id})
-        RETURN g
-        """
-        rec = session.run(query, graph_id=graph_id).single()
-        if rec:
-            g = rec["g"]
-            return {
-                "graph_id": g.get("graph_id"),
-                "name": g.get("name"),
-                "created_at": g.get("created_at"),
-                "updated_at": g.get("updated_at"),
-            }
-        return {
-            "graph_id": graph_id,
-            "name": name or graph_id,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }
-
+def ensure_graphspace_exists(
+    session: Session,
+    graph_id: str,
+    name: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Ensure a GraphSpace exists; returns its properties.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph identifier
+        name: Optional graph name
+        tenant_id: Optional tenant identifier for multi-tenant isolation
+    """
     query = """
     MERGE (g:GraphSpace {graph_id: $graph_id})
     ON CREATE SET g.name = COALESCE($name, $graph_id),
                   g.created_at = $now,
-                  g.updated_at = $now
-    ON MATCH SET g.updated_at = $now
+                  g.updated_at = $now,
+                  g.tenant_id = $tenant_id
+    ON MATCH SET g.updated_at = $now,
+                 g.tenant_id = COALESCE(g.tenant_id, $tenant_id)
     RETURN g
     """
-    rec = session.run(query, graph_id=graph_id, name=name, now=_now_iso()).single()
+    rec = session.run(query, graph_id=graph_id, name=name, tenant_id=tenant_id, now=_now_iso()).single()
+    if rec is None:
+        raise RuntimeError(f"Failed to create or retrieve GraphSpace with graph_id={graph_id}. Database query returned no result.")
     g = rec["g"]
     return {
         "graph_id": g.get("graph_id"),
         "name": g.get("name"),
         "created_at": g.get("created_at"),
         "updated_at": g.get("updated_at"),
+        "tenant_id": g.get("tenant_id"),
     }
 
 
 def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: Optional[str] = None) -> Dict[str, Any]:
     """Ensure a Branch exists for a GraphSpace."""
-    # In read-only demo mode, just check if it exists
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        query = """
-        MATCH (g:GraphSpace {graph_id: $graph_id})
-        MATCH (b:Branch {branch_id: $branch_id, graph_id: $graph_id})
-        RETURN b
-        """
-        rec = session.run(query, graph_id=graph_id, branch_id=branch_id).single()
-        if rec:
-            b = rec["b"]
-            return {
-                "branch_id": b.get("branch_id"),
-                "graph_id": b.get("graph_id"),
-                "name": b.get("name"),
-                "created_at": b.get("created_at"),
-                "updated_at": b.get("updated_at"),
-            }
-        return {
-            "branch_id": branch_id,
-            "graph_id": graph_id,
-            "name": name or branch_id,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }
-
     query = """
     MERGE (g:GraphSpace {graph_id: $graph_id})
     ON CREATE SET g.name = COALESCE($name, $graph_id),
@@ -281,6 +251,8 @@ def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: 
         name=name,
         now=_now_iso(),
     ).single()
+    if rec is None:
+        raise RuntimeError(f"Failed to create or retrieve Branch with graph_id={graph_id}, branch_id={branch_id}. Database query returned no result.")
     b = rec["b"]
     return {
         "branch_id": b.get("branch_id"),
@@ -293,37 +265,12 @@ def ensure_branch_exists(session: Session, graph_id: str, branch_id: str, name: 
 
 def ensure_default_context(session: Session) -> Tuple[str, str]:
     ensure_schema_constraints(session)
-    # In demo mode, ensure demo graph exists instead of default
-    if DEMO_MODE:
-        graph_id = DEMO_GRAPH_ID
-        ensure_graphspace_exists(session, graph_id, name="Demo")
-        ensure_branch_exists(session, graph_id, DEFAULT_BRANCH_ID, name="Main")
-        return graph_id, DEFAULT_BRANCH_ID
-
     ensure_graphspace_exists(session, DEFAULT_GRAPH_ID, name="Default")
     ensure_branch_exists(session, DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID, name="Main")
     return DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID
 
 
 def _get_user_learning_prefs(session: Session) -> Dict[str, Any]:
-    # In read-only demo mode, just read if it exists
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        query = """
-        MATCH (u:UserProfile {id: 'default'})
-        RETURN u.learning_preferences AS learning_preferences
-        """
-        rec = session.run(query).single()
-        if rec:
-            lp = rec["learning_preferences"]
-            if isinstance(lp, str):
-                try:
-                    return json.loads(lp)
-                except Exception:
-                    return {}
-            if isinstance(lp, dict):
-                return lp
-        return {}
-
     query = """
     MERGE (u:UserProfile {id: 'default'})
     ON CREATE SET u.name = 'Sanjay',
@@ -356,20 +303,36 @@ def _set_user_learning_prefs(session: Session, prefs: Dict[str, Any]) -> None:
     session.run(query, learning_preferences=json.dumps(prefs)).consume()
 
 
-def get_active_graph_context(session: Session) -> Tuple[str, str]:
-    """Returns (graph_id, branch_id). Ensures defaults exist."""
+def get_active_graph_context(session: Session, tenant_id: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Returns (graph_id, branch_id). Ensures defaults exist.
+    
+    Args:
+        session: Neo4j session
+        tenant_id: Optional tenant_id for multi-tenant isolation. If provided,
+                   ensures graph belongs to this tenant.
+    """
     ensure_default_context(session)
 
-    # In demo mode, force demo graph_id to isolate from personal data
-    if DEMO_MODE:
-        graph_id = DEMO_GRAPH_ID
-        branch_id = DEFAULT_BRANCH_ID
-    else:
-        prefs = _get_user_learning_prefs(session)
-        graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
-        branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
+    prefs = _get_user_learning_prefs(session)
+    graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
+    branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
 
-    ensure_graphspace_exists(session, graph_id)
+    # If tenant_id is provided, verify the graph belongs to this tenant
+    if tenant_id:
+        # Verify graph exists and belongs to tenant
+        query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        WHERE g.tenant_id IS NULL OR g.tenant_id = $tenant_id
+        RETURN g
+        """
+        rec = session.run(query, graph_id=graph_id, tenant_id=tenant_id).single()
+        if not rec:
+            # Graph doesn't exist or doesn't belong to tenant, use default
+            graph_id = DEFAULT_GRAPH_ID
+            branch_id = DEFAULT_BRANCH_ID
+
+    ensure_graphspace_exists(session, graph_id, tenant_id=tenant_id)
     ensure_branch_exists(session, graph_id, branch_id)
 
     return graph_id, branch_id
@@ -402,10 +365,28 @@ def set_active_branch(session: Session, branch_id: str) -> Tuple[str, str]:
     return graph_id, branch_id
 
 
-def list_graphs(session: Session) -> List[Dict[str, Any]]:
+def list_graphs(session: Session, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    List all graphs, optionally filtered by tenant_id.
+    
+    Args:
+        session: Neo4j session
+        tenant_id: Optional tenant identifier for multi-tenant isolation.
+                   If provided, only returns graphs belonging to this tenant.
+                   If None, returns all graphs (for backward compatibility).
+    """
     ensure_default_context(session)
-    query = """
+    
+    # Build WHERE clause for tenant filtering
+    where_clause = ""
+    params = {}
+    if tenant_id:
+        where_clause = "WHERE (g.tenant_id IS NULL OR g.tenant_id = $tenant_id)"
+        params["tenant_id"] = tenant_id
+    
+    query = f"""
     MATCH (g:GraphSpace)
+    {where_clause}
     OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
     OPTIONAL MATCH (s:Concept)-[r]->(t:Concept)
     WHERE r.graph_id = g.graph_id
@@ -416,7 +397,7 @@ def list_graphs(session: Session) -> List[Dict[str, Any]]:
     ORDER BY g.created_at ASC
     """
     out: List[Dict[str, Any]] = []
-    for rec in session.run(query):
+    for rec in session.run(query, **params):
         g = rec["g"]
         node_count = rec["node_count"] or 0
         edge_count = rec["edge_count"] or 0
@@ -449,6 +430,7 @@ def list_graphs(session: Session) -> List[Dict[str, Any]]:
                 "template_description": g.get("template_description"),
                 "template_tags": g.get("template_tags"),
                 "intent": g.get("intent"),
+                "tenant_id": g.get("tenant_id"),
             }
         )
     return out
@@ -462,10 +444,11 @@ def create_graph(
     template_description: Optional[str] = None,
     template_tags: Optional[List[str]] = None,
     intent: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     ensure_schema_constraints(session)
     graph_id = f"G{uuid4().hex[:8].upper()}"
-    g = ensure_graphspace_exists(session, graph_id, name=name)
+    g = ensure_graphspace_exists(session, graph_id, name=name, tenant_id=tenant_id)
 
     if template_id or template_label or template_description or template_tags or intent:
         query = """
@@ -557,14 +540,6 @@ def ensure_graph_scoping_initialized(session: Session) -> None:
     - Only touches relationships that do not already have graph_id/on_branches
     - Best-effort backfill for Resources + HAS_RESOURCE scoping
     """
-    # Skip write operations in read-only demo mode
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        try:
-            ensure_default_context(session)
-        except Exception:
-            pass
-        return
-
     ensure_schema_constraints(session)
     ensure_default_context(session)
 

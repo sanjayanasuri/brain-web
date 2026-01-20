@@ -23,12 +23,13 @@ def capture_selection_into_graph(
     branch_id: str,
     page_url: str,
     page_title: Optional[str],
-    frame_url: Optional[str],
+    frame_url: Optional[str] = None,
     selected_text: str,
-    context_before: Optional[str],
-    context_after: Optional[str],
-    anchor: Optional[Dict[str, Any]],
-    attach_concept_id: Optional[str],
+    context_before: Optional[str] = None,
+    context_after: Optional[str] = None,
+    anchor: Optional[Dict[str, Any]] = None,
+    attach_concept_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Dict[str, str]:
     selected_text = (selected_text or "").strip()
 
@@ -123,6 +124,34 @@ def capture_selection_into_graph(
 
     if not rec:
         raise ValueError("Failed to capture selection")
+    
+    # Emit event for source capture
+    try:
+        from events.emitter import emit_event
+        from events.schema import EventType, ObjectRef
+        from projectors.session_context import SessionContextProjector
+        
+        # Use provided session_id or fallback
+        event_session_id = session_id or getattr(session, '_session_id', None) or "unknown"
+        
+        # Emit event
+        emit_event(
+            event_type=EventType.SOURCE_CAPTURED,
+            session_id=event_session_id,
+            object_ref=ObjectRef(type="artifact", id=rec["artifact_id"]),
+            payload={
+                "artifact_id": rec["artifact_id"],
+                "quote_id": rec["quote_id"],
+                "page_url": page_url,
+                "page_title": page_title,
+                "selected_text_length": len(selected_text),
+            },
+        )
+        
+        # Projection is now handled asynchronously via background task queue
+        # No need to update synchronously here
+    except Exception:
+        pass  # Don't fail on event emission
 
     return {"artifact_id": rec["artifact_id"], "quote_id": rec["quote_id"]}
 

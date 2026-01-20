@@ -9,6 +9,7 @@ This module provides:
 """
 import pytest
 import os
+from datetime import datetime
 from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
 from typing import Generator
@@ -73,6 +74,9 @@ def mock_neo4j_session():
     instances that contain MockNeo4jRecord instances. This ensures dict-style
     access works correctly (rec['u'], rec['value'], etc.).
     
+    The fixture automatically handles common queries like GraphSpace and Branch
+    creation/retrieval to prevent test failures.
+    
     Usage in tests:
         # Configure a single record result
         mock_record = MockNeo4jRecord({"u": {"id": "default", "name": "Test"}})
@@ -93,9 +97,111 @@ def mock_neo4j_session():
     """
     session = MagicMock()
     
-    # Default behavior: return empty result for queries
-    default_result = MockNeo4jResult(record=None)
-    session.run.return_value = default_result
+    def run_side_effect(query, params=None, **kwargs):
+        """Handle common queries automatically."""
+        # Handle both session.run(query, params) and session.run(query, **params) patterns
+        if params is None:
+            params = kwargs
+        elif isinstance(params, dict):
+            # Merge params dict with kwargs
+            params = {**params, **kwargs}
+        else:
+            # If params is not a dict, treat it as kwargs
+            params = kwargs
+        
+        query_lower = query.lower()
+        
+        # Handle GraphSpace queries (for ensure_graphspace_exists) - must return "g" key
+        if "graphspace" in query_lower and ("merge" in query_lower or "match" in query_lower):
+            if "return g" in query_lower:
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "g": {
+                        "graph_id": params.get("graph_id", "default"),
+                        "name": params.get("name", "Default"),
+                        "created_at": "2024-01-01T00:00:00Z",
+                        "updated_at": "2024-01-01T00:00:00Z",
+                        "tenant_id": params.get("tenant_id"),
+                    }
+                }))
+        
+        # Handle Branch queries (for ensure_branch_exists) - must return "b" key
+        if "branch" in query_lower and ("merge" in query_lower or "match" in query_lower):
+            if "return b" in query_lower:
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "b": {
+                        "branch_id": params.get("branch_id", "main"),
+                        "graph_id": params.get("graph_id", "default"),
+                        "name": params.get("name", "Main"),
+                        "created_at": "2024-01-01T00:00:00Z",
+                        "updated_at": "2024-01-01T00:00:00Z",
+                    }
+                }))
+        
+        # Handle slug uniqueness queries (for concept creation)
+        if "url_slug" in query_lower and "limit 1" in query_lower:
+            # Return empty result to indicate slug is available
+            return MockNeo4jResult(record=None)
+        
+        # Handle Lecture creation queries
+        if ("create (l:lecture" in query_lower or "merge (l:lecture" in query_lower or 
+            "create (l:Lecture" in query_lower or "merge (l:Lecture" in query_lower):
+            if "return l" in query_lower or "return l.lecture_id" in query_lower:
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "lecture_id": params.get("lecture_id", "L001"),
+                    "title": params.get("title", "Test Lecture"),
+                    "description": params.get("description", ""),
+                    "primary_concept": params.get("primary_concept"),
+                    "level": params.get("level", "beginner"),
+                    "estimated_time": params.get("estimated_time", 30),
+                    "slug": params.get("slug"),
+                    "raw_text": params.get("raw_text", ""),
+                }))
+        
+        # Handle Signal creation queries
+        if ("create (s:signal" in query_lower or "merge (s:signal" in query_lower or
+            "create (s:Signal" in query_lower or "merge (s:Signal" in query_lower):
+            if "return s" in query_lower or "return s.signal_id" in query_lower:
+                # Convert timestamp to ISO string if it's an integer
+                timestamp = params.get("timestamp")
+                if isinstance(timestamp, int):
+                    # Convert milliseconds timestamp to ISO string
+                    created_at = datetime.fromtimestamp(timestamp / 1000).isoformat() + "Z"
+                else:
+                    created_at = params.get("timestamp", "2024-01-01T00:00:00Z")
+                
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "signal_id": params.get("signal_id", "SIG_test"),
+                    "signal_type": params.get("signal_type", "voice_note"),
+                    "timestamp": timestamp if isinstance(timestamp, int) else params.get("timestamp", 1704067200000),
+                    "graph_id": params.get("graph_id", "default"),
+                    "branch_id": params.get("branch_id", "main"),
+                    "document_id": params.get("document_id"),
+                    "block_id": params.get("block_id"),
+                    "concept_id": params.get("concept_id"),
+                    "payload": params.get("payload", "{}"),
+                    "session_id": params.get("session_id"),
+                    "user_id": params.get("user_id"),
+                    "created_at": created_at,  # ISO timestamp string
+                }))
+        
+        # Handle Concept creation queries
+        if ("create (c:concept" in query_lower or "merge (c:concept" in query_lower or
+            "create (c:Concept" in query_lower or "merge (c:Concept" in query_lower):
+            if "return c" in query_lower or "return c.node_id" in query_lower:
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "node_id": params.get("node_id", "N001"),
+                    "name": params.get("name", "Test Concept"),
+                    "domain": params.get("domain", "Testing"),
+                    "type": params.get("type", "concept"),
+                    "description": params.get("description", ""),
+                    "tags": params.get("tags", []),
+                    "url_slug": params.get("url_slug"),
+                }))
+        
+        # Default behavior: return empty result for queries
+        return MockNeo4jResult(record=None)
+    
+    session.run.side_effect = run_side_effect
     
     return session
 

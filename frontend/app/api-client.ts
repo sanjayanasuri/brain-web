@@ -4,6 +4,57 @@
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
+// Cache for auth token
+let authTokenCache: { token: string; expiresAt: number } | null = null;
+
+/**
+ * Get authentication token from the Next.js API route.
+ * Caches the token to avoid repeated requests.
+ */
+async function getAuthToken(): Promise<string | null> {
+  // Check cache first
+  if (authTokenCache && authTokenCache.expiresAt > Date.now()) {
+    return authTokenCache.token;
+  }
+
+  try {
+    const response = await fetch('/api/auth/token');
+    if (!response.ok) {
+      console.warn('[API Client] Failed to get auth token, continuing without auth');
+      return null;
+    }
+    const data = await response.json();
+    const token = data.token;
+    
+    // Cache token (expires in 30 days, but refresh after 25 days to be safe)
+    authTokenCache = {
+      token,
+      expiresAt: Date.now() + (25 * 24 * 60 * 60 * 1000), // 25 days
+    };
+    
+    return token;
+  } catch (error) {
+    console.warn('[API Client] Error getting auth token:', error);
+    return null;
+  }
+}
+
+/**
+ * Get headers for API requests, including authentication if available.
+ */
+async function getApiHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  
+  const token = await getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+}
+
 export interface Concept {
   node_id: string;
   name: string;
@@ -83,10 +134,6 @@ export async function listGraphs(): Promise<GraphListResponse> {
   try {
     const res = await fetch(`${API_BASE_URL}/graphs/`);
     if (!res.ok) {
-      // In demo mode, return default graph if endpoint is blocked
-      if (res.status === 403 || res.status === 404) {
-        return { active_graph_id: 'demo', active_branch_id: 'main', graphs: [{ graph_id: 'demo', name: 'Demo' }] };
-      }
       throw new Error(`Failed to list graphs: ${res.statusText}`);
     }
     const data = await res.json();
@@ -148,10 +195,6 @@ export async function listBranches(): Promise<BranchListResponse> {
   try {
     const res = await fetch(`${API_BASE_URL}/branches/`);
     if (!res.ok) {
-      // In demo mode, return default branch if endpoint is blocked
-      if (res.status === 403 || res.status === 404) {
-        return { graph_id: 'demo', active_branch_id: 'main', branches: [{ branch_id: 'main', graph_id: 'demo', name: 'Main' }] };
-      }
       throw new Error(`Failed to list branches: ${res.statusText}`);
     }
     return res.json();
@@ -324,6 +367,18 @@ export async function getConceptByName(name: string): Promise<Concept> {
 }
 
 /**
+ * Fetch a concept by URL slug (Wikipedia-style)
+ */
+export async function getConceptBySlug(slug: string): Promise<Concept> {
+  const encodedSlug = encodeURIComponent(slug);
+  const response = await fetch(`${API_BASE_URL}/concepts/by-slug/${encodedSlug}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch concept by slug: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
  * Update a concept (partial update)
  */
 export async function updateConcept(
@@ -385,7 +440,17 @@ export async function getNeighborsWithRelationships(nodeId: string): Promise<Arr
  */
 export async function fetchGraphData(rootNodeId: string, maxDepth: number = 2): Promise<GraphData> {
   const nodes = new Map<string, Concept>();
-  const links: Array<{ source: string; target: string; predicate: string }> = [];
+  const links: Array<{ 
+    source: string; 
+    target: string; 
+    predicate: string;
+    relationship_status?: string;
+    relationship_confidence?: number;
+    relationship_method?: string;
+    rationale?: string;
+    relationship_source_id?: string;
+    relationship_chunk_id?: string;
+  }> = [];
   const linkSet = new Set<string>(); // Track links to avoid duplicates
   const visited = new Set<string>();
 
@@ -1034,6 +1099,55 @@ export interface LectureSegment {
   lecture_title?: string | null;  // Title of the lecture this segment belongs to
 }
 
+export interface LectureBlock {
+  block_id: string;
+  lecture_id: string;
+  block_index: number;
+  block_type: string;
+  text: string;
+}
+
+export interface LectureBlockUpsert {
+  block_id?: string | null;
+  block_index: number;
+  block_type: string;
+  text: string;
+}
+
+export interface LectureMention {
+  mention_id: string;
+  lecture_id: string;
+  block_id: string;
+  start_offset: number;
+  end_offset: number;
+  surface_text: string;
+  context_note?: string | null;
+  sense_label?: string | null;
+  lecture_title?: string | null;
+  block_text?: string | null;
+  concept: Concept;
+}
+
+export interface LectureMentionCreate {
+  lecture_id: string;
+  block_id: string;
+  start_offset: number;
+  end_offset: number;
+  surface_text: string;
+  concept_id: string;
+  context_note?: string | null;
+  sense_label?: string | null;
+}
+
+export interface LectureMentionUpdate {
+  concept_id?: string | null;
+  start_offset?: number | null;
+  end_offset?: number | null;
+  surface_text?: string | null;
+  context_note?: string | null;
+  sense_label?: string | null;
+}
+
 export interface LectureIngestResult {
   lecture_id: string;
   nodes_created: Concept[];
@@ -1074,6 +1188,7 @@ export async function ingestLecture(payload: {
  * Fetch a lecture by ID
  */
 export interface Lecture {
+  segment_count?: number;  // Number of segments (for performance, included in list responses)
   lecture_id: string;
   title: string;
   description?: string | null;
@@ -1083,6 +1198,110 @@ export interface Lecture {
   slug?: string | null;
   raw_text?: string | null;
   metadata_json?: string | null;
+}
+
+/**
+ * Fetch all blocks for a lecture
+ */
+export async function getLectureBlocks(lectureId: string): Promise<LectureBlock[]> {
+  const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/blocks`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch lecture blocks: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Upsert lecture blocks
+ */
+export async function upsertLectureBlocks(
+  lectureId: string,
+  blocks: LectureBlockUpsert[]
+): Promise<LectureBlock[]> {
+  const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/blocks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ blocks }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to upsert lecture blocks: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Fetch all linked mentions for a lecture
+ */
+export async function getLectureMentions(lectureId: string): Promise<LectureMention[]> {
+  const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/mentions`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch lecture mentions: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Create a linked mention
+ */
+export async function createLectureMention(payload: LectureMentionCreate): Promise<LectureMention> {
+  const response = await fetch(`${API_BASE_URL}/mentions/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create lecture mention: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Update a linked mention
+ */
+export async function updateLectureMention(
+  mentionId: string,
+  payload: LectureMentionUpdate
+): Promise<LectureMention> {
+  const response = await fetch(`${API_BASE_URL}/mentions/${mentionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update lecture mention: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Delete a linked mention
+ */
+export async function deleteLectureMention(mentionId: string): Promise<{ status: string; mention_id: string }> {
+  const response = await fetch(`${API_BASE_URL}/mentions/${mentionId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to delete lecture mention: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Fetch concept backlinks from lecture mentions
+ */
+export async function getConceptMentions(conceptId: string): Promise<LectureMention[]> {
+  const response = await fetch(`${API_BASE_URL}/concepts/${conceptId}/mentions`);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch concept mentions: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
 }
 
 /**
@@ -1314,6 +1533,7 @@ export async function ingestAllNotionPagesParallel(
 ): Promise<LectureIngestResult[]> {
   return new Promise((resolve, reject) => {
     const controller = abortController || new AbortController();
+    const results: LectureIngestResult[] = [];
     
     fetch(`${API_BASE_URL}/notion/ingest-all-parallel`, {
       method: 'POST',
@@ -1339,8 +1559,6 @@ export async function ingestAllNotionPagesParallel(
         if (!reader) {
           throw new Error('Response body is not readable');
         }
-
-        const results: LectureIngestResult[] = [];
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1428,6 +1646,109 @@ export interface ResponseStyleProfile {
 export interface ResponseStyleProfileWrapper {
   id: string;
   profile: ResponseStyleProfile;
+}
+
+// Dashboard API
+export interface StudyTimeData {
+  domain: string;
+  hours: number;
+  minutes: number;
+  total_ms: number;
+}
+
+export interface ExamData {
+  exam_id: string;
+  title: string;
+  date: string;
+  days_until: number;
+  required_concepts: string[];
+  domain?: string;
+}
+
+export interface StudyRecommendation {
+  concept_id: string;
+  concept_name: string;
+  priority: 'high' | 'medium' | 'low';
+  reason: string;
+  suggested_documents: Array<{
+    document_id: string;
+    title: string;
+    section: string;
+    url: string;
+  }>;
+  estimated_time_min: number;
+}
+
+export interface ResumePoint {
+  document_id: string;
+  document_title: string;
+  block_id?: string;
+  segment_id?: string;
+  concept_id?: string;
+  last_accessed: string;
+  document_type: string;
+  url: string;
+}
+
+export interface DashboardData {
+  study_time_by_domain: StudyTimeData[];
+  upcoming_exams: ExamData[];
+  study_recommendations: StudyRecommendation[];
+  resume_points: ResumePoint[];
+  total_study_hours: number;
+  days_looked_back: number;
+}
+
+export async function getDashboardData(days: number = 7): Promise<DashboardData> {
+  const res = await fetch(`${API_BASE_URL}/dashboard/study-analytics?days=${days}`);
+  if (!res.ok) throw new Error('Failed to load dashboard data');
+  return res.json();
+}
+
+export async function createExam(payload: {
+  title: string;
+  exam_date: string;
+  assessment_type?: string;
+  required_concepts?: string[];
+  domain?: string;
+  description?: string;
+}): Promise<ExamData> {
+  const res = await fetch(`${API_BASE_URL}/exams/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to create exam');
+  return res.json();
+}
+
+export async function listExams(days_ahead: number = 90): Promise<ExamData[]> {
+  const res = await fetch(`${API_BASE_URL}/exams/?days_ahead=${days_ahead}`);
+  if (!res.ok) throw new Error('Failed to load exams');
+  return res.json();
+}
+
+export async function updateExam(examId: string, payload: {
+  title?: string;
+  exam_date?: string;
+  required_concepts?: string[];
+  domain?: string;
+  description?: string;
+}): Promise<ExamData> {
+  const res = await fetch(`${API_BASE_URL}/exams/${examId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to update exam');
+  return res.json();
+}
+
+export async function deleteExam(examId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/exams/${examId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error('Failed to delete exam');
 }
 
 export interface FocusArea {
@@ -2458,6 +2779,569 @@ export async function appendTrailStep(
   });
   if (!res.ok) {
     throw new Error(`Failed to append step: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+// ---- Voice API ----
+
+export interface VoiceCaptureRequest {
+  transcript: string;
+  block_id?: string;
+  concept_id?: string;
+  classification?: 'reflection' | 'confusion' | 'explanation';
+  document_id?: string;
+}
+
+export interface VoiceCommandRequest {
+  transcript: string;
+  intent: 'generate_answers' | 'summarize' | 'explain' | 'gap_analysis' | 'retrieve_context' | 'extract_concepts';
+  params?: Record<string, any>;
+  document_id?: string;
+  block_id?: string;
+  concept_id?: string;
+}
+
+export interface VoiceCommandResponse {
+  status: string;
+  signal_id: string;
+  task_id: string;
+  task_type: string;
+  message: string;
+}
+
+// Signal interface moved below to merge with complete definition
+
+/**
+ * Send voice capture (Mode A: Passive transcription for learning state)
+ */
+export async function sendVoiceCapture(payload: VoiceCaptureRequest): Promise<Signal> {
+  const res = await fetch(`${API_BASE_URL}/voice/capture`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to send voice capture: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Send voice command (Mode B: Active control for system orchestration)
+ */
+export async function sendVoiceCommand(payload: VoiceCommandRequest): Promise<VoiceCommandResponse> {
+  const res = await fetch(`${API_BASE_URL}/voice/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to send voice command: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Get task status
+ */
+// ---- Smart Scheduler API ----
+
+export interface Task {
+  id: string;
+  title: string;
+  notes?: string | null;
+  estimated_minutes: number;
+  due_date?: string | null;
+  priority: string;
+  energy: string;
+  tags: string[];
+  preferred_time_windows?: string[] | null;
+  dependencies: string[];
+  location?: string | null;
+  location_lat?: number | null;
+  location_lon?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TaskCreate {
+  title: string;
+  notes?: string | null;
+  estimated_minutes: number;
+  due_date?: string | null;
+  priority?: string;
+  energy?: string;
+  tags?: string[] | null;
+  preferred_time_windows?: string[] | null;
+  dependencies?: string[] | null;
+  location?: string | null;
+  location_lat?: number | null;
+  location_lon?: number | null;
+}
+
+export interface TaskUpdate {
+  title?: string | null;
+  notes?: string | null;
+  estimated_minutes?: number | null;
+  due_date?: string | null;
+  priority?: string | null;
+  energy?: string | null;
+  tags?: string[] | null;
+  preferred_time_windows?: string[] | null;
+  dependencies?: string[] | null;
+  location?: string | null;
+  location_lat?: number | null;
+  location_lon?: number | null;
+}
+
+export interface PlanSuggestion {
+  id: string;
+  task_id: string;
+  task_title: string;
+  start: string;
+  end: string;
+  confidence: number;
+  reasons: string[];
+  status: string;
+  created_at?: string | null;
+}
+
+export interface SuggestionGroupedByDay {
+  date: string;
+  suggestions: PlanSuggestion[];
+}
+
+export interface SuggestionsResponse {
+  suggestions_by_day: SuggestionGroupedByDay[];
+  total: number;
+}
+
+export interface FreeBlock {
+  start: string;
+  end: string;
+  duration_minutes: number;
+  date: string;
+}
+
+export interface FreeBlocksResponse {
+  blocks: FreeBlock[];
+  total: number;
+}
+
+export interface TaskListResponse {
+  tasks: Task[];
+  total: number;
+}
+
+/**
+ * List tasks
+ */
+export async function listTasks(rangeDays: number = 7): Promise<TaskListResponse> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/tasks?range=${rangeDays}`, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to list tasks: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Create a task
+ */
+export async function createTask(payload: TaskCreate): Promise<Task> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/tasks`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to create task: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Update a task
+ */
+export async function updateTask(taskId: string, payload: TaskUpdate): Promise<Task> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to update task: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Delete a task
+ */
+export async function deleteTask(taskId: string): Promise<{ status: string; task_id: string }> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to delete task: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * List free time blocks
+ */
+export async function listFreeBlocks(start: string, end: string): Promise<FreeBlocksResponse> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/schedule/free-blocks?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to list free blocks: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Generate plan suggestions
+ */
+export async function generateSuggestions(start: string, end: string): Promise<SuggestionsResponse> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/schedule/suggestions?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, {
+    method: 'POST',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to generate suggestions: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * List existing suggestions
+ */
+export async function listSuggestions(start: string, end: string): Promise<SuggestionsResponse> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/schedule/suggestions?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to list suggestions: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Accept a suggestion
+ */
+export async function acceptSuggestion(suggestionId: string): Promise<{ status: string; suggestion_id: string }> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/schedule/suggestions/${suggestionId}/accept`, {
+    method: 'POST',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to accept suggestion: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Reject a suggestion
+ */
+export async function rejectSuggestion(suggestionId: string): Promise<{ status: string; suggestion_id: string }> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/schedule/suggestions/${suggestionId}/reject`, {
+    method: 'POST',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to reject suggestion: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+/**
+ * Mark a suggestion as completed
+ */
+export async function completeSuggestion(suggestionId: string): Promise<{ status: string; suggestion_id: string }> {
+  const headers = await getApiHeaders();
+  const response = await fetch(`${API_BASE_URL}/schedule/suggestions/${suggestionId}/complete`, {
+    method: 'POST',
+    headers,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to complete suggestion: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export interface BackgroundTask {
+  task_id: string;
+  task_type: string;
+  status: 'QUEUED' | 'RUNNING' | 'READY' | 'FAILED' | 'CANCELLED';
+  created_at: number;
+  started_at?: number;
+  completed_at?: number;
+  result?: Record<string, any>;
+  error?: string;
+}
+
+export async function getTask(taskId: string): Promise<BackgroundTask> {
+  const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to get task: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+// ---- Signals API ----
+
+export type SignalType = 
+  | 'TEXT_AUTHORING'
+  | 'SPAN_LINK'
+  | 'EMPHASIS'
+  | 'FILE_INGESTION'
+  | 'VOICE_CAPTURE'
+  | 'VOICE_COMMAND'
+  | 'QUESTION'
+  | 'TIME'
+  | 'ASSESSMENT';
+
+export interface Signal {
+  signal_id: string;
+  signal_type: SignalType;
+  timestamp: number; // Unix timestamp in milliseconds
+  graph_id: string;
+  branch_id: string;
+  document_id?: string | null;
+  block_id?: string | null;
+  concept_id?: string | null;
+  payload: Record<string, any>;
+  session_id?: string | null;
+  user_id?: string | null;
+  created_at?: string | null; // ISO timestamp
+}
+
+export interface SignalListResponse {
+  signals: Signal[];
+  total: number;
+}
+
+export interface ListSignalsOptions {
+  signal_type?: SignalType;
+  document_id?: string;
+  block_id?: string;
+  concept_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listSignals(options: ListSignalsOptions = {}): Promise<SignalListResponse> {
+  const params = new URLSearchParams();
+  if (options.signal_type) params.append('signal_type', options.signal_type);
+  if (options.document_id) params.append('document_id', options.document_id);
+  if (options.block_id) params.append('block_id', options.block_id);
+  if (options.concept_id) params.append('concept_id', options.concept_id);
+  if (options.limit) params.append('limit', options.limit.toString());
+  if (options.offset) params.append('offset', options.offset.toString());
+
+  const res = await fetch(`${API_BASE_URL}/signals/?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Failed to list signals: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+// ---- Workflows API ----
+
+export interface WorkflowStatus {
+  available: boolean;
+  types: string[];
+  graph_id: string;
+  branch_id: string;
+}
+
+export interface WorkflowStatusResponse {
+  capture: WorkflowStatus;
+  explore: WorkflowStatus;
+  synthesize: WorkflowStatus;
+}
+
+export async function getWorkflowStatus(): Promise<WorkflowStatusResponse> {
+  const res = await fetch(`${API_BASE_URL}/workflows/status`);
+  if (!res.ok) {
+    throw new Error(`Failed to get workflow status: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+// ---- Calendar API ----
+
+export interface CalendarEvent {
+  event_id: string;
+  title: string;
+  description?: string | null;
+  location?: string | null;
+  start_date: string; // ISO date string (YYYY-MM-DD)
+  end_date?: string | null; // ISO date string (YYYY-MM-DD)
+  start_time?: string | null; // ISO time string (HH:MM) or full datetime
+  end_time?: string | null; // ISO time string (HH:MM) or full datetime
+  all_day: boolean;
+  color?: string | null; // Hex color code
+  created_at?: string | null; // ISO timestamp
+  updated_at?: string | null; // ISO timestamp
+}
+
+export interface CalendarEventCreate {
+  title: string;
+  description?: string | null;
+  location?: string | null;
+  start_date: string;
+  end_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  all_day?: boolean;
+  color?: string | null;
+}
+
+export interface CalendarEventUpdate {
+  title?: string | null;
+  description?: string | null;
+  location?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  all_day?: boolean | null;
+  color?: string | null;
+}
+
+export interface CalendarEventListResponse {
+  events: CalendarEvent[];
+  total: number;
+}
+
+export interface ListCalendarEventsOptions {
+  start_date?: string; // YYYY-MM-DD
+  end_date?: string; // YYYY-MM-DD
+}
+
+export async function listCalendarEvents(options: ListCalendarEventsOptions = {}): Promise<CalendarEventListResponse> {
+  const params = new URLSearchParams();
+  if (options.start_date) params.append('start_date', options.start_date);
+  if (options.end_date) params.append('end_date', options.end_date);
+
+  const headers = await getApiHeaders();
+  const res = await fetch(`${API_BASE_URL}/calendar/events?${params.toString()}`, {
+    headers,
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to list calendar events: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+export async function getCalendarEvent(eventId: string): Promise<CalendarEvent> {
+  const headers = await getApiHeaders();
+  const res = await fetch(`${API_BASE_URL}/calendar/events/${eventId}`, {
+    headers,
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to get calendar event: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+export async function createCalendarEvent(event: CalendarEventCreate): Promise<CalendarEvent> {
+  const headers = await getApiHeaders();
+  const res = await fetch(`${API_BASE_URL}/calendar/events`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(event),
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to create calendar event: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+export async function updateCalendarEvent(eventId: string, event: CalendarEventUpdate): Promise<CalendarEvent> {
+  const headers = await getApiHeaders();
+  const res = await fetch(`${API_BASE_URL}/calendar/events/${eventId}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(event),
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to update calendar event: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+export async function deleteCalendarEvent(eventId: string): Promise<{ status: string; event_id: string }> {
+  const headers = await getApiHeaders();
+  const res = await fetch(`${API_BASE_URL}/calendar/events/${eventId}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to delete calendar event: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+export interface LocationSuggestion {
+  name: string;
+  full_address?: string | null; // Full address for geocoded locations
+  distance?: number | null; // Distance in miles
+  lat?: number;
+  lon?: number;
+  type?: string; // "geocoded" for real locations, "common" for predefined
+}
+
+export interface LocationSuggestionsResponse {
+  suggestions: LocationSuggestion[];
+}
+
+export interface GetLocationSuggestionsOptions {
+  query?: string;
+  context?: string; // e.g., 'purdue', 'default'
+  currentLat?: number;
+  currentLon?: number;
+}
+
+export async function getLocationSuggestions(options: GetLocationSuggestionsOptions = {}): Promise<LocationSuggestionsResponse> {
+  const params = new URLSearchParams();
+  if (options.query) params.append('query', options.query);
+  if (options.context) params.append('context', options.context);
+  if (options.currentLat !== undefined) params.append('current_lat', options.currentLat.toString());
+  if (options.currentLon !== undefined) params.append('current_lon', options.currentLon.toString());
+
+  // Location suggestions work without auth, but include it if available
+  const headers = await getApiHeaders();
+  const res = await fetch(`${API_BASE_URL}/calendar/locations/suggestions?${params.toString()}`, {
+    headers,
+  });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to get location suggestions: ${res.statusText} - ${errorText}`);
   }
   return res.json();
 }

@@ -1,21 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-function getOpenAIApiKey(): string | null {
-  // Try environment variable first
-  if (process.env.OPENAI_API_KEY) {
-    return process.env.OPENAI_API_KEY;
+function getOpenAIApiKey(): string | undefined {
+  // Try to read directly from .env.local file as a fallback
+  // Priority: 1) process.env, 2) repo root .env.local (matches backend), 3) frontend/.env.local
+  let key = process.env.OPENAI_API_KEY;
+  
+  // If key is too short or missing, try reading from file directly
+  if (!key || key.length < 20) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      
+      // First try repo root .env.local (same as backend uses)
+      const repoRootEnvPath = path.join(process.cwd(), '..', '.env.local');
+      if (fs.existsSync(repoRootEnvPath)) {
+        const content = fs.readFileSync(repoRootEnvPath, 'utf8');
+        const match = content.match(/^OPENAI_API_KEY=(.+)$/m);
+        if (match && match[1]) {
+          key = match[1].trim();
+          console.log('[Title API] Read API key from repo root .env.local (matches backend)');
+        }
+      }
+      
+      // Fallback to frontend/.env.local if repo root doesn't have it
+      if (!key || key.length < 20) {
+        const frontendEnvPath = path.join(process.cwd(), '.env.local');
+        if (fs.existsSync(frontendEnvPath)) {
+          const content = fs.readFileSync(frontendEnvPath, 'utf8');
+          const match = content.match(/^OPENAI_API_KEY=(.+)$/m);
+          if (match && match[1]) {
+            key = match[1].trim();
+            console.log('[Title API] Read API key from frontend/.env.local');
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Title API] Could not read .env.local directly:', err);
+    }
   }
-  return null;
+  
+  if (!key) {
+    console.error('[Title API] OPENAI_API_KEY not found in environment variables');
+    return undefined;
+  }
+  
+  // Trim any whitespace that might have been introduced
+  const trimmedKey = key.trim();
+  
+  if (trimmedKey.length < 20) {
+    console.error(`[Title API] ERROR: API key is too short (${trimmedKey.length} chars). Expected ~164 chars.`);
+  } else {
+    console.log(`[Title API] ✓ OpenAI API key loaded (length: ${trimmedKey.length})`);
+  }
+  
+  return trimmedKey;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const apiKey = getOpenAIApiKey();
     if (!apiKey) {
-      return NextResponse.json(
-        { title: null, error: 'OpenAI API key not configured' },
-        { status: 500 }
-      );
+      // Fallback to truncating the question instead of erroring
+      const body = await request.json().catch(() => ({}));
+      const question = body.question || 'New Conversation';
+      return NextResponse.json({
+        title: question.length > 50 ? question.substring(0, 47) + '...' : question,
+      });
     }
 
     const body = await request.json();

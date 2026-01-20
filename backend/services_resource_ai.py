@@ -29,9 +29,13 @@ else:
     client = None
 
 
-def generate_image_caption(image_path: str) -> Optional[str]:
+def generate_image_caption(image_path: str, image_bytes: Optional[bytes] = None) -> Optional[str]:
     """
     Generate a caption for an image using GPT-4 Vision.
+    
+    Args:
+        image_path: Path to image file (for local storage) or storage identifier
+        image_bytes: Optional image bytes (for S3/storage abstraction)
     
     Returns None if OpenAI client is not available or if the API call fails.
     """
@@ -39,9 +43,16 @@ def generate_image_caption(image_path: str) -> Optional[str]:
         return None
     
     try:
-        # Read and encode image
-        with open(image_path, "rb") as image_file:
-            image_data = base64.b64encode(image_file.read()).decode('utf-8')
+        # Read image data
+        if image_bytes:
+            image_data = base64.b64encode(image_bytes).decode('utf-8')
+            # Try to determine format from path or default to jpeg
+            ext = os.path.splitext(image_path)[1].lower() if image_path else '.jpg'
+        else:
+            # Fallback to reading from file path
+            with open(image_path, "rb") as image_file:
+                image_data = base64.b64encode(image_file.read()).decode('utf-8')
+            ext = os.path.splitext(image_path)[1].lower()
         
         # Determine image format from file extension
         ext = os.path.splitext(image_path)[1].lower()
@@ -87,32 +98,44 @@ def generate_image_caption(image_path: str) -> Optional[str]:
         return None
 
 
-def extract_pdf_text(pdf_path: str) -> Optional[str]:
+def extract_pdf_text(pdf_path: str, pdf_bytes: Optional[bytes] = None) -> Optional[str]:
     """
     Extract text from a PDF file.
+    
+    Args:
+        pdf_path: Path to PDF file (for local storage) or storage identifier
+        pdf_bytes: Optional PDF bytes (for S3/storage abstraction)
     
     Returns None if extraction fails.
     """
     try:
         import PyPDF2
+        import io
         
-        with open(pdf_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            text_parts = []
-            
-            # Extract text from each page
-            for page_num, page in enumerate(pdf_reader.pages):
-                try:
-                    text = page.extract_text()
-                    if text:
-                        text_parts.append(text)
-                except Exception as e:
-                    print(f"Error extracting text from page {page_num + 1}: {e}")
-                    continue
-            
-            full_text = "\n\n".join(text_parts)
-            return full_text if full_text.strip() else None
-            
+        if pdf_bytes:
+            # Use bytes directly
+            pdf_file = io.BytesIO(pdf_bytes)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+        else:
+            # Fallback to reading from file path
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+        
+        text_parts = []
+        
+        # Extract text from each page
+        for page_num, page in enumerate(pdf_reader.pages):
+            try:
+                text = page.extract_text()
+                if text:
+                    text_parts.append(text)
+            except Exception as e:
+                print(f"Error extracting text from page {page_num + 1}: {e}")
+                continue
+        
+        full_text = "\n\n".join(text_parts)
+        return full_text if full_text.strip() else None
+        
     except ImportError:
         print("PyPDF2 not installed. Install with: pip install PyPDF2")
         return None

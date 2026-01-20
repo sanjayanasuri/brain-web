@@ -49,12 +49,13 @@ from services_sync import auto_export_csv
 # - Type hints (helps with IDE autocomplete and type checking)
 # 
 # See backend/models.py lines 5-52 for the full definitions
-from models import Concept, ConceptCreate, ConceptUpdate, RelationshipCreate
+from models import Concept, ConceptCreate, ConceptUpdate, RelationshipCreate, LectureMention
 
 # Business logic functions - the actual graph operations
 from services_graph import (
     get_concept_by_id,
     get_concept_by_name,
+    get_concept_by_slug,
     create_concept,
     update_concept,
     create_relationship,
@@ -70,6 +71,7 @@ from services_graph import (
     get_nodes_missing_description,
     find_concept_gaps,
 )
+from services_lecture_mentions import list_concept_mentions
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 
 # Create FastAPI router - all endpoints will be under /concepts
@@ -287,6 +289,47 @@ def read_concept_by_name(name: str, session=Depends(get_neo4j_session)):
     if not concept:
         raise HTTPException(status_code=404, detail="Concept not found")
     return concept
+
+
+@router.get("/by-slug/{slug}", response_model=Concept)
+def read_concept_by_slug(slug: str, session=Depends(get_neo4j_session)):
+    """
+    Get a concept by its URL slug (Wikipedia-style).
+    
+    PURPOSE:
+    Find a concept using its URL-friendly slug. This enables Wikipedia-style
+    navigation with clean URLs like /concepts/transformer-architecture.
+    
+    HOW IT'S USED:
+    - Concept pages use this for clean URLs
+    - Graph visualization links to concept pages
+    - Wikipedia-style navigation between concepts
+    
+    EXAMPLE:
+    GET /concepts/by-slug/transformer-architecture
+    Returns: The concept with url_slug "transformer-architecture"
+    
+    NOTE:
+    Slugs are auto-generated from concept names when concepts are created.
+    If a concept doesn't have a slug, use the node_id endpoint instead.
+    
+    CONNECTS TO:
+    - Concept wiki pages - Clean URL routing
+    - Graph visualization - Link to concept pages
+    - Wikipedia-style navigation
+    """
+    concept = get_concept_by_slug(session, slug)
+    if not concept:
+        raise HTTPException(status_code=404, detail="Concept not found")
+    return concept
+
+
+@router.get("/{node_id}/mentions", response_model=List[LectureMention])
+def list_concept_mentions_endpoint(node_id: str, session=Depends(get_neo4j_session)):
+    """
+    List all lecture mentions that link to this concept.
+    """
+    return list_concept_mentions(session, node_id)
 
 
 @router.get("/{node_id}", response_model=Concept)

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import jwt from 'jsonwebtoken';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
@@ -75,6 +76,36 @@ function getOpenAIApiKey(): string | undefined {
   return trimmedKey;
 }
 
+/**
+ * Generate a dev authentication token for backend API requests.
+ * Uses the same default secret as the backend for local development.
+ */
+function getDevAuthToken(): string {
+  // Use the same default secret as backend/auth.py for local dev
+  const secret = process.env.API_TOKEN_SECRET || 'dev-secret-key-change-in-production';
+  
+  // Generate a token with default user/tenant for local dev
+  const payload = {
+    user_id: 'dev-user',
+    tenant_id: 'dev-tenant',
+    exp: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60), // 30 days
+    iat: Math.floor(Date.now() / 1000),
+  };
+  
+  return jwt.sign(payload, secret, { algorithm: 'HS256' });
+}
+
+/**
+ * Get headers for backend API requests, including authentication.
+ */
+function getBackendHeaders(): Record<string, string> {
+  const authToken = getDevAuthToken();
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${authToken}`,
+  };
+}
+
 interface Concept {
   node_id: string;
   name: string;
@@ -108,6 +139,7 @@ interface ChatRequest {
   mode?: 'classic' | 'graphrag';
   graph_id?: string;
   branch_id?: string;
+  lecture_id?: string | null;
   vertical?: 'general' | 'finance';
   lens?: string;
   recency_days?: number;
@@ -357,7 +389,7 @@ export async function POST(request: NextRequest) {
     const body: ChatRequest = await request.json();
     // Default to GraphRAG for better evidence and structured context
     // Frontend can override with 'classic' for simple queries
-    let { message, mode = 'graphrag', graph_id, branch_id, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url } = body;
+    let { message, mode = 'graphrag', graph_id, branch_id, lecture_id, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url } = body;
     
     // Default ResponsePreferences if not provided
     const defaultResponsePrefs: ResponsePreferences = {
@@ -411,7 +443,7 @@ export async function POST(request: NextRequest) {
 
     // Handle GraphRAG mode
     if (mode === 'graphrag') {
-      const result = await handleGraphRAGMode(message, graph_id, branch_id, apiKey, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, finalResponsePrefs, finalVoiceId, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url);
+      const result = await handleGraphRAGMode(message, graph_id, branch_id, lecture_id, apiKey, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, finalResponsePrefs, finalVoiceId, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url);
       const totalDuration = Date.now() - startTime;
       console.log(`[Chat API] GraphRAG mode completed in ${totalDuration}ms`);
       return result; // handleGraphRAGMode already includes metrics
@@ -422,7 +454,7 @@ export async function POST(request: NextRequest) {
     console.log(`[Chat API] Step 1: Calling semantic search at ${API_BASE_URL}/ai/semantic-search`);
     const searchResponse = await fetch(`${API_BASE_URL}/ai/semantic-search`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getBackendHeaders(),
       body: JSON.stringify({ message, limit: 5 }),
     });
 
@@ -445,8 +477,63 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Check if this is a "gaps" question - if so, get ALL nodes in the domain
-    const isGapQuestion = /gap|missing|what.*don.*know|what.*need.*learn|what.*should.*study/i.test(message);
+    // Use LLM to detect "gaps" questions intelligently (what don't I know, what should I learn, etc.)
+    let isGapQuestion = false;
+    try {
+      const hasGapKeywords = /(?:gap|missing|don.*know|need.*learn|should.*study|what.*missing|knowledge.*gap)/i.test(message);
+      if (hasGapKeywords) {
+        const gapIntentPrompt = `Determine if this user message is asking about knowledge gaps, missing information, or what they should learn next.
+
+Return ONLY a JSON object: {"is_gap_question": true/false, "confidence": 0.0-1.0}
+
+Examples of gap questions:
+- "what don't I know about X"
+- "what gaps are there in my knowledge"
+- "what should I study next"
+- "what am I missing"
+
+Examples that are NOT gap questions:
+- "what is X" (asking for definition)
+- "explain Y" (asking for explanation)
+- General questions
+
+User message: "${message}"
+
+Return ONLY the JSON object:`;
+
+        const gapResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
+              { role: 'user', content: gapIntentPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 100,
+          }),
+        });
+
+        if (gapResponse.ok) {
+          const gapData = await gapResponse.json();
+          const gapText = gapData.choices[0]?.message?.content?.trim() || '';
+          const jsonMatch = gapText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            isGapQuestion = parsed.is_gap_question === true && parsed.confidence > 0.5;
+            console.log(`[Chat API] LLM gap question analysis: is_gap_question=${isGapQuestion}, confidence=${parsed.confidence}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Chat API] Error in LLM gap question detection:', err);
+      // Fallback to pattern matching
+      isGapQuestion = /gap|missing|what.*don.*know|what.*need.*learn|what.*should.*study/i.test(message);
+    }
     let allDomainNodes: Concept[] = [];
     
     if (isGapQuestion && usedNodes.length > 0) {
@@ -469,8 +556,62 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Step 2: Check if this is asking about previous definitions/explanations
-    const isPreviousDefinitionQuestion = /how.*(have|did).*you.*(previously|before|earlier|in the past).*(define|explain|describe|say about)|what.*(have|did).*you.*(previously|before|earlier).*(say|explain|define|describe).*about/i.test(message);
+    // Use LLM to detect if user is asking about previous definitions/explanations
+    let isPreviousDefinitionQuestion = false;
+    try {
+      const hasPreviousKeywords = /(?:previously|before|earlier|in the past|have.*you|did.*you)/i.test(message);
+      if (hasPreviousKeywords) {
+        const previousIntentPrompt = `Determine if this user message is asking about what was said/explained/defined PREVIOUSLY in the conversation.
+
+Return ONLY a JSON object: {"is_previous_definition_question": true/false, "confidence": 0.0-1.0}
+
+Examples of previous definition questions:
+- "how did you previously define X"
+- "what did you say about Y earlier"
+- "how have you explained Z before"
+
+Examples that are NOT:
+- "what is X" (asking for current definition)
+- "explain Y" (asking for explanation now)
+- General questions without "previously/before/earlier"
+
+User message: "${message}"
+
+Return ONLY the JSON object:`;
+
+        const previousResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
+              { role: 'user', content: previousIntentPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 100,
+          }),
+        });
+
+        if (previousResponse.ok) {
+          const previousData = await previousResponse.json();
+          const previousText = previousData.choices[0]?.message?.content?.trim() || '';
+          const jsonMatch = previousText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            isPreviousDefinitionQuestion = parsed.is_previous_definition_question === true && parsed.confidence > 0.5;
+            console.log(`[Chat API] LLM previous definition analysis: is_previous=${isPreviousDefinitionQuestion}, confidence=${parsed.confidence}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Chat API] Error in LLM previous definition detection:', err);
+      // Fallback to pattern matching
+      isPreviousDefinitionQuestion = /how.*(have|did).*you.*(previously|before|earlier|in the past).*(define|explain|describe|say about)|what.*(have|did).*you.*(previously|before|earlier).*(say|explain|define|describe).*about/i.test(message);
+    }
     
     // Step 2.5: Fetch segments for concepts if asking about previous definitions
     const segmentsByConcept: Record<string, any[]> = {};
@@ -1093,7 +1234,7 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
     try {
       const storeResponse = await fetch(`${API_BASE_URL}/answers/store`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getBackendHeaders(),
         body: JSON.stringify({
           answer_id: answerId,
           question: message,
@@ -1106,7 +1247,7 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
         try {
           await fetch(`${API_BASE_URL}/events/activity`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getBackendHeaders(),
             body: JSON.stringify({
               type: 'ANSWER_CREATED',
               answer_id: answerId,
@@ -1127,7 +1268,9 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
     // Get gap detection questions from backend
     let gapQuestions: string[] = [];
     try {
-      const gapResponse = await fetch(`${API_BASE_URL}/concepts/gaps?limit=3`);
+      const gapResponse = await fetch(`${API_BASE_URL}/concepts/gaps?limit=3`, {
+        headers: getBackendHeaders(),
+      });
       if (gapResponse.ok) {
         const gapConcepts: string[] = await gapResponse.json();
         gapQuestions = gapConcepts.map(name => `How would you define ${name} in your own words?`);
@@ -1237,6 +1380,7 @@ async function handleGraphRAGMode(
   message: string,
   graph_id: string | undefined,
   branch_id: string | undefined,
+  lecture_id: string | null | undefined,
   apiKey: string,
   vertical?: 'general' | 'finance',
   lens?: string,
@@ -1268,6 +1412,521 @@ async function handleGraphRAGMode(
     ];
     const isSimpleConversational = simpleConversationalPatterns.some(pattern => pattern.test(message.trim()));
     
+    // Use LLM to detect task creation intent intelligently (not just pattern matching)
+    // This allows generalization to any natural language request
+    let isTaskCreationQuery = false;
+    let taskExtractionResult: any = null;
+    
+    try {
+      // First, do a lightweight check - if message contains task-related keywords, ask LLM to confirm
+      const hasTaskKeywords = /(?:task|todo|remind|schedule|need to|have to|must|should|plan to|going to)/i.test(message);
+      
+      if (hasTaskKeywords) {
+        console.log('[Chat API] Potential task creation detected, using LLM to understand intent...');
+        
+        const intentPrompt = `Analyze this user message and determine if they want to CREATE a task/todo/reminder. 
+
+Return ONLY a JSON object with this structure:
+{
+  "is_task_creation": true/false,
+  "confidence": 0.0-1.0,
+  "task_data": {
+    "title": "short descriptive title" or null,
+    "estimated_minutes": number or null,
+    "priority": "high|medium|low" or null,
+    "energy": "high|med|low" or null,
+    "due_date": "YYYY-MM-DD" or null,
+    "preferred_time_windows": ["morning"|"afternoon"|"evening"] or null,
+    "notes": "additional context" or null
+  }
+}
+
+Rules:
+- is_task_creation: true ONLY if user wants to CREATE/ADD a new task (not query existing tasks, not ask about tasks)
+- If false, set task_data to null
+- If true, extract task details intelligently:
+  * Title: extract the core action/thing to do
+  * Duration: infer from context or estimate based on task type (default 60 min)
+  * Priority: infer from urgency words (urgent, important, ASAP = high; normal = medium; whenever = low)
+  * Energy: infer from task type (physical/active = high; mental work = med; routine = low)
+  * Due date: extract if "tomorrow", "today", or specific date mentioned
+  * Preferred time: extract if morning/afternoon/evening mentioned
+
+User message: "${message}"
+
+Return ONLY the JSON object:`;
+
+        const intentResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
+              { role: 'user', content: intentPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 300,
+          }),
+        });
+
+        if (intentResponse.ok) {
+          const intentData = await intentResponse.json();
+          const intentText = intentData.choices[0]?.message?.content?.trim() || '';
+          
+          try {
+            const jsonMatch = intentText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              isTaskCreationQuery = parsed.is_task_creation === true && parsed.confidence > 0.5;
+              taskExtractionResult = parsed.task_data;
+              console.log(`[Chat API] LLM intent analysis: is_task_creation=${isTaskCreationQuery}, confidence=${parsed.confidence}`);
+            }
+          } catch (parseErr) {
+            console.error('[Chat API] Failed to parse LLM intent response:', intentText);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Chat API] Error in LLM intent detection:', err);
+      // Fall back to simple pattern matching if LLM fails
+      const fallbackPatterns = [
+        /create.*task/i,
+        /add.*task/i,
+        /new.*task/i,
+      ];
+      isTaskCreationQuery = fallbackPatterns.some(pattern => pattern.test(message));
+    }
+    
+    // Use LLM to detect itinerary/planning intent intelligently
+    let isItineraryQuery = false;
+    let itineraryDateInfo: { target_date: string | null; is_tomorrow: boolean; is_today: boolean } | null = null;
+    
+    try {
+      // Lightweight check for planning-related keywords
+      const hasPlanningKeywords = /(?:plan|schedule|itinerary|agenda|calendar|what.*doing|what.*on|show.*schedule|generate.*schedule|tomorrow|today)/i.test(message);
+      
+      if (hasPlanningKeywords && !isTaskCreationQuery) {
+        console.log('[Chat API] Potential itinerary query detected, using LLM to understand intent...');
+        
+        const itineraryIntentPrompt = `Analyze this user message and determine if they want to VIEW/GET their schedule/itinerary/plan for a specific day.
+
+Return ONLY a JSON object with this structure:
+{
+  "is_itinerary_query": true/false,
+  "confidence": 0.0-1.0,
+  "date_info": {
+    "target_date": "YYYY-MM-DD" or null,
+    "is_tomorrow": true/false,
+    "is_today": true/false,
+    "is_specific_date": true/false
+  }
+}
+
+Rules:
+- is_itinerary_query: true if user wants to SEE/VIEW/GET their schedule/plan/itinerary (not create tasks, not ask general questions)
+- Examples of itinerary queries: "what's my plan tomorrow", "show my schedule", "what am I doing today", "plan my day", "generate schedule"
+- Examples of NOT itinerary: "create a task", "what is machine learning", general questions
+- Extract date info: determine if they're asking about tomorrow, today, or a specific date
+- If no date mentioned, assume they want today's schedule
+
+User message: "${message}"
+
+Return ONLY the JSON object:`;
+
+        const itineraryIntentResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
+              { role: 'user', content: itineraryIntentPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 200,
+          }),
+        });
+
+        if (itineraryIntentResponse.ok) {
+          const itineraryIntentData = await itineraryIntentResponse.json();
+          const itineraryIntentText = itineraryIntentData.choices[0]?.message?.content?.trim() || '';
+          
+          try {
+            const jsonMatch = itineraryIntentText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              isItineraryQuery = parsed.is_itinerary_query === true && parsed.confidence > 0.5;
+              itineraryDateInfo = parsed.date_info || null;
+              console.log(`[Chat API] LLM itinerary analysis: is_itinerary_query=${isItineraryQuery}, confidence=${parsed.confidence}, date_info=${JSON.stringify(itineraryDateInfo)}`);
+            }
+          } catch (parseErr) {
+            console.error('[Chat API] Failed to parse LLM itinerary intent response:', itineraryIntentText);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Chat API] Error in LLM itinerary intent detection:', err);
+      // Fall back to simple pattern matching if LLM fails
+      const fallbackPatterns = [
+        /what.*(my|your).*(plan|schedule|itinerary)/i,
+        /plan.*(my|your).*day/i,
+        /show.*schedule/i,
+      ];
+      isItineraryQuery = fallbackPatterns.some(pattern => pattern.test(message));
+    }
+    
+    console.log(`[Chat API] Task creation check: "${message.substring(0, 50)}" -> ${isTaskCreationQuery}`);
+    console.log(`[Chat API] Itinerary query check: "${message.substring(0, 50)}" -> ${isItineraryQuery}`);
+    if (isItineraryQuery) {
+      console.log(`[Chat API] ⚠️ ITINERARY QUERY DETECTED via LLM - will call scheduler API`);
+    }
+    
+    // Handle task creation queries first - use LLM-extracted data
+    if (isTaskCreationQuery && !isItineraryQuery && taskExtractionResult) {
+      try {
+        console.log('[Chat API] ✓ Detected task creation query via LLM, creating task...');
+        
+        // Validate LLM-extracted task data
+        if (!taskExtractionResult.title || taskExtractionResult.title.length < 3) {
+          return NextResponse.json({
+            answer: "I understood you want to create a task, but I couldn't extract what task you'd like to create. Could you rephrase it? For example:\n\n\"Create a task: Review Q4 reports, 2 hours, high priority, due tomorrow\"\n\nor\n\n\"I need to go to the hospital tomorrow\"",
+            usedNodes: [],
+            suggestedQuestions: [
+              "Create a task: Review reports, 2 hours, high priority, due tomorrow",
+              "What's my plan tomorrow?",
+              "Show me my calendar events"
+            ],
+          });
+        }
+        
+        // Prepare task payload with LLM-extracted data and defaults
+        const taskPayload: any = {
+          title: taskExtractionResult.title,
+          estimated_minutes: taskExtractionResult.estimated_minutes || 60,
+          priority: taskExtractionResult.priority || 'medium',
+          energy: taskExtractionResult.energy || 'med',
+        };
+        
+        if (taskExtractionResult.due_date) {
+          taskPayload.due_date = taskExtractionResult.due_date;
+        }
+        if (taskExtractionResult.preferred_time_windows && taskExtractionResult.preferred_time_windows.length > 0) {
+          taskPayload.preferred_time_windows = taskExtractionResult.preferred_time_windows;
+        }
+        
+        console.log(`[Chat API] Creating task from LLM extraction:`, taskPayload);
+        
+        // Create the task via API
+        const createTaskResponse = await fetch(
+          `${API_BASE_URL}/tasks`,
+          {
+            method: 'POST',
+            headers: getBackendHeaders(),
+            body: JSON.stringify(taskPayload),
+          }
+        );
+        
+        if (createTaskResponse.ok) {
+          const createdTask = await createTaskResponse.json();
+          console.log(`[Chat API] ✓ Created task: ${createdTask.id}`);
+          
+          let responseText = `✓ I've created a task: **${createdTask.title}**\n`;
+          responseText += `  • Duration: ${createdTask.estimated_minutes} minutes\n`;
+          responseText += `  • Priority: ${createdTask.priority}\n`;
+          responseText += `  • Energy level: ${createdTask.energy}\n`;
+          if (createdTask.due_date) {
+            responseText += `  • Due: ${createdTask.due_date}\n`;
+          }
+          if (createdTask.preferred_time_windows && createdTask.preferred_time_windows.length > 0) {
+            responseText += `  • Preferred time: ${createdTask.preferred_time_windows.join(', ')}\n`;
+          }
+          
+          const hasDueDate = createdTask.due_date;
+          const isTomorrow = hasDueDate && createdTask.due_date === new Date(Date.now() + 86400000).toISOString().split('T')[0];
+          const isToday = hasDueDate && createdTask.due_date === new Date().toISOString().split('T')[0];
+          
+          if (hasDueDate && (isTomorrow || isToday)) {
+            responseText += `\nWould you like me to plan your ${isTomorrow ? 'tomorrow' : 'today'} and schedule this task?`;
+          } else {
+            responseText += `\nWould you like me to help you plan when to do this task?`;
+          }
+          
+          return NextResponse.json({
+            answer: responseText,
+            usedNodes: [],
+            suggestedQuestions: [
+              hasDueDate && isTomorrow ? "What's my plan tomorrow?" : hasDueDate && isToday ? "What's my plan today?" : "What's my plan tomorrow?",
+              "Show me my calendar events",
+              "Create another task"
+            ],
+            createdTask: createdTask, // Include task data for frontend
+          });
+        } else {
+          const errorText = await createTaskResponse.text().catch(() => 'Unknown error');
+          console.error(`[Chat API] Failed to create task: ${createTaskResponse.status} - ${errorText}`);
+          
+          return NextResponse.json({
+            answer: `I had trouble creating that task. The error was: ${errorText}. Please try again or create the task manually.`,
+            usedNodes: [],
+            suggestedQuestions: [
+              "What's my plan tomorrow?",
+              "Show me my calendar events"
+            ],
+          });
+        }
+      } catch (err) {
+        console.error('[Chat API] Error handling task creation:', err);
+        // Fall through to normal processing - let GraphRAG handle it
+      }
+    }
+    
+    // Handle itinerary queries by calling scheduler API - use LLM-extracted date info
+    if (isItineraryQuery) {
+      try {
+        console.log('[Chat API] ✓ Detected itinerary query via LLM, calling scheduler API...');
+        
+        // Use LLM-extracted date info, with fallback to pattern matching
+        let targetDate = new Date();
+        let isTomorrow = false;
+        let isToday = false;
+        
+        if (itineraryDateInfo) {
+          isTomorrow = itineraryDateInfo.is_tomorrow === true;
+          isToday = itineraryDateInfo.is_today === true;
+          
+          if (itineraryDateInfo.target_date) {
+            // Use specific date from LLM
+            targetDate = new Date(itineraryDateInfo.target_date);
+            console.log(`[Chat API] Using LLM-extracted date: ${itineraryDateInfo.target_date}`);
+          } else if (isTomorrow) {
+            targetDate.setDate(targetDate.getDate() + 1);
+            console.log(`[Chat API] LLM detected: tomorrow (${targetDate.toISOString().split('T')[0]})`);
+          } else if (isToday) {
+            console.log(`[Chat API] LLM detected: today (${targetDate.toISOString().split('T')[0]})`);
+          } else {
+            // Default to today if no date info
+            console.log(`[Chat API] No date info from LLM, defaulting to today`);
+          }
+        } else {
+          // Fallback to pattern matching if LLM didn't extract date info
+          isTomorrow = /tomorrow/i.test(message);
+          isToday = /today/i.test(message);
+          
+          if (isTomorrow) {
+            targetDate.setDate(targetDate.getDate() + 1);
+            console.log(`[Chat API] Fallback pattern match: tomorrow (${targetDate.toISOString().split('T')[0]})`);
+          } else if (isToday) {
+            console.log(`[Chat API] Fallback pattern match: today (${targetDate.toISOString().split('T')[0]})`);
+          }
+        }
+        
+        // Set working hours in local timezone (8 AM - 10 PM)
+        const startDate = new Date(targetDate);
+        startDate.setHours(8, 0, 0, 0); // 8 AM local time
+        const endDate = new Date(targetDate);
+        endDate.setHours(22, 0, 0, 0); // 10 PM local time
+        
+        // Convert to ISO strings (will include timezone offset)
+        const startISO = startDate.toISOString();
+        const endISO = endDate.toISOString();
+        
+        console.log(`[Chat API] Date range: ${startISO} to ${endISO} (local time: ${startDate.toLocaleTimeString()} - ${endDate.toLocaleTimeString()})`);
+        
+        console.log(`[Chat API] Calling scheduler API: ${startISO} to ${endISO}`);
+        
+        // Call scheduler API to get suggestions
+        const schedulerResponse = await fetch(
+          `${API_BASE_URL}/schedule/suggestions?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`,
+          {
+            method: 'POST',
+            headers: getBackendHeaders(),
+          }
+        );
+        
+        console.log(`[Chat API] Scheduler API response status: ${schedulerResponse.status}`);
+        
+        if (schedulerResponse.ok) {
+          const suggestionsData = await schedulerResponse.json();
+          const suggestions = suggestionsData.suggestions || [];
+          const groupedByDay = suggestionsData.grouped_by_day || {};
+          
+          console.log(`[Chat API] Scheduler returned ${suggestions.length} suggestions`);
+          
+          if (suggestions.length === 0) {
+            // No suggestions - check if there are tasks
+            const targetDateStr = targetDate.toISOString().split('T')[0];
+            console.log(`[Chat API] No suggestions, checking for tasks with due_date: ${targetDateStr}`);
+            
+            const tasksResponse = await fetch(
+              `${API_BASE_URL}/tasks?range=7`,
+              { headers: getBackendHeaders() }
+            );
+            
+            if (tasksResponse.ok) {
+              const tasksData = await tasksResponse.json();
+              const tasks = tasksData.tasks || [];
+              console.log(`[Chat API] Found ${tasks.length} total tasks`);
+              
+              const relevantTasks = tasks.filter((t: any) => {
+                if (!t.due_date) {
+                  console.log(`[Chat API] Task "${t.title}" has no due_date`);
+                  return false;
+                }
+                // Compare date strings directly (YYYY-MM-DD format)
+                const taskDateStr = typeof t.due_date === 'string' 
+                  ? t.due_date.split('T')[0]  // Handle ISO datetime strings
+                  : t.due_date;
+                const matches = taskDateStr === targetDateStr;
+                if (matches) {
+                  console.log(`[Chat API] ✓ Found matching task: ${t.title} (due: ${t.due_date})`);
+                } else {
+                  console.log(`[Chat API] Task "${t.title}" due_date "${t.due_date}" doesn't match "${targetDateStr}"`);
+                }
+                return matches;
+              });
+              
+              console.log(`[Chat API] Found ${relevantTasks.length} tasks for target date`);
+              
+              if (relevantTasks.length === 0) {
+                // Check calendar events too
+                const calendarResponse = await fetch(
+                  `${API_BASE_URL}/calendar/events?start_date=${targetDate.toISOString().split('T')[0]}&end_date=${targetDate.toISOString().split('T')[0]}`,
+                  { headers: getBackendHeaders() }
+                ).catch(() => null);
+                
+                let calendarInfo = '';
+                if (calendarResponse?.ok) {
+                  const calendarData = await calendarResponse.json();
+                  const events = calendarData.events || [];
+                  if (events.length > 0) {
+                    calendarInfo = `\n\nI see you have ${events.length} calendar event${events.length > 1 ? 's' : ''} scheduled:\n${events.slice(0, 3).map((e: any) => `- ${e.title}${e.start_time ? ` at ${e.start_time.substring(0, 5)}` : ''}`).join('\n')}${events.length > 3 ? `\n... and ${events.length - 3} more` : ''}`;
+                  }
+                }
+                
+                return NextResponse.json({
+                  answer: `I don't see any tasks scheduled for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}.${calendarInfo}\n\nWould you like me to help you create some tasks? You can say something like:\n- "Create a task: Review Q4 reports, 2 hours, high priority, due tomorrow"\n- "I need to prepare a presentation tomorrow, it will take 2 hours"`,
+                  usedNodes: [],
+                  suggestedQuestions: [
+                    "Create a task: Review reports, 2 hours, high priority, due tomorrow",
+                    "Show me my calendar events",
+                    "What tasks do I have this week?"
+                  ],
+                });
+              } else {
+                return NextResponse.json({
+                  answer: `I found ${relevantTasks.length} task${relevantTasks.length > 1 ? 's' : ''} for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}, but I wasn't able to generate schedule suggestions. This might be because your calendar is fully booked or there are no suitable time slots. Here are your tasks:\n\n${relevantTasks.map((t: any) => `- ${t.title} (${t.estimated_minutes} min, ${t.priority} priority)`).join('\n')}\n\nWould you like me to help you manually schedule these?`,
+                  usedNodes: [],
+                  suggestedQuestions: [
+                    "Show me my calendar events",
+                    "Create a new task",
+                    "What are my free time blocks?"
+                  ],
+                });
+              }
+            }
+            
+            return NextResponse.json({
+              answer: `I don't see any schedule suggestions for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}. You might want to create some tasks first, or check if your calendar has available time slots.`,
+              usedNodes: [],
+              suggestedQuestions: [
+                "Create a task for tomorrow",
+                "Show me my calendar events",
+                "What are my free time blocks?"
+              ],
+            });
+          }
+          
+          // Format suggestions into a readable response
+          const dateStr = targetDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+          let answer = `Here's your suggested schedule for ${dateStr}:\n\n`;
+          
+          // Group by time
+          const sortedSuggestions = [...suggestions].sort((a, b) => 
+            new Date(a.start).getTime() - new Date(b.start).getTime()
+          );
+          
+          for (const sug of sortedSuggestions) {
+            const startTime = new Date(sug.start);
+            const endTime = new Date(sug.end);
+            const timeStr = `${startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} - ${endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+            
+            answer += `📅 **${sug.task_title}**\n`;
+            answer += `   Time: ${timeStr}\n`;
+            answer += `   Confidence: ${Math.round(sug.confidence * 100)}%\n`;
+            if (sug.reasons && sug.reasons.length > 0) {
+              answer += `   Reasons:\n`;
+              for (const reason of sug.reasons) {
+                answer += `   • ${reason}\n`;
+              }
+            }
+            answer += `\n`;
+          }
+          
+          answer += `\nThese suggestions are based on your tasks, calendar events, and preferences. You can accept or modify them as needed.`;
+          
+          return NextResponse.json({
+            answer,
+            usedNodes: [],
+            suggestedQuestions: [
+              "Show me my calendar events",
+              "Create a new task",
+              "What are my free time blocks?",
+              "Update a task"
+            ],
+            scheduleSuggestions: suggestions, // Include raw data for frontend
+          });
+        } else {
+          const errorText = await schedulerResponse.text().catch(() => 'Unknown error');
+          console.warn(`[Chat API] Scheduler API failed: ${schedulerResponse.status} - ${errorText}`);
+          
+          // Even if scheduler fails, try to get tasks and calendar events to give helpful response
+          try {
+            const tasksResponse = await fetch(
+              `${API_BASE_URL}/tasks?range=7`,
+              { headers: getBackendHeaders() }
+            );
+            
+            if (tasksResponse.ok) {
+              const tasksData = await tasksResponse.json();
+              const tasks = tasksData.tasks || [];
+              const relevantTasks = tasks.filter((t: any) => {
+                if (!t.due_date) return false;
+                const dueDate = new Date(t.due_date);
+                return dueDate.toDateString() === targetDate.toDateString();
+              });
+              
+              if (relevantTasks.length > 0) {
+                return NextResponse.json({
+                  answer: `I found ${relevantTasks.length} task${relevantTasks.length > 1 ? 's' : ''} for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}, but I'm having trouble generating schedule suggestions right now. Here are your tasks:\n\n${relevantTasks.map((t: any) => `- ${t.title} (${t.estimated_minutes} min, ${t.priority} priority)`).join('\n')}\n\nYou can view your calendar events in the calendar widget on the right.`,
+                  usedNodes: [],
+                  suggestedQuestions: [
+                    "Show me my calendar events",
+                    "Create a new task",
+                    "What are my free time blocks?"
+                  ],
+                });
+              }
+            }
+          } catch (taskErr) {
+            console.error('[Chat API] Error fetching tasks:', taskErr);
+          }
+          
+          // Fall through to normal processing if we can't help
+        }
+      } catch (err) {
+        console.error('[Chat API] Error handling itinerary query:', err);
+        console.error('[Chat API] Error stack:', err instanceof Error ? err.stack : 'No stack');
+        // Fall through to normal processing
+      }
+    }
+    
     let retrievalData: any = null;
     let intent = 'DEFINITION_OVERVIEW';
     let trace: any[] = [];
@@ -1292,23 +1951,35 @@ async function handleGraphRAGMode(
         focus_page_url,
       };
       
-      // PARALLEL: Fetch retrieval AND style feedback at the same time
-      // Add 5-second timeout to retrieval to prevent hanging (reduced from 10s for faster UX)
-      console.log('[Chat API] Fetching retrieval context and style feedback in parallel (5s timeout)...');
+      // PARALLEL: Fetch retrieval, style feedback, AND lecture mentions at the same time
+      // Add 3-second timeout to retrieval to prevent hanging (reduced from 5s for faster UX)
+      console.log('[Chat API] Fetching retrieval context, style feedback, and lecture mentions in parallel (3s timeout)...');
       const retrievalController = new AbortController();
       const retrievalTimeout = setTimeout(() => {
         retrievalController.abort();
-      }, 5000); // 5 second timeout - fail fast if retrieval is slow
+      }, 3000); // 3 second timeout - fail fast if retrieval is slow
       
-      const [retrievalResponse, styleFeedbackResponseResult] = await Promise.allSettled([
+      // Build parallel fetch array
+      const parallelFetches: Promise<any>[] = [
         fetch(`${API_BASE_URL}/ai/retrieve`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getBackendHeaders(),
           body: JSON.stringify(requestBody),
           signal: retrievalController.signal,
         }).finally(() => clearTimeout(retrievalTimeout)),
         fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null), // Don't fail if this fails
-      ]);
+      ];
+      
+      // Add lecture mentions fetch in parallel if lecture_id exists
+      let lectureMentionsPromise: Promise<Response | null> | null = null;
+      if (lecture_id) {
+        lectureMentionsPromise = fetch(`${API_BASE_URL}/lectures/${lecture_id}/mentions`, {
+          headers: getBackendHeaders(),
+        }).catch(() => null);
+        parallelFetches.push(lectureMentionsPromise);
+      }
+      
+      const [retrievalResponse, styleFeedbackResponseResult, lectureMentionsResponse] = await Promise.allSettled(parallelFetches);
       
       // Store style feedback response for later processing  
       styleFeedbackResponse = styleFeedbackResponseResult;
@@ -1333,7 +2004,7 @@ async function handleGraphRAGMode(
       } else if (retrievalResponse.status === 'rejected') {
         const reason = retrievalResponse.reason;
         if (reason?.name === 'AbortError') {
-          console.warn('[Chat API] Retrieval timed out after 5s, continuing without context');
+          console.warn('[Chat API] Retrieval timed out after 3s, continuing without context');
           // Set empty context so the LLM can still respond
           context = {};
         } else {
@@ -1358,8 +2029,55 @@ async function handleGraphRAGMode(
     const printedClaims = contextResult.printedClaims;
     const printedQuotes = contextResult.printedQuotes;
     const printedSources = contextResult.printedSources;
+
+    let lectureContext = '';
+    if (lecture_id) {
+      try {
+        const mentionsResponse = await fetch(`${API_BASE_URL}/lectures/${lecture_id}/mentions`, {
+          headers: getBackendHeaders(),
+        });
+        if (mentionsResponse.ok) {
+          const mentions = await mentionsResponse.json();
+          if (mentions && mentions.length > 0) {
+            const conceptMap = new Map<string, { concept: any; mentions: any[] }>();
+            mentions.forEach((mention: any) => {
+              const conceptId = mention.concept?.node_id || mention.concept_id;
+              if (!conceptId || !mention.concept) {
+                return;
+              }
+              if (!conceptMap.has(conceptId)) {
+                conceptMap.set(conceptId, { concept: mention.concept, mentions: [] });
+              }
+              conceptMap.get(conceptId)!.mentions.push(mention);
+            });
+
+            const grouped = Array.from(conceptMap.values()).slice(0, 8);
+            const lectureParts: string[] = ['## Linked Concepts in This Lecture'];
+            grouped.forEach((group) => {
+              lectureParts.push(`\n${group.concept.name}`);
+              if (group.concept.description) {
+                lectureParts.push(`Definition: ${group.concept.description}`);
+              }
+              const mentionNotes = group.mentions
+                .map((m: any) => m.context_note)
+                .filter((note: string | null) => !!note)
+                .slice(0, 2);
+              if (mentionNotes.length > 0) {
+                lectureParts.push(`Context notes: ${mentionNotes.join(' | ')}`);
+              }
+            });
+
+            lectureContext = lectureParts.join('\n');
+          }
+        }
+      } catch (err) {
+        console.warn('[Chat API] Failed to fetch lecture mentions for context:', err);
+      }
+    }
+
+    const combinedContextText = lectureContext ? `${contextText}\n\n${lectureContext}` : contextText;
     
-    console.log(`[Chat API] Context retrieved (${contextText.length} chars)`);
+    console.log(`[Chat API] Context retrieved (${combinedContextText.length} chars)`);
     
     // Phase A: Build evidence ID allowlist for strict mode
     const allowedClaimIds = printedClaims;
@@ -1383,7 +2101,7 @@ async function handleGraphRAGMode(
     }
     
     // If context is empty or very minimal, add a note to the prompt
-    const contextNote = contextText.trim().length === 0 
+    const contextNote = combinedContextText.trim().length === 0 
       ? "\n\nNOTE: No GraphRAG context was found for this query. You can still respond naturally using your general knowledge."
       : "";
 
@@ -1532,7 +2250,7 @@ Use these examples to refine your responses. Pay attention to what the user like
     );
 
     // Build messages with conversation history
-    const contextString = (contextText || '(No specific context found - feel free to respond naturally)') + contextNote + allowlistBlock;
+    const contextString = (combinedContextText || '(No specific context found - feel free to respond naturally)') + contextNote + allowlistBlock;
     const messages = buildMessagesWithHistory(systemPrompt, message, contextString, chatHistory);
 
     // Call OpenAI with GraphRAG context
@@ -1814,7 +2532,7 @@ Use these examples to refine your responses. Pay attention to what the user like
     try {
       const storeResponse = await fetch(`${API_BASE_URL}/answers/store`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getBackendHeaders(),
           body: JSON.stringify({
             answer_id: answerId,
             question: message,
@@ -1827,7 +2545,7 @@ Use these examples to refine your responses. Pay attention to what the user like
         try {
           await fetch(`${API_BASE_URL}/events/activity`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getBackendHeaders(),
             body: JSON.stringify({
               type: 'ANSWER_CREATED',
               answer_id: answerId,
@@ -1931,8 +2649,18 @@ Use these examples to refine your responses. Pay attention to what the user like
     const sections = splitAnswerIntoSections(answer);
     const answer_sections = mapEvidenceToSections(sections, evidenceUsed);
 
+    // Debug: Log the answer before returning
+    console.log('[Chat API] Final answer length:', answer.length);
+    console.log('[Chat API] Final answer preview:', answer.substring(0, 200));
+    
+    // CRITICAL: Ensure answer is not empty - if it is, use a fallback
+    if (!answer || answer.trim() === '') {
+      console.error('[Chat API] ⚠️ WARNING: Answer is empty after processing! Using fallback.');
+      answer = "I'm sorry, I encountered an issue generating a response. Please try rephrasing your question.";
+    }
+    
     const response: ChatResponse = {
-      answer,
+      answer: answer.trim(), // Ensure answer is trimmed and not empty
       usedNodes: usedNodes,
       suggestedQuestions: suggestedQuestionsFromContext.length > 0 ? suggestedQuestionsFromContext : suggestedQuestions.slice(0, 3),
       suggestedActions: suggestedActions.slice(0, 5),
@@ -1950,6 +2678,8 @@ Use these examples to refine your responses. Pay attention to what the user like
       },
     };
 
+    console.log('[Chat API] Returning response with answer length:', response.answer.length);
+    console.log('[Chat API] Response keys:', Object.keys(response));
     return NextResponse.json(response);
   } catch (error) {
     console.error('GraphRAG Chat API error:', error);
@@ -2390,8 +3120,8 @@ function buildContextTextFromStructured(context: any, intent: string): {
   
   return {
     text: parts.join("\n"),
-    printedClaims: [...new Set(printedClaims)], // Deduplicate
-    printedQuotes: [...new Set(printedQuotes)],
-    printedSources: [...new Set(printedSources)],
+    printedClaims: Array.from(new Set(printedClaims)), // Deduplicate
+    printedQuotes: Array.from(new Set(printedQuotes)),
+    printedSources: Array.from(new Set(printedSources)),
   };
 }

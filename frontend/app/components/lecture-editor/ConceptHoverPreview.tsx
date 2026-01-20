@@ -5,7 +5,7 @@ import { getConcept, type Concept } from '../../api-client';
 import tippy, { Instance as TippyInstance } from 'tippy.js';
 import 'tippy.js/dist/tippy.css';
 
-export function setupConceptHoverPreviews() {
+export function useConceptHoverPreviews() {
   useEffect(() => {
     const handleMouseEnter = async (e: MouseEvent) => {
       const target = e.target as HTMLElement;

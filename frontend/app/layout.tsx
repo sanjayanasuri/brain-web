@@ -8,8 +8,8 @@ import RouteTransition from './components/ui/RouteTransition';
 import OfflineSyncInitializer from './components/offline/OfflineSyncInitializer';
 
 export const metadata: Metadata = {
-  title: 'Brain Web - Knowledge Graph Explorer',
-  description: 'Interactive exploration of your personal knowledge graph',
+  title: 'Brain Web - AI Study Assistant',
+  description: 'Your comprehensive study assistant for organizing documents, taking notes, tracking timelines, and exploring knowledge gaps',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
@@ -23,7 +23,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 5,
   userScalable: true,
-  themeColor: '#3b82f6',
+  themeColor: '#2563eb',
 };
 
 export default function RootLayout({

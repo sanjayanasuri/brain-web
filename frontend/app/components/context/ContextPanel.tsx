@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { Concept, Resource, Suggestion } from '../../api-client';
+import type { Concept, Resource, Suggestion, SuggestionType } from '../../api-client';
 import { fetchEvidenceForConcept, type FetchEvidenceResult } from '../../lib/evidenceFetch';
 import { uploadResourceForConcept, getResourcesForConcept, getSuggestions, getSuggestedPaths, type SuggestedPath } from '../../api-client';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
@@ -229,6 +229,8 @@ interface ContextPanelProps {
       onClick: () => void;
     };
   }>;
+  activeGraphId?: string;
+  onSwitchGraph?: (graphId: string) => void;
 }
 
 export default function ContextPanel({
@@ -1005,7 +1007,7 @@ export default function ContextPanel({
 
   return (
     <div className="context-panel" style={{
-      width: '380px',
+      width: '100%',
       borderLeft: '1px solid var(--border)',
       background: 'var(--background)',
       display: 'flex',
@@ -1944,7 +1946,7 @@ export default function ContextPanel({
                             params.set('resource_id', newestResource.resource_id);
                           }
                           params.set('from', 'evidence');
-                          const graphId = searchParams.get('graph_id');
+                          const graphId = searchParams?.get('graph_id');
                           if (graphId) {
                             params.set('graph_id', graphId);
                           }
@@ -2035,7 +2037,7 @@ export default function ContextPanel({
                                 params.set('concept_id', selectedNode.node_id);
                                 params.set('resource_id', res.resource_id);
                                 params.set('from', 'evidence');
-                                const graphId = searchParams.get('graph_id');
+                                const graphId = searchParams?.get('graph_id');
                                 if (graphId) {
                                   params.set('graph_id', graphId);
                                 }
@@ -2209,7 +2211,11 @@ export default function ContextPanel({
                       </div>
                     </div>
                     <button
-                      onClick={() => router.push(`/concepts/${connection.node_id}`)}
+                      onClick={() => {
+                        const slug = (connection as any).url_slug || connection.node_id;
+                        const graphId = searchParams?.get('graph_id');
+                        router.push(`/concepts/${slug}${graphId ? `?graph_id=${graphId}` : ''}`);
+                      }}
                       style={{
                         border: 'none',
                         background: 'var(--panel)',

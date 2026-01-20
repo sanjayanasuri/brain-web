@@ -67,6 +67,7 @@ interface ChatState {
   editedAnswer: string;
   isChatExpanded: boolean;
   isChatMaximized: boolean;
+  isChatCollapsed: boolean;
   chatMode: 'Ask' | 'Explore Paths' | 'Summaries' | 'Gaps';
   showingEvidence: boolean;
   evidenceNodeIds: Set<string>;
@@ -94,6 +95,7 @@ type ChatAction =
   | { type: 'SET_EDITED_ANSWER'; payload: string }
   | { type: 'SET_CHAT_EXPANDED'; payload: boolean }
   | { type: 'SET_CHAT_MAXIMIZED'; payload: boolean }
+  | { type: 'SET_CHAT_COLLAPSED'; payload: boolean }
   | { type: 'SET_CHAT_MODE'; payload: 'Ask' | 'Explore Paths' | 'Summaries' | 'Gaps' }
   | { type: 'SET_SHOWING_EVIDENCE'; payload: boolean }
   | { type: 'SET_EVIDENCE_NODE_IDS'; payload: Set<string> }
@@ -152,6 +154,7 @@ const initialState: ChatState = {
   editedAnswer: '',
   isChatExpanded: false,
   isChatMaximized: false,
+  isChatCollapsed: false,
   chatMode: 'Ask',
   showingEvidence: false,
   evidenceNodeIds: new Set(),
@@ -203,6 +206,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, isChatExpanded: action.payload };
     case 'SET_CHAT_MAXIMIZED':
       return { ...state, isChatMaximized: action.payload };
+    case 'SET_CHAT_COLLAPSED':
+      return { ...state, isChatCollapsed: action.payload };
     case 'SET_CHAT_MODE':
       return { ...state, chatMode: action.payload };
     case 'SET_SHOWING_EVIDENCE':
@@ -231,6 +236,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         chatMode: state.chatMode, // Preserve chat mode
         isChatExpanded: state.isChatExpanded, // Preserve UI state
         isChatMaximized: state.isChatMaximized,
+        isChatCollapsed: state.isChatCollapsed, // Preserve collapsed state
         chatHistory: [], // Clear history on reset
       };
     default:
@@ -289,6 +295,9 @@ export function useChatState() {
     }, []),
     setChatMaximized: useCallback((maximized: boolean) => {
       dispatch({ type: 'SET_CHAT_MAXIMIZED', payload: maximized });
+    }, []),
+    setChatCollapsed: useCallback((collapsed: boolean) => {
+      dispatch({ type: 'SET_CHAT_COLLAPSED', payload: collapsed });
     }, []),
     setChatMode: useCallback((mode: 'Ask' | 'Explore Paths' | 'Summaries' | 'Gaps') => {
       dispatch({ type: 'SET_CHAT_MODE', payload: mode });

@@ -46,7 +46,7 @@ A `.env` file has been created in the `backend/` directory with your connection 
 ```
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=Speedracer123$
+NEO4J_PASSWORD=your_password_here
 ```
 
 The backend will automatically load these settings. Just start the server:
@@ -64,7 +64,7 @@ cd /Users/sanjayanasuri/brain-web/backend
 source .venv/bin/activate
 export NEO4J_URI=bolt://localhost:7687
 export NEO4J_USER=neo4j
-export NEO4J_PASSWORD=Speedracer123$
+export NEO4J_PASSWORD=your_password_here
 python -m uvicorn main:app --reload
 ```
 

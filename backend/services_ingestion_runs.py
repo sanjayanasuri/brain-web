@@ -129,6 +129,7 @@ def update_ingestion_run_status(
     summary_counts: Optional[Dict[str, int]] = None,
     error_count: Optional[int] = None,
     errors: Optional[List[str]] = None,
+    trigger_community_build: bool = True,
 ) -> None:
     """
     Update an ingestion run's status and summary.
@@ -140,6 +141,7 @@ def update_ingestion_run_status(
         summary_counts: Optional dict with counts
         error_count: Optional error count
         errors: Optional list of error messages
+        trigger_community_build: If True and status is COMPLETED/PARTIAL with new concepts/claims, trigger community build
     """
     ensure_graph_scoping_initialized(session)
     graph_id, _ = get_active_graph_context(session)
@@ -191,6 +193,35 @@ def update_ingestion_run_status(
             )
     
     session.run(query, **params)
+    
+    # Trigger community build if requested and conditions are met
+    if trigger_community_build and status in ("COMPLETED", "PARTIAL"):
+        # Check if we have new concepts or claims that would benefit from community rebuild
+        should_build = False
+        if summary_counts:
+            concepts_created = summary_counts.get("concepts_created", 0) or summary_counts.get("concepts_updated", 0) or 0
+            claims_created = summary_counts.get("claims_created", 0) or 0
+            # Trigger if we created/updated concepts or claims
+            should_build = concepts_created > 0 or claims_created > 0
+        
+        if should_build:
+            try:
+                from services_community_build import trigger_community_build
+                graph_id, branch_id = get_active_graph_context(session)
+                # Run in background (non-blocking) - use a new session to avoid transaction conflicts
+                from db_neo4j import get_driver
+                driver = get_driver()
+                with driver.session() as build_session:
+                    trigger_community_build(
+                        session=build_session,
+                        graph_id=graph_id,
+                        branch_id=branch_id,
+                    )
+            except Exception as e:
+                # Don't fail the ingestion if community build fails
+                import logging
+                logger = logging.getLogger("brain_web")
+                logger.warning(f"[Ingestion Run] Failed to trigger community build after ingestion: {e}")
 
 
 def get_ingestion_run(session: Session, run_id: str) -> Optional[IngestionRun]:

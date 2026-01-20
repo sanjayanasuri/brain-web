@@ -25,8 +25,8 @@ class EdgarConnector(BaseConnector):
     CACHE_DIR = Path(__file__).parent.parent / "cache"
     COMPANY_TICKERS_CACHE = CACHE_DIR / "company_tickers.json"
     
-    # Forms we're interested in
-    TARGET_FORMS = ["10-K", "10-Q", "8-K"]
+    # Forms we're interested in (including amendments)
+    TARGET_FORMS = ["10-K", "10-Q", "8-K", "10-K/A", "10-Q/A", "8-K/A"]
     
     def __init__(self):
         """Initialize EDGAR connector with session and caching."""
@@ -249,14 +249,18 @@ class EdgarConnector(BaseConnector):
         # Calculate cutoff date
         cutoff_date = datetime.now() - timedelta(days=since_days)
         
-        # Process filings
+        # Process filings with amendment detection
         count = 0
+        processed_accessions = set()  # Track processed to avoid duplicates
+        
         for i in range(len(form_types)):
             if count >= limit:
                 break
             
             form_type = form_types[i]
-            if form_type not in self.TARGET_FORMS:
+            # Check if form_type matches any target form (including base forms for amendments)
+            base_form = form_type.replace("/A", "").replace("-A", "")
+            if base_form not in ["10-K", "10-Q", "8-K"]:
                 continue
             
             filing_date_str = filing_dates[i] if i < len(filing_dates) else None
@@ -272,6 +276,19 @@ class EdgarConnector(BaseConnector):
             if not accession:
                 continue
             
+            # Check if this is an amendment (ends with /A or contains -A)
+            is_amendment = form_type.endswith("/A") or "/A" in form_type or "-A" in accession
+            base_form_type = form_type.replace("/A", "").replace("-A", "")
+            
+            # For amendments, check if we've already processed the base filing
+            # If base filing exists and is newer, skip the amendment
+            # If amendment is newer, it supersedes the base
+            base_accession = accession.replace("-A", "") if is_amendment else None
+            
+            # Skip if we've already processed this exact accession
+            if accession in processed_accessions:
+                continue
+            
             # Get primary document (fallback to index.html if not available)
             primary_doc = primary_documents[i] if i < len(primary_documents) and primary_documents[i] else "index.html"
             
@@ -279,32 +296,47 @@ class EdgarConnector(BaseConnector):
             filing_url = self._get_filing_document_url(accession, primary_doc)
             
             # Extract text
-            print(f"[EDGAR] Extracting text from {form_type} filing: {accession}")
+            print(f"[EDGAR] Extracting text from {form_type} filing: {accession}" + (" (AMENDMENT)" if is_amendment else ""))
             text = self._extract_text_from_filing(filing_url)
             
             if not text or len(text) < 500:
                 print(f"[EDGAR] Warning: Filing {accession} has insufficient text, skipping")
                 continue
             
+            # Build metadata with amendment info
+            metadata = {
+                "cik": cik,
+                "accession": accession,
+                "filing_date": filing_date_str,
+                "primary_document": primary_doc,
+                "is_amendment": is_amendment,
+                "base_form_type": base_form_type if is_amendment else form_type,
+            }
+            
+            # If this is an amendment, store reference to base accession
+            if is_amendment and base_accession:
+                metadata["amends_accession"] = base_accession
+                metadata["amendment_severity"] = "HIGH"  # Amendments always high severity
+            
             # Create SourceDocument
+            title = f"{form_type} - {filing_date_str or 'Unknown Date'}"
+            if is_amendment:
+                title += " (Amendment)"
+            
             doc = SourceDocument(
                 source_type="SEC_EDGAR",
                 doc_type=form_type,
                 ticker=ticker,
                 company_name=company.get("company_name"),
-                title=f"{form_type} - {filing_date_str or 'Unknown Date'}",
+                title=title,
                 published_at=filing_date_str,
                 url=filing_url,
                 external_id=f"SEC:{cik}:{accession}:{primary_doc}",
                 raw_text=text,
-                metadata={
-                    "cik": cik,
-                    "accession": accession,
-                    "filing_date": filing_date_str,
-                    "primary_document": primary_doc
-                }
+                metadata=metadata
             )
             documents.append(doc)
+            processed_accessions.add(accession)
             count += 1
         
         print(f"[EDGAR] Fetched {len(documents)} documents for {ticker}")

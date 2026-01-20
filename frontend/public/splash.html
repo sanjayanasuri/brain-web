@@ -154,20 +154,24 @@
             let backendReady = false;
             let frontendReady = false;
 
+            // Use environment-aware URLs (fallback to localhost for development)
+            const backendUrl = window.BACKEND_URL || 'http://localhost:8000';
+            const frontendUrl = window.FRONTEND_URL || window.location.origin || 'http://localhost:3000';
+
             // Check backend
-            fetch('http://localhost:8000/')
+            fetch(`${backendUrl}/`)
                 .then(() => { backendReady = true; checkComplete(); })
                 .catch(() => setTimeout(checkServices, 1000));
 
             // Check frontend
-            fetch('http://localhost:3000/')
+            fetch(frontendUrl)
                 .then(() => { frontendReady = true; checkComplete(); })
                 .catch(() => setTimeout(checkServices, 1000));
 
             function checkComplete() {
                 if (backendReady && frontendReady) {
                     setTimeout(() => {
-                        window.location.href = 'http://localhost:3000';
+                        window.location.href = frontendUrl;
                     }, 500);
                 }
             }
@@ -178,7 +182,8 @@
 
         // Fallback: redirect after 30 seconds regardless
         setTimeout(() => {
-            window.location.href = 'http://localhost:3000';
+            const frontendUrl = window.FRONTEND_URL || window.location.origin || 'http://localhost:3000';
+            window.location.href = frontendUrl;
         }, 30000);
     </script>
 </body>

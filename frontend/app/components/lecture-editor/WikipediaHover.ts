@@ -23,25 +23,37 @@ export const WikipediaHover = Extension.create<WikipediaHoverOptions>({
   },
 
   addProseMirrorPlugins() {
-    const { enabled, minTermLength } = this.options;
+    const extension = this;
+    const { minTermLength } = this.options;
     
     return [
       new Plugin({
         key: new PluginKey('wikipediaHover'),
         state: {
           init() {
-            return DecorationSet.empty;
+            // Store both decorations and last enabled state
+            return { decorations: DecorationSet.empty, lastEnabled: extension.options.enabled };
           },
-          apply(tr, set, oldState, newState) {
+          apply(tr, value, oldState, newState) {
+            // Read enabled from extension options dynamically (not captured in closure)
+            const enabled = extension.options.enabled;
+            const lastEnabled = value.lastEnabled;
+            
+            // Check if enabled state changed
+            const enabledChanged = enabled !== lastEnabled;
+            
+            // If disabled, return empty decorations
             if (!enabled) {
-              return DecorationSet.empty;
+              return { decorations: DecorationSet.empty, lastEnabled: enabled };
             }
 
-            // Recalculate on document changes
-            const shouldRecalculate = !tr.doc.eq(oldState.doc);
+            // Recalculate on document changes OR if enabled state changed OR forced update
+            const shouldRecalculate = !tr.doc.eq(oldState.doc) || enabledChanged || tr.getMeta('forceWikipediaHoverUpdate');
             
+            let set = value.decorations;
             if (!shouldRecalculate) {
-              return set.map(tr.mapping, tr.doc);
+              set = set.map(tr.mapping, tr.doc);
+              return { decorations: set, lastEnabled: enabled };
             }
 
             set = DecorationSet.empty;
@@ -97,12 +109,13 @@ export const WikipediaHover = Extension.create<WikipediaHoverOptions>({
               }
             });
 
-            return DecorationSet.create(tr.doc, decorations);
+            const newDecorations = DecorationSet.create(tr.doc, decorations);
+            return { decorations: newDecorations, lastEnabled: enabled };
           },
         },
         props: {
           decorations(state) {
-            return this.getState(state);
+            return this.getState(state).decorations;
           },
         },
       }),

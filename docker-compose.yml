@@ -26,17 +26,68 @@ services:
     restart: unless-stopped
     depends_on:
       - neo4j
+      - qdrant
+      - postgres
+      - redis
     environment:
       - NODE_ENV=development
       - PORT=8000
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=${NEO4J_USER:-neo4j}
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-brainweb}
+      - POSTGRES_USER=${POSTGRES_USER:-brainweb}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-brainweb}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - ENABLE_NOTION_AUTO_SYNC=false
-      - DEMO_MODE=false
     ports:
       - "8000:8000"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: brainweb-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"  # HTTP API
+      - "6334:6334"  # gRPC
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: brainweb-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-brainweb}
+      - POSTGRES_USER=${POSTGRES_USER:-brainweb}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-brainweb}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    command: postgres -c shared_preload_libraries=timescaledb
+
+  redis:
+    image: redis:7-alpine
+    container_name: brainweb-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
 
 volumes:
   neo4j-data:
   neo4j-logs:
+  qdrant-data:
+  postgres-data:
+  redis-data:

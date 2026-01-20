@@ -1,46 +1,34 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import GraphVisualization from './components/graph/GraphVisualization';
-import LandingPage from './components/landing/LandingPage';
 
-export default function Home() {
-  const [showLanding, setShowLanding] = useState(true);
-  const [hasVisited, setHasVisited] = useState(false);
-
+// Show explorer if query params exist, otherwise redirect to /home
+// Middleware should handle redirect, but this is a fallback
+export default function RootPage() {
+  const router = useRouter();
+  
   useEffect(() => {
-    // Check if user has visited before (stored in sessionStorage)
-    const visited = sessionStorage.getItem('brain-web-visited');
-    if (visited === 'true') {
-      setShowLanding(false);
-      setHasVisited(true);
+    // Use window.location to avoid hydration issues with useSearchParams
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const hasExplorerParams = 
+        params.has('select') || 
+        params.has('graph_id') || 
+        params.has('chat');
+      
+      // If no explorer params, redirect to /home (fallback if middleware didn't catch it)
+      if (!hasExplorerParams) {
+        router.replace('/home');
+      }
     }
-  }, []);
-
-  const handleEnter = () => {
-    sessionStorage.setItem('brain-web-visited', 'true');
-    setShowLanding(false);
-  };
-
-  if (showLanding) {
-    return <LandingPage onEnter={handleEnter} />;
-  }
-
+  }, [router]);
+  
+  // Always render the explorer - if we reach here, middleware should have allowed it
+  // (meaning there are query params). If not, the useEffect will redirect.
   return (
-    <main style={{ 
-      opacity: hasVisited ? 1 : 0,
-      animation: hasVisited ? 'none' : 'fadeIn 0.5s ease-in forwards',
-    }}>
-      <style jsx>{`
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-      `}</style>
+    <main>
       <GraphVisualization />
     </main>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import type { BranchSummary, GraphSummary } from '../../api-client';
 import SearchBox from '../topbar/SearchBox';
 
@@ -90,132 +90,75 @@ export default function ExplorerToolbar(props: Props) {
     onSourceLayerChange,
   } = props;
 
+  const [actionStatus, setActionStatus] = useState<{ type: 'added' | 'deleted' | 'edited' | null; timestamp: number }>({ type: null, timestamp: 0 });
+
+  // Listen for action events from window
+  useEffect(() => {
+    let timeoutId: NodeJS.Timeout | null = null;
+    
+    const handleAction = (event: CustomEvent) => {
+      const actionType = event.detail?.type;
+      if (actionType === 'added' || actionType === 'deleted' || actionType === 'edited') {
+        // Clear any existing timeout
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+        
+        const timestamp = Date.now();
+        setActionStatus({ type: actionType, timestamp });
+        
+        // Clear after 3 seconds
+        timeoutId = setTimeout(() => {
+          setActionStatus(prev => {
+            // Only clear if this is still the same status
+            if (prev.timestamp === timestamp) {
+              return { type: null, timestamp: 0 };
+            }
+            return prev;
+          });
+        }, 3000);
+      }
+    };
+
+    window.addEventListener('graph-action' as any, handleAction as EventListener);
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      window.removeEventListener('graph-action' as any, handleAction as EventListener);
+    };
+  }, []);
+
   return (
     <div className="explorer-toolbar">
-      <div className="explorer-toolbar__row" style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-        {/* Left: Stats (moved from right) */}
-        <div className="explorer-toolbar__group" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-          <div className="explorer-toolbar__stats">
-            <div className="explorer-stat">
-              <div className="explorer-stat__label">Nodes</div>
-              <div className="explorer-stat__value">{nodesCount}</div>
-            </div>
-            <div className="explorer-stat">
-              <div className="explorer-stat__label">Links</div>
-              <div className="explorer-stat__value">{linksCount}</div>
-            </div>
-            <div className="explorer-stat">
-              <div className="explorer-stat__label">Domains</div>
-              <div className="explorer-stat__value">{domainsCount}</div>
-            </div>
-            {overviewMeta?.sampled && (
-              <div className="explorer-stat" style={{ fontSize: '11px', opacity: 0.7 }} title={`Overview loaded (${overviewMeta.node_count || '?'} total nodes)`}>
-                Overview
-              </div>
-            )}
-            {loadingNeighbors && (
-              <div className="explorer-stat" style={{ fontSize: '11px', opacity: 0.7 }}>
-                Loading neighbors...
-              </div>
-            )}
-          </div>
-
-          {/* Source Layer Toggle */}
-          {onSourceLayerChange && (
-            <div className="explorer-toolbar__field" style={{ marginLeft: '12px' }}>
-              <label className="explorer-toolbar__label">View</label>
-              <div className="explorer-toolbar__buttons" style={{ display: 'flex', gap: '4px' }}>
-                <button
-                  type="button"
-                  className={`pill pill--small ${sourceLayer === 'concepts' ? 'pill--active' : 'pill--ghost'}`}
-                  onClick={() => onSourceLayerChange('concepts')}
-                  title="Show all concepts"
-                >
-                  Concepts
-                </button>
-                <button
-                  type="button"
-                  className={`pill pill--small ${sourceLayer === 'evidence' ? 'pill--active' : 'pill--ghost'}`}
-                  onClick={() => onSourceLayerChange('evidence')}
-                  title="Highlight nodes with attached resources"
-                >
-                  Evidence
-                </button>
-                <button
-                  type="button"
-                  className={`pill pill--small ${sourceLayer === 'snapshots' ? 'pill--active' : 'pill--ghost'}`}
-                  onClick={() => onSourceLayerChange('snapshots')}
-                  title="Show live snapshots and recency"
-                >
-                  Live
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Center: Search box */}
-        <div style={{ flex: 1, maxWidth: '600px', margin: '0 auto', minWidth: 0 }}>
+      <div className="explorer-toolbar__row" style={{ display: 'flex', alignItems: 'center', gap: '16px', width: '100%' }}>
+        {/* Center: Search box - takes up most of the space */}
+        <div style={{ flex: 1, minWidth: 0, maxWidth: 'none' }}>
           <SearchBox
             activeGraphId={activeGraphId}
             graphs={graphs}
-            placeholder="Search or type a command…"
+            placeholder="Search, add nodes, delete nodes, or type a command…"
           />
         </div>
 
-        {/* Right: Controls */}
-        <div className="explorer-toolbar__group explorer-toolbar__group--right" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-          <div className="explorer-toolbar__buttons" style={{ display: 'flex', gap: '6px' }}>
-            {canFocus && (
-              <button
-                type="button"
-                className="pill pill--ghost explorer-btn explorer-btn--ghost"
-                onClick={onFocus}
-                title="Center camera on selected node"
-              >
-                Focus
-              </button>
-            )}
-            {demoMode ? null : (
-              <div style={{ position: 'relative' }}>
-                <button
-                  type="button"
-                  className={`pill explorer-btn explorer-btn--ghost ${showContentIngest ? 'pill--active' : ''}`}
-                  onClick={onToggleContentIngest}
-                  aria-label={showContentIngest ? 'Hide add content panel' : 'Show add content panel'}
-                  title={showContentIngest ? 'Hide add content panel' : 'Show add content panel'}
-                >
-                  {showContentIngest ? '−' : '+'} Add Content
-                </button>
-                {showContentIngest && contentIngestPopover}
-              </div>
-            )}
-
+        {/* Right: Confirmation button */}
+        {!demoMode && actionStatus.type && (
+          <div style={{ flexShrink: 0 }}>
             <button
               type="button"
-              className={`pill explorer-btn ${focusMode ? 'explorer-btn--primary' : 'explorer-btn--ghost'}`}
-              onClick={onToggleFocusMode}
-              title="Dim everything except the selected neighborhood"
+              className="pill explorer-btn explorer-btn--primary"
+              style={{
+                minWidth: '120px',
+                padding: '12px 24px',
+                fontSize: '16px',
+                fontWeight: '600',
+                textTransform: 'capitalize',
+              }}
             >
-              Focus Mode
+              {actionStatus.type}
             </button>
-
-            <button type="button" className="pill explorer-btn explorer-btn--ghost" onClick={onToggleControls}>
-              {showControls ? 'Hide controls' : 'Show controls'}
-            </button>
-
-            {onToggleFilters && (
-              <button 
-                type="button" 
-                className={`pill explorer-btn ${showFilters ? 'explorer-btn--primary' : 'explorer-btn--ghost'}`}
-                onClick={onToggleFilters}
-                title="Filter relationships by status, confidence, and source"
-              >
-                Filters
-              </button>
-            )}
           </div>
-        </div>
+        )}
       </div>
 
       {graphSwitchError ? (

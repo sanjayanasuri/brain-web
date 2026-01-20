@@ -18,12 +18,19 @@ from api_concepts import router as concepts_router
 from api_ai import router as ai_router
 from api_retrieval import router as retrieval_router
 from api_lectures import router as lectures_router
+from api_mentions import router as mentions_router
 from api_admin import router as admin_router
 from api_notion import router as notion_router
 from api_preferences import router as preferences_router
 from api_feedback import router as feedback_router
 from api_teaching_style import router as teaching_style_router
-from api_debug import router as debug_router
+# Debug router - only include in development
+debug_router = None
+if os.getenv("NODE_ENV", "development") != "production":
+    try:
+        from api_debug import router as debug_router
+    except ImportError:
+        pass
 from api_answers import router as answers_router
 from api_resources import router as resources_router
 from api_tests import router as tests_router
@@ -44,28 +51,29 @@ from api_quality import router as quality_router
 from api_web_ingestion import router as web_ingestion_router
 from api_quotes import router as quotes_router
 from api_claims_from_quotes import router as claims_from_quotes_router
+from api_signals import router as signals_router
+from api_voice import router as voice_router
 from api_extend import router as extend_router
 from api_trails import router as trails_router
 from api_offline import router as offline_router
 from api_sync import router as sync_router
+from api_dashboard import router as dashboard_router
+from api_exams import router as exams_router
+from api_calendar import router as calendar_router
+from api_scheduler import tasks_router, schedule_router
 
 
-from demo_mode import (
-    FixedWindowRateLimiter,
-    enforce_demo_mode_request,
-    get_or_create_session_id,
-    get_client_ip,
-    load_demo_settings,
-    set_session_cookie,
-    structured_log_line,
+from auth import (
+    get_user_context_from_request,
+    is_public_endpoint,
+    require_auth,
 )
+from middleware_timeout import TimeoutMiddleware
+from config import REQUEST_TIMEOUT_SECONDS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("brain_web")
-
-demo_settings = load_demo_settings()
-rate_limiter = FixedWindowRateLimiter()
 
 def _is_tcp_reachable(host: str, port: int, timeout_s: float = 0.4) -> bool:
     """
@@ -88,17 +96,12 @@ async def lifespan(app: FastAPI):
     # Startup
     try:
         from config import NEO4J_URI
-        from config import DEMO_MODE
 
         parsed = urlparse(NEO4J_URI)
         neo4j_host = parsed.hostname or "localhost"
         neo4j_port = parsed.port or 7687
 
-        if DEMO_MODE:
-            msg = "DEMO_MODE enabled; skipping CSV auto-import on startup."
-            print(f"[SYNC] ⚠ {msg}")
-            logger.info(structured_log_line({"event": "startup_skip_import", "reason": "demo_mode"}))
-        elif not _is_tcp_reachable(neo4j_host, neo4j_port):
+        if not _is_tcp_reachable(neo4j_host, neo4j_port):
             msg = f"Neo4j not reachable at {neo4j_host}:{neo4j_port}; skipping CSV auto-import."
             print(f"[SYNC] ⚠ {msg}")
             logger.warning(msg)
@@ -116,9 +119,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during CSV auto-import: {e}", exc_info=True)
         # Don't crash the app if import fails
     
-    # Start Notion auto-sync background loop if enabled (dev-only; never in demo mode)
-    from config import ENABLE_NOTION_AUTO_SYNC, DEMO_MODE
-    if ENABLE_NOTION_AUTO_SYNC and not DEMO_MODE:
+    # Start Notion auto-sync background loop if enabled
+    from config import ENABLE_NOTION_AUTO_SYNC
+    if ENABLE_NOTION_AUTO_SYNC:
         import asyncio
         from notion_sync import sync_once
         
@@ -143,10 +146,42 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(notion_sync_loop())
         print("[Notion Sync] Background auto-sync enabled (runs every 5 minutes)")
     
+    # Start event projection background task queue
+    try:
+        from events.background import get_task_queue
+        get_task_queue()  # Initialize and start worker
+        print("[Events] Background projection task queue started")
+    except Exception as e:
+        print(f"[Events] ⚠ Failed to start projection queue: {e}")
+        logger.warning(f"Failed to start event projection queue: {e}")
+    
+    # Start AI task queue for voice commands and background tasks
+    try:
+        from services_task_queue import get_task_queue as get_ai_task_queue
+        get_ai_task_queue()  # Initialize and start worker
+        print("[Tasks] Background AI task queue started")
+    except Exception as e:
+        print(f"[Tasks] ⚠ Failed to start AI task queue: {e}")
+        logger.warning(f"Failed to start AI task queue: {e}")
+    
     yield  # App runs here
     
-    # Shutdown (if needed in the future)
-    pass
+    # Shutdown
+    try:
+        from events.background import _task_queue
+        if _task_queue:
+            _task_queue.stop_worker()
+            print("[Events] Background projection task queue stopped")
+    except Exception:
+        pass
+    
+    try:
+        from services_task_queue import _task_queue as ai_task_queue
+        if ai_task_queue:
+            ai_task_queue.stop_worker()
+            print("[Tasks] Background AI task queue stopped")
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -188,10 +223,14 @@ app.add_middleware(
     **cors_kwargs,
 )
 
+# Add timeout middleware (after CORS, before auth)
+app.add_middleware(TimeoutMiddleware)
+
 app.include_router(concepts_router)
 app.include_router(ai_router)
 app.include_router(retrieval_router)
 app.include_router(lectures_router)
+app.include_router(mentions_router)
 app.include_router(preferences_router)
 app.include_router(feedback_router)
 app.include_router(teaching_style_router)
@@ -214,6 +253,9 @@ app.include_router(web_ingestion_router)
 # Phase 2: Evidence Graph endpoints
 app.include_router(quotes_router)
 app.include_router(claims_from_quotes_router)
+# Learning State Engine: Signals and Voice
+app.include_router(signals_router)
+app.include_router(voice_router)
 # Phase 3: Extend system
 app.include_router(extend_router)
 # Phase 4: Trails system
@@ -222,33 +264,86 @@ app.include_router(trails_router)
 app.include_router(offline_router)
 # Sync system (capture selection, events)
 app.include_router(sync_router)
+# Dashboard and study analytics
+app.include_router(dashboard_router)
+app.include_router(exams_router)
+# Calendar events (native calendar functionality)
+app.include_router(calendar_router)
+# Smart Scheduler (tasks and plan suggestions)
+app.include_router(tasks_router)
+app.include_router(schedule_router)
+# Unified workflows (Capture → Explore → Synthesize)
+from api_workflows import router as workflows_router
+app.include_router(workflows_router)
+# Session events and context API
+from api_sessions_events import router as sessions_events_router
+app.include_router(sessions_events_router)
+from api_sessions_websocket import router as sessions_websocket_router
+app.include_router(sessions_websocket_router)
+# Session events and context API
+app.include_router(sessions_events_router)
 
-# In demo mode we do not mount private/admin/debug/test/ingestion surfaces.
-if not demo_settings.demo_mode:
-    app.include_router(admin_router)
-    app.include_router(notion_router)
+# Include all routers
+app.include_router(admin_router)
+app.include_router(notion_router)
+if debug_router:
     app.include_router(debug_router)
-    app.include_router(tests_router)
-    app.include_router(connectors_router)
-    app.include_router(finance_ingestion_router)
-    app.include_router(ingestion_runs_router)
+app.include_router(tests_router)
+app.include_router(connectors_router)
+app.include_router(finance_ingestion_router)
+app.include_router(ingestion_runs_router)
 
 
 @app.middleware("http")
-async def demo_gate_and_observability(request: Request, call_next):
+async def auth_middleware(request: Request, call_next):
+    """
+    Authentication middleware.
+    
+    Flow:
+    1. Extract request metadata (request_id, session_id, client_ip)
+    2. Check if endpoint is public (skip auth if so)
+    3. Extract user/tenant context from auth token
+    4. Attach context to request.state for downstream use
+    5. Log request metrics
+    """
     start = time.perf_counter()
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
-    session_id = get_or_create_session_id(request)
-    client_ip = get_client_ip(request)
+    session_id = request.headers.get("x-session-id") or request.cookies.get("bw_session_id") or uuid.uuid4().hex
+    client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "unknown")
 
-    # Attach context for downstream usage
+    # Attach basic context
     request.state.request_id = request_id
     request.state.session_id = session_id
     request.state.client_ip = client_ip
-    request.state.tenant_id = demo_settings.tenant_id if demo_settings.demo_mode else request.headers.get("x-tenant-id")
+
+    # Check authentication for non-public endpoints
+    path = request.url.path
+    user_context = None
+    
+    if is_public_endpoint(path):
+        # Public endpoint - no auth required
+        user_context = {
+            "user_id": None,
+            "tenant_id": None,
+            "is_authenticated": False,
+        }
+    else:
+        # Extract user context from auth token
+        user_context = get_user_context_from_request(request)
+        
+        # If not authenticated, require auth
+        if not user_context["is_authenticated"]:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"}
+            )
+    
+    # Attach user/tenant context to request state
+    request.state.user_id = user_context.get("user_id")
+    request.state.tenant_id = user_context.get("tenant_id") or request.headers.get("x-tenant-id")
+    request.state.is_authenticated = user_context.get("is_authenticated", False)
 
     try:
-        enforce_demo_mode_request(request, demo_settings, rate_limiter)
         response = await call_next(request)
     except HTTPException as e:
         response = JSONResponse(status_code=e.status_code, content={"detail": e.detail})
@@ -259,27 +354,22 @@ async def demo_gate_and_observability(request: Request, call_next):
         latency_ms = int((time.perf_counter() - start) * 1000)
         status_code = getattr(locals().get("response"), "status_code", 500)
 
-        logger.info(
-            structured_log_line(
-                {
-                    "event": "request",
-                    "request_id": request_id,
-                    "session_id": session_id,
-                    "route": request.url.path,
-                    "method": request.method,
-                    "status": status_code,
-                    "latency_ms": latency_ms,
-                    "tenant_id": request.state.tenant_id if hasattr(request.state, "tenant_id") else None,
-                    "demo_mode": demo_settings.demo_mode,
-                    "allow_writes": demo_settings.allow_writes,
-                }
-            )
-        )
+        log_data = {
+            "event": "request",
+            "request_id": request_id,
+            "session_id": session_id,
+            "route": path,
+            "method": request.method,
+            "status": status_code,
+            "latency_ms": latency_ms,
+            "user_id": request.state.user_id if hasattr(request.state, "user_id") else None,
+            "tenant_id": request.state.tenant_id if hasattr(request.state, "tenant_id") else None,
+            "is_authenticated": request.state.is_authenticated if hasattr(request.state, "is_authenticated") else False,
+        }
+        logger.info(json.dumps(log_data, separators=(",", ":"), ensure_ascii=False))
 
-    # Ensure session cookie exists
+    # Set response headers
     if isinstance(response, Response):
-        if request.cookies.get("bw_session_id") != session_id:
-            set_session_cookie(response, session_id)
         response.headers["x-request-id"] = request_id
     return response
 
@@ -321,9 +411,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             },
         )
     
-    from config import DEMO_MODE
-    if DEMO_MODE and exc.status_code >= 500:
-        return JSONResponse(status_code=exc.status_code, content={"detail": "Internal server error"})
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 

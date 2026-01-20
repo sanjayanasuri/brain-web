@@ -15,6 +15,7 @@ from services_branch_explorer import ensure_graph_scoping_initialized, get_activ
 from verticals.base import RetrievalRequest
 from cache_utils import get_cached, set_cached
 from typing import List, Optional
+from auth import require_auth
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -27,7 +28,7 @@ class EvidenceSubgraphRequest(BaseModel):
 
 
 @router.post("/chat", response_model=AIChatResponse)
-def ai_chat(payload: AIChatRequest):
+def ai_chat(payload: AIChatRequest, auth: dict = Depends(require_auth)):
     """
     Stub endpoint for AI chat.
 
@@ -41,7 +42,11 @@ def ai_chat(payload: AIChatRequest):
 
 
 @router.post("/semantic-search", response_model=SemanticSearchResponse)
-def semantic_search(payload: SemanticSearchRequest, session=Depends(get_neo4j_session)):
+def semantic_search(
+    payload: SemanticSearchRequest,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     """
     Performs semantic search over the knowledge graph.
     Returns the most relevant nodes based on the query.
@@ -56,7 +61,8 @@ def semantic_search(payload: SemanticSearchRequest, session=Depends(get_neo4j_se
 @router.post("/semantic-search-communities", response_model=SemanticSearchCommunitiesResponse)
 def semantic_search_communities_endpoint(
     payload: SemanticSearchCommunitiesRequest,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Performs semantic search over communities using summary embeddings.
@@ -87,7 +93,8 @@ def semantic_search_communities_endpoint(
 @router.post("/graphrag-context", response_model=GraphRAGContextResponse)
 def graphrag_context_endpoint(
     payload: GraphRAGContextRequest,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Retrieves GraphRAG context: communities -> claims -> evidence subgraph.
@@ -147,7 +154,8 @@ def graphrag_context_endpoint(
             session=session,
             graph_id=payload.graph_id,
             branch_id=payload.branch_id,
-            question=payload.message
+            question=payload.message,
+            evidence_strictness=payload.evidence_strictness or "medium",
         )
         
         # Build debug info
@@ -156,6 +164,7 @@ def graphrag_context_endpoint(
             "claims": len(context["claims"]),
             "concepts": len(context["concepts"]),
             "edges": len(context["edges"]),
+            "has_evidence": context.get("has_evidence", True),
         }
         
         response = GraphRAGContextResponse(
@@ -171,7 +180,8 @@ def graphrag_context_endpoint(
 @router.post("/evidence-subgraph")
 def evidence_subgraph_endpoint(
     payload: EvidenceSubgraphRequest,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Get evidence subgraph for given claim IDs.

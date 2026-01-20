@@ -9,6 +9,7 @@ from typing import List, Optional
 from neo4j import Session
 
 from db_neo4j import get_neo4j_session
+from auth import require_auth
 from services_finance_ingestion import ingest_finance_sources
 from services_branch_explorer import (
     ensure_graph_scoping_initialized,

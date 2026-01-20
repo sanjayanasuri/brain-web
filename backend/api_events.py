@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 
 import boto3
 
-from demo_mode import structured_log_line, get_or_create_session_id
+import json
+import uuid
 from db_neo4j import get_neo4j_session
 from neo4j import Session
 import logging
@@ -69,7 +70,7 @@ def ingest_event(payload: ProductEvent, request: Request):
         stored = False
 
     logger.info(
-        structured_log_line(
+        json.dumps(
             {
                 "event": "product_event",
                 "stored": stored,
@@ -77,7 +78,9 @@ def ingest_event(payload: ProductEvent, request: Request):
                 "session_id": session_id,
                 "request_id": request_id,
                 "tenant_id": tenant_id,
-            }
+            },
+            separators=(",", ":"),
+            ensure_ascii=False
         )
     )
 

@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { searchConcepts, searchResources, getConcept, type Concept, type Resource } from '../../api-client';
+import { searchConcepts, searchResources, getConcept, createConcept, deleteConcept, createRelationshipByIds, selectGraph, type Concept, type Resource, type GraphSummary } from '../../api-client';
 import { getRecentConceptViews } from '../../lib/sessionState';
 import { fetchRecentEvents } from '../../lib/eventsClient';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
@@ -38,7 +39,7 @@ type SearchResult = ConceptSearchResult | EvidenceSearchResult | ActionSearchRes
 
 interface SearchBoxProps {
   activeGraphId: string;
-  graphs: Array<{ graph_id: string; name?: string; node_count?: number; edge_count?: number; updated_at?: string }>;
+  graphs: GraphSummary[];
   onSelectResult?: (result: SearchResult) => void;
   placeholder?: string;
   style?: React.CSSProperties;
@@ -55,6 +56,12 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchDropdownRef = useRef<HTMLDivElement>(null);
   const searchAbortControllerRef = useRef<AbortController | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  // Ensure we're mounted before rendering portal
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Cmd/Ctrl+K shortcut to focus search
   useEffect(() => {
@@ -116,7 +123,211 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
     }
   }, [searchQuery, searchFocused, loadRecents]);
 
-  // Search with debounce
+  // Handle graph modification commands
+  const handleCommand = useCallback(async (command: string, args: string[]) => {
+    const baseCommand = command.toLowerCase();
+    
+    try {
+      if (baseCommand === 'add' || baseCommand === 'create') {
+        // Parse: /add node "Name" [domain] or /add "Name" [domain] or /add node Name [domain]
+        let nodeName = '';
+        let domain = 'general';
+        
+        if (args.length > 0) {
+          // Check if first arg is "node"
+          if (args[0]?.toLowerCase() === 'node' && args.length > 1) {
+            nodeName = args[1];
+            domain = args[2] || 'general';
+          } else {
+            // First arg is the node name
+            nodeName = args[0];
+            domain = args[1] || 'general';
+          }
+        }
+        
+        if (!nodeName) {
+          setSearchResults([{
+            type: 'action',
+            id: 'add-node-prompt',
+            label: 'Add Node',
+            description: 'Enter node name and domain (e.g., "NodeName domain")',
+            command: command,
+          }]);
+          return;
+        }
+        
+        if (activeGraphId) {
+          await selectGraph(activeGraphId);
+          const newConcept = await createConcept({
+            name: nodeName,
+            domain: domain,
+            type: 'concept',
+            graph_id: activeGraphId,
+          });
+          // Dispatch event for confirmation button
+          window.dispatchEvent(new CustomEvent('graph-action', { detail: { type: 'added' } }));
+          // Navigate to the new node
+          const params = new URLSearchParams();
+          params.set('select', newConcept.node_id);
+          if (activeGraphId) {
+            params.set('graph_id', activeGraphId);
+          }
+          router.push(`/?${params.toString()}`);
+          setSearchQuery('');
+          setSearchFocused(false);
+        }
+      } else if (baseCommand === 'remove' || baseCommand === 'delete') {
+        // Parse: /remove node "Name" or /delete node "Name" or /remove "Name" or /delete "Name"
+        let nodeName = '';
+        
+        if (args.length > 0) {
+          // Check if first arg is "node"
+          if (args[0]?.toLowerCase() === 'node' && args.length > 1) {
+            nodeName = args[1];
+          } else {
+            nodeName = args[0];
+          }
+        }
+        
+        if (!nodeName) {
+          setSearchResults([{
+            type: 'action',
+            id: 'remove-node-prompt',
+            label: 'Remove Node',
+            description: 'Enter node name to remove',
+            command: command,
+          }]);
+          return;
+        }
+        
+        if (activeGraphId) {
+          await selectGraph(activeGraphId);
+          // Search for the concept
+          const searchResults = await searchConcepts(nodeName, activeGraphId, 5);
+          const concept = searchResults.results.find(c => 
+            c.name.toLowerCase() === nodeName.toLowerCase()
+          ) || searchResults.results[0];
+          
+          if (!concept) {
+            setSearchResults([{
+              type: 'action',
+              id: 'node-not-found',
+              label: 'Node not found',
+              description: `Could not find node "${nodeName}"`,
+              command: command,
+            }]);
+            return;
+          }
+          
+          // Confirm deletion
+          if (confirm(`Are you sure you want to delete "${concept.name}"? This will remove the node and all its relationships.`)) {
+            await deleteConcept(concept.node_id);
+            // Dispatch event for confirmation button
+            window.dispatchEvent(new CustomEvent('graph-action', { detail: { type: 'deleted' } }));
+            // Navigate back to explorer
+            const params = new URLSearchParams();
+            if (activeGraphId) {
+              params.set('graph_id', activeGraphId);
+            }
+            router.push(`/?${params.toString()}`);
+            setSearchQuery('');
+            setSearchFocused(false);
+          }
+        }
+      } else if (baseCommand === 'link' || baseCommand === 'connect') {
+        // Parse: /link "Source" to "Target" or /link "Source" "Target" or /link Source Target
+        let sourceName = '';
+        let targetName = '';
+        
+        if (args.length >= 2) {
+          sourceName = args[0];
+          // Check if second arg is "to"
+          if (args[1]?.toLowerCase() === 'to' && args.length >= 3) {
+            targetName = args[2];
+          } else {
+            targetName = args[1];
+          }
+        }
+        
+        if (!sourceName || !targetName) {
+          setSearchResults([{
+            type: 'action',
+            id: 'link-node-prompt',
+            label: 'Link Nodes',
+            description: 'Enter source and target node names (e.g., "Source to Target")',
+            command: command,
+          }]);
+          return;
+        }
+        
+        if (activeGraphId) {
+          await selectGraph(activeGraphId);
+          // Search for both concepts
+          const [sourceResults, targetResults] = await Promise.all([
+            searchConcepts(sourceName, activeGraphId, 5),
+            searchConcepts(targetName, activeGraphId, 5),
+          ]);
+          
+          const sourceConcept = sourceResults.results.find(c => 
+            c.name.toLowerCase() === sourceName.toLowerCase()
+          ) || sourceResults.results[0];
+          
+          const targetConcept = targetResults.results.find(c => 
+            c.name.toLowerCase() === targetName.toLowerCase()
+          ) || targetResults.results[0];
+          
+          if (!sourceConcept) {
+            setSearchResults([{
+              type: 'action',
+              id: 'source-not-found',
+              label: 'Source node not found',
+              description: `Could not find "${sourceName}"`,
+              command: command,
+            }]);
+            return;
+          }
+          if (!targetConcept) {
+            setSearchResults([{
+              type: 'action',
+              id: 'target-not-found',
+              label: 'Target node not found',
+              description: `Could not find "${targetName}"`,
+              command: command,
+            }]);
+            return;
+          }
+          
+          // Create relationship (default predicate: "related_to")
+          await createRelationshipByIds(
+            sourceConcept.node_id,
+            targetConcept.node_id,
+            'related_to'
+          );
+          
+          // Navigate to show the link
+          const params = new URLSearchParams();
+          params.set('select', sourceConcept.node_id);
+          if (activeGraphId) {
+            params.set('graph_id', activeGraphId);
+          }
+          router.push(`/?${params.toString()}`);
+          setSearchQuery('');
+          setSearchFocused(false);
+        }
+      }
+    } catch (err) {
+      console.error('Command failed:', err);
+      setSearchResults([{
+        type: 'action',
+        id: 'command-error',
+        label: 'Command failed',
+        description: err instanceof Error ? err.message : 'Unknown error',
+        command: command,
+      }]);
+    }
+  }, [activeGraphId, router]);
+
+  // Search with debounce and command detection
   useEffect(() => {
     if (!searchQuery.trim()) {
       if (!searchFocused) {
@@ -138,27 +349,65 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
     const timeoutId = setTimeout(async () => {
       try {
         const query = searchQuery.trim();
+        const isCommand = query.startsWith('/') || query.startsWith('>');
         
-        // Search concepts
-        const concepts = await searchConcepts(query, activeGraphId, 5);
-        const conceptResults: ConceptSearchResult[] = concepts.map(c => ({ type: 'concept', concept: c }));
+        if (isCommand) {
+          // Parse command
+          const commandPart = query.slice(1).trim();
+          const [baseCommand, ...args] = commandPart.split(/\s+/);
+          
+          // Handle commands
+          await handleCommand(baseCommand, args);
+          setSearchLoading(false);
+          return;
+        }
         
-        // Search resources
-        const resources = await searchResources(query, activeGraphId, 3);
-        const resourceResults: EvidenceSearchResult[] = resources.map(r => ({ 
-          type: 'evidence', 
-          resource: r,
-          concept_id: r.concept_id,
-          concept_name: r.concept_name,
-        }));
+        // Regular search - prioritize concepts
+        // Search concepts (show more results for better matching)
+        if (!activeGraphId) {
+          console.warn('[SearchBox] No activeGraphId provided, searching all graphs');
+        }
+        
+        const conceptsResult = await searchConcepts(query, activeGraphId || undefined, 10);
+        const conceptResults: ConceptSearchResult[] = (conceptsResult?.results || []).map(c => ({ type: 'concept', concept: c }));
+        
+        // Search resources (show fewer, as concepts are prioritized)
+        let resourceResults: EvidenceSearchResult[] = [];
+        try {
+          const resources = await searchResources(query, activeGraphId || undefined, 2);
+          resourceResults = (resources || []).map(r => ({ 
+            type: 'evidence', 
+            resource: r,
+            concept_id: r.concept_id,
+            concept_name: r.concept_name,
+          }));
+        } catch (resourceErr) {
+          console.warn('[SearchBox] Resource search failed:', resourceErr);
+          // Continue without resources
+        }
 
         if (!abortController.signal.aborted) {
-          setSearchResults([...conceptResults, ...resourceResults]);
+          // Prioritize concepts - show them first
+          const allResults = [...conceptResults, ...resourceResults];
+          console.log('[SearchBox] Search complete:', {
+            query,
+            activeGraphId,
+            conceptCount: conceptResults.length,
+            resourceCount: resourceResults.length,
+            totalResults: allResults.length,
+          });
+          setSearchResults(allResults);
           setSelectedResultIndex(-1);
         }
       } catch (err) {
         if (!abortController.signal.aborted) {
-          console.warn('Search failed:', err);
+          console.error('Search failed:', err);
+          console.error('Error details:', {
+            query,
+            activeGraphId,
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
           setSearchResults([]);
         }
       } finally {
@@ -174,7 +423,7 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
         searchAbortControllerRef.current.abort();
       }
     };
-  }, [searchQuery, activeGraphId]);
+  }, [searchQuery, activeGraphId, handleCommand]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
@@ -216,9 +465,9 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
     }
   }, [searchResults, selectedResultIndex, activeGraphId, router]);
 
-  // Calculate dropdown position when focused
+  // Calculate dropdown position when focused or when there's a query
   useEffect(() => {
-    if (searchFocused && searchInputRef.current) {
+    if ((searchFocused || searchQuery.trim()) && searchInputRef.current) {
       const updatePosition = () => {
         if (searchInputRef.current) {
           const rect = searchInputRef.current.getBoundingClientRect();
@@ -241,7 +490,7 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
     } else {
       setDropdownPosition(null);
     }
-  }, [searchFocused]);
+  }, [searchFocused, searchQuery]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -264,7 +513,13 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
         type="text"
         placeholder={placeholder}
         value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
+        onChange={(e) => {
+          setSearchQuery(e.target.value);
+          // Auto-focus when typing starts
+          if (e.target.value.trim() && !searchFocused) {
+            setSearchFocused(true);
+          }
+        }}
         onFocus={() => setSearchFocused(true)}
         onKeyDown={handleKeyDown}
         style={{
@@ -282,8 +537,8 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
         }}
       />
       
-      {/* Search dropdown */}
-      {searchFocused && (searchResults.length > 0 || searchLoading) && dropdownPosition && (
+      {/* Search dropdown - show when typing or focused */}
+      {mounted && searchQuery.trim() && (searchResults.length > 0 || searchLoading || (!searchLoading && searchQuery.trim().length > 0)) && dropdownPosition && createPortal(
         <div
           ref={searchDropdownRef}
           style={{
@@ -291,22 +546,28 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
             top: `${dropdownPosition.top}px`,
             left: `${dropdownPosition.left}px`,
             width: `${dropdownPosition.width}px`,
-            backgroundColor: 'var(--surface)',
-            border: '1px solid var(--border)',
+            backgroundColor: '#ffffff',
+            border: '1px solid #e5e7eb',
             borderRadius: '8px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.1)',
             maxHeight: '400px',
             overflowY: 'auto',
-            zIndex: 9999,
+            zIndex: 99999,
+            isolation: 'isolate', // Create new stacking context
           }}
         >
           {searchLoading ? (
-            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)' }}>
+            <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>
               Searching...
             </div>
           ) : searchResults.length === 0 ? (
-            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--muted)' }}>
-              No matches
+            <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>
+              <div>No matches found</div>
+              {activeGraphId && (
+                <div style={{ fontSize: '11px', marginTop: '4px', color: '#9ca3af' }}>
+                  Searching in graph: {activeGraphId}
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ padding: '8px 0' }}>
@@ -337,31 +598,54 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
                   style={{
                     padding: '12px 16px',
                     cursor: 'pointer',
-                    backgroundColor: idx === selectedResultIndex ? 'var(--panel)' : 'transparent',
-                    borderBottom: idx < searchResults.length - 1 ? '1px solid var(--border)' : 'none',
+                    backgroundColor: idx === selectedResultIndex ? '#f3f4f6' : 'transparent',
+                    borderBottom: idx < searchResults.length - 1 ? '1px solid #e5e7eb' : 'none',
+                    transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={() => setSelectedResultIndex(idx)}
                 >
                   {result.type === 'concept' && (
-                    <div>
-                      <div style={{ fontSize: '14px', fontWeight: '500', color: 'var(--ink)' }}>
-                        {result.concept.name}
-                      </div>
-                      {result.concept.domain && (
-                        <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>
-                          {result.concept.domain}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ 
+                        width: '8px', 
+                        height: '8px', 
+                        borderRadius: '50%', 
+                        backgroundColor: '#6366f1',
+                        flexShrink: 0,
+                      }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '14px', fontWeight: '600', color: '#000000' }}>
+                          {result.concept.name}
                         </div>
-                      )}
+                        {result.concept.domain && (
+                          <div style={{ fontSize: '12px', color: '#000000', marginTop: '2px', opacity: 0.7 }}>
+                            {result.concept.domain}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                   {result.type === 'evidence' && (
                     <div>
-                      <div style={{ fontSize: '14px', fontWeight: '500', color: 'var(--ink)' }}>
+                      <div style={{ fontSize: '14px', fontWeight: '500', color: '#000000' }}>
                         {result.resource.title || result.resource.kind}
                       </div>
                       {result.concept_name && (
-                        <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>
+                        <div style={{ fontSize: '12px', color: '#000000', marginTop: '2px', opacity: 0.7 }}>
                           Evidence for {result.concept_name}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {result.type === 'action' && (
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: '500', color: '#000000' }}>
+                        {result.icon && <span style={{ marginRight: '8px' }}>{result.icon}</span>}
+                        {result.label}
+                      </div>
+                      {result.description && (
+                        <div style={{ fontSize: '12px', color: '#000000', marginTop: '2px', opacity: 0.7 }}>
+                          {result.description}
                         </div>
                       )}
                     </div>
@@ -370,7 +654,8 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
               ))}
             </div>
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

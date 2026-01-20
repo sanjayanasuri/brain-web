@@ -57,29 +57,14 @@ ENABLE_NOTION_AUTO_SYNC = os.getenv("ENABLE_NOTION_AUTO_SYNC", "false").lower() 
 # Enable Chrome extension and localhost CORS regex patterns (dev-only)
 ENABLE_EXTENSION_DEV = os.getenv("ENABLE_EXTENSION_DEV", "false").lower() in ("true", "1", "yes")
 
-# -----------------------------------------------------------------------------
-# Demo mode (production demo guardrails)
-# -----------------------------------------------------------------------------
-DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")
-# Hard default: deny writes in demo unless explicitly overridden
-DEMO_ALLOW_WRITES = os.getenv("DEMO_ALLOW_WRITES", "false").lower() in ("true", "1", "yes")
-# Force demo tenant (client-supplied tenant is ignored in demo mode)
-DEMO_TENANT_ID = os.getenv("DEMO_TENANT_ID", "demo")
-# Force demo graph_id to isolate demo data from personal data
-DEMO_GRAPH_ID = os.getenv("DEMO_GRAPH_ID", "demo")
-# Optional allow-list for POST/PUT/PATCH/DELETE routes in demo mode
-# Example: "/ai/chat,/ai/semantic-search,/feedback"
-DEMO_SAFE_WRITE_PATHS = [p.strip() for p in os.getenv("DEMO_SAFE_WRITE_PATHS", "/ai/chat,/ai/semantic-search,/events").split(",") if p.strip()]
-
-# App-level rate limiting (complements WAF rate-based rules)
-DEMO_RATE_LIMIT_PER_IP_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_IP_PER_MIN", "120"))
-DEMO_RATE_LIMIT_PER_SESSION_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_SESSION_PER_MIN", "60"))
-
-# Bedrock caps (server-side only; enforced in demo mode if Bedrock is enabled later)
-DEMO_BEDROCK_MAX_TOKENS_PER_SESSION = int(os.getenv("DEMO_BEDROCK_MAX_TOKENS_PER_SESSION", "4000"))
-
 # Proposed edge visibility threshold (for auto mode)
 PROPOSED_VISIBILITY_THRESHOLD = float(os.getenv("PROPOSED_VISIBILITY_THRESHOLD", "0.85"))
+
+# Performance and timeout configuration
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "300"))  # 5 minutes default
+NEO4J_QUERY_TIMEOUT_SECONDS = float(os.getenv("NEO4J_QUERY_TIMEOUT_SECONDS", "60"))  # 1 minute default
+DEFAULT_PAGE_SIZE = int(os.getenv("DEFAULT_PAGE_SIZE", "20"))
+MAX_PAGE_SIZE = int(os.getenv("MAX_PAGE_SIZE", "100"))
 
 # SEC EDGAR API User-Agent (required by SEC)
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "BrainWeb/1.0 contact@example.com")
@@ -91,3 +76,33 @@ BROWSER_USE_BASE = os.getenv("BROWSER_USE_BASE", "https://api.browser-use.com/ap
 # Finance skill IDs
 BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID")
 BROWSER_USE_FINANCE_TRACKER_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_TRACKER_SKILL_ID")
+
+# Storage configuration (for resource files)
+# Set STORAGE_BACKEND=s3 to use S3, otherwise uses local filesystem (default, no cost)
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").lower()
+S3_BUCKET = os.getenv("S3_BUCKET")  # Required if STORAGE_BACKEND=s3
+S3_REGION = os.getenv("S3_REGION", "us-east-1")
+S3_PREFIX = os.getenv("S3_PREFIX", "resources")  # S3 key prefix for all resources
+
+# Qdrant Vector Database configuration
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "concepts")
+USE_QDRANT = os.getenv("USE_QDRANT", "true").lower() in ("true", "1", "yes")  # Enable Qdrant by default
+
+# PostgreSQL configuration (for event store)
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+POSTGRES_DB = os.getenv("POSTGRES_DB", "brainweb")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "brainweb")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "brainweb")
+POSTGRES_CONNECTION_STRING = os.getenv(
+    "POSTGRES_CONNECTION_STRING",
+    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)
+
+# Redis configuration (for caching)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+USE_REDIS = os.getenv("USE_REDIS", "true").lower() in ("true", "1", "yes")  # Enable Redis by default

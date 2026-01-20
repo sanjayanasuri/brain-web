@@ -3,13 +3,38 @@
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import TurndownService from 'turndown';
-import { getLecture, updateLecture, createLecture, type Lecture } from '../api-client';
-import { LectureEditor } from '../components/lecture-editor/LectureEditor';
-import { DocumentOutline } from '../components/lecture-editor/DocumentOutline';
-import { AIChatSidebar } from '../components/lecture-editor/AIChatSidebar';
-import { EnhancedToolbar } from '../components/lecture-editor/EnhancedToolbar';
-import { useEditor } from '@tiptap/react';
+import dynamic from 'next/dynamic';
+import { getLecture, updateLecture, createLecture, upsertLectureBlocks, type Lecture, type LectureMention } from '../api-client';
+import { extractBlocksFromEditor } from '../components/lecture-editor/blockUtils';
+
+// Lazy load heavy dependencies
+const ConceptPanel = dynamic(
+  () => import('../components/lecture-editor/ConceptPanel').then(mod => ({ default: mod.ConceptPanel })),
+  { ssr: false }
+);
+
+// Lazy load heavy TipTap editor components
+const LectureEditor = dynamic(
+  () => import('../components/lecture-editor/LectureEditor').then(mod => ({ default: mod.LectureEditor })),
+  { ssr: false, loading: () => <div style={{ padding: '40px', textAlign: 'center' }}>Loading editor...</div> }
+);
+
+const DocumentOutline = dynamic(
+  () => import('../components/lecture-editor/DocumentOutline').then(mod => ({ default: mod.DocumentOutline })),
+  { ssr: false }
+);
+
+const AIChatSidebar = dynamic(
+  () => import('../components/lecture-editor/AIChatSidebar').then(mod => ({ default: mod.AIChatSidebar })),
+  { ssr: false }
+);
+
+const EnhancedToolbar = dynamic(
+  () => import('../components/lecture-editor/EnhancedToolbar').then(mod => ({ default: mod.EnhancedToolbar })),
+  { ssr: false }
+);
+
+// Note: useEditor is not actually used in this file, removed unused import
 
 type SaveStatus = 'saved' | 'saving' | 'error' | 'offline';
 
@@ -25,29 +50,38 @@ function calculateReadingTime(wordCount: number): number {
   return Math.ceil(wordCount / 225);
 }
 
-// Initialize Turndown service for markdown conversion
-const turndownService = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced',
-  bulletListMarker: '-',
-});
+// Lazy initialize Turndown service for markdown conversion
+let turndownServiceInstance: any = null;
 
-// Custom rule for concept mentions
-turndownService.addRule('conceptMention', {
-  filter: (node) => {
-    return (
-      node.nodeName === 'SPAN' &&
-      node.getAttribute('data-type') === 'conceptMention'
-    );
-  },
-  replacement: (content, node) => {
-    const label = (node as HTMLElement).getAttribute('data-label') || 'concept';
-    return `@${label}`;
-  },
-});
+async function getTurndownService() {
+  if (!turndownServiceInstance) {
+    const TurndownService = (await import('turndown')).default;
+    turndownServiceInstance = new TurndownService({
+      headingStyle: 'atx',
+      codeBlockStyle: 'fenced',
+      bulletListMarker: '-',
+    });
+    
+    // Custom rule for concept mentions
+    turndownServiceInstance.addRule('conceptMention', {
+      filter: (node) => {
+        return (
+          node.nodeName === 'SPAN' &&
+          node.getAttribute('data-type') === 'conceptMention'
+        );
+      },
+      replacement: (content, node) => {
+        const label = (node as HTMLElement).getAttribute('data-label') || 'concept';
+        return `@${label}`;
+      },
+    });
+  }
+  return turndownServiceInstance;
+}
 
-function htmlToMarkdown(html: string): string {
-  return turndownService.turndown(html);
+async function htmlToMarkdown(html: string): Promise<string> {
+  const service = await getTurndownService();
+  return service.turndown(html);
 }
 
 export default function LectureEditorPage() {
@@ -76,6 +110,12 @@ function LectureEditorPageInner() {
   const [readingTime, setReadingTime] = useState(0);
   const [editor, setEditor] = useState<any>(null);
   const [activeGraphId, setActiveGraphId] = useState<string | undefined>(graphId || undefined);
+  const [wikipediaHoverEnabled, setWikipediaHoverEnabled] = useState(true);
+  const [activeMention, setActiveMention] = useState<LectureMention | null>(null);
+  const [rightSidebarTab, setRightSidebarTab] = useState<'chat' | 'concept'>('chat');
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const canLink = Boolean(lecture?.lecture_id || lectureId);
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<string>('');
@@ -99,6 +139,11 @@ function LectureEditorPageInner() {
     
     loadActiveGraph();
   }, [graphId]);
+
+  useEffect(() => {
+    setActiveMention(null);
+    setRightSidebarTab('chat');
+  }, [lectureId]);
 
   // Load lecture if editing existing one
   useEffect(() => {
@@ -158,6 +203,15 @@ function LectureEditorPageInner() {
             // Update URL without reload
             router.replace(`/lecture-editor?lectureId=${newLecture.lecture_id}`);
             lastSavedContentRef.current = contentToSave;
+
+            if (editor) {
+              try {
+                const blocks = extractBlocksFromEditor(editor);
+                await upsertLectureBlocks(newLecture.lecture_id, blocks);
+              } catch (err) {
+                console.error('Failed to sync lecture blocks:', err);
+              }
+            }
             
             // Track last edited time in localStorage
             const lastEditedKey = `lecture_${newLecture.lecture_id}_last_edited`;
@@ -169,6 +223,15 @@ function LectureEditorPageInner() {
               raw_text: contentToSave,
             });
             lastSavedContentRef.current = contentToSave;
+
+            if (editor) {
+              try {
+                const blocks = extractBlocksFromEditor(editor);
+                await upsertLectureBlocks(lectureId!, blocks);
+              } catch (err) {
+                console.error('Failed to sync lecture blocks:', err);
+              }
+            }
             
             // Track last edited time in localStorage
             const lastEditedKey = `lecture_${lectureId}_last_edited`;
@@ -198,7 +261,7 @@ function LectureEditorPageInner() {
         saveTimeoutRef.current = setTimeout(doSave, 2000);
       }
     },
-    [isNew, lectureId, lecture?.title, router, saveStatus]
+    [isNew, lectureId, lecture?.title, router, saveStatus, editor]
   );
 
   // Handle title changes
@@ -222,9 +285,97 @@ function LectureEditorPageInner() {
     [title, saveLecture]
   );
 
+  const handleMentionClick = useCallback((mention: LectureMention) => {
+    setActiveMention(mention);
+    setRightSidebarTab('concept');
+  }, []);
+
+  const resolveMentionRange = useCallback(
+    (mention: LectureMention) => {
+      if (!editor) {
+        return null;
+      }
+      const doc = editor.state.doc;
+      let blockNode: any = null;
+      let blockPos = 0;
+
+      doc.descendants((node: any, pos: number) => {
+        if (blockNode || !node.isBlock) {
+          return;
+        }
+        if (node.attrs?.blockId === mention.block_id) {
+          blockNode = node;
+          blockPos = pos;
+        }
+      });
+
+      if (!blockNode) {
+        return null;
+      }
+
+      const text = blockNode.textContent || '';
+      let start = mention.start_offset;
+      let end = mention.end_offset;
+
+      if (start < 0 || end > text.length || text.slice(start, end) !== mention.surface_text) {
+        const index = text.indexOf(mention.surface_text);
+        if (index === -1) {
+          return null;
+        }
+        start = index;
+        end = index + mention.surface_text.length;
+      }
+
+      let from: number | null = null;
+      let to: number | null = null;
+      let offset = 0;
+
+      blockNode.descendants((node: any, pos: number) => {
+        if (!node.isText) {
+          return;
+        }
+        const length = node.text?.length ?? 0;
+        const nodeStart = offset;
+        const nodeEnd = offset + length;
+        const absolutePos = blockPos + 1 + pos;
+
+        if (from === null && start >= nodeStart && start <= nodeEnd) {
+          from = absolutePos + (start - nodeStart);
+        }
+        if (to === null && end >= nodeStart && end <= nodeEnd) {
+          to = absolutePos + (end - nodeStart);
+        }
+        offset += length;
+      });
+
+      if (from === null || to === null || from >= to) {
+        return null;
+      }
+
+      return { from, to };
+    },
+    [editor]
+  );
+
+  const handleBacklinkClick = useCallback(
+    (mention: LectureMention) => {
+      if (!editor) {
+        return;
+      }
+      const range = resolveMentionRange(mention);
+      if (!range) {
+        return;
+      }
+      setActiveMention(mention);
+      editor.commands.setTextSelection(range);
+      editor.view.focus();
+    },
+    [editor, resolveMentionRange]
+  );
+
   // Export functions
-  const handleExportMarkdown = useCallback(() => {
-    const markdown = htmlToMarkdown(content);
+  const handleExportMarkdown = useCallback(async () => {
+    const markdown = await htmlToMarkdown(content);
     const blob = new Blob([markdown], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -358,6 +509,23 @@ function LectureEditorPageInner() {
     };
   }, []);
 
+  // Close export menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+
+    if (exportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [exportMenuOpen]);
+
   if (loading) {
     return (
       <div style={{ padding: '40px', textAlign: 'center' }}>
@@ -375,7 +543,7 @@ function LectureEditorPageInner() {
             if (returnTo) {
               router.push(returnTo);
             } else {
-              router.push('/reader/segment');
+              router.push('/lecture-studio');
             }
           }}
           style={{
@@ -387,7 +555,7 @@ function LectureEditorPageInner() {
             fontSize: '14px',
           }}
         >
-          Back to File Reader Studio
+          Back to Lectures
         </button>
       </div>
     );
@@ -416,37 +584,37 @@ function LectureEditorPageInner() {
         flexDirection: 'column',
       }}
     >
-      {/* Header */}
+      {/* Compact Header */}
       <div
         style={{
           borderBottom: '1px solid var(--border)',
           background: 'var(--surface)',
-          padding: '20px 24px',
+          padding: '8px 16px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: '24px',
+          gap: '16px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, maxWidth: '600px' }}>
           <button
             onClick={() => {
               // If returnTo is specified, use it
               if (returnTo) {
                 router.push(returnTo);
               } else {
-                // Try to go back in history, fallback to File Reader Studio
+                // Try to go back in history, fallback to Lecture Studio
                 if (window.history.length > 1) {
                   router.back();
                 } else {
-                  router.push('/reader/segment');
+                  router.push('/lecture-studio');
                 }
               }
             }}
             style={{
               color: 'var(--muted)',
               textDecoration: 'none',
-              fontSize: '18px',
+              fontSize: '16px',
               display: 'flex',
               alignItems: 'center',
               background: 'transparent',
@@ -466,8 +634,8 @@ function LectureEditorPageInner() {
               border: 'none',
               background: 'transparent',
               color: 'var(--ink)',
-              fontSize: '24px',
-              fontWeight: 700,
+              fontSize: '16px',
+              fontWeight: 600,
               outline: 'none',
               flex: 1,
               minWidth: 0,
@@ -478,25 +646,25 @@ function LectureEditorPageInner() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '16px',
-            fontSize: '14px',
+            gap: '12px',
+            fontSize: '12px',
             color: 'var(--muted)',
           }}
         >
           <span style={{ color: statusColor }}>{statusText}</span>
           <span>{wordCount} words</span>
-          {readingTime > 0 && <span>~{readingTime} min read</span>}
+          {readingTime > 0 && <span>~{readingTime} min</span>}
           <div
             style={{
-              display: 'flex',
-              gap: '8px',
               marginLeft: '8px',
               paddingLeft: '16px',
               borderLeft: '1px solid var(--border)',
+              position: 'relative',
             }}
+            ref={exportMenuRef}
           >
             <button
-              onClick={handleExportMarkdown}
+              onClick={() => setExportMenuOpen(!exportMenuOpen)}
               style={{
                 background: 'transparent',
                 border: '1px solid var(--border)',
@@ -505,47 +673,108 @@ function LectureEditorPageInner() {
                 cursor: 'pointer',
                 fontSize: '12px',
                 padding: '4px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
               }}
-              title="Export as Markdown"
+              title="Export lecture"
             >
-              Export MD
+              Export
+              <span style={{ fontSize: '10px' }}>▼</span>
             </button>
-            <button
-              onClick={handleExportHTML}
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                color: 'var(--ink)',
-                cursor: 'pointer',
-                fontSize: '12px',
-                padding: '4px 12px',
-              }}
-              title="Export as HTML"
-            >
-              Export HTML
-            </button>
-            <button
-              onClick={handleExportPDF}
-              style={{
-                background: 'transparent',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                color: 'var(--ink)',
-                cursor: 'pointer',
-                fontSize: '12px',
-                padding: '4px 12px',
-              }}
-              title="Export as PDF"
-            >
-              Export PDF
-            </button>
+            {exportMenuOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '4px',
+                  background: 'var(--panel)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  boxShadow: 'var(--shadow)',
+                  zIndex: 1000,
+                  minWidth: '120px',
+                  overflow: 'hidden',
+                }}
+              >
+                <button
+                  onClick={() => {
+                    handleExportMarkdown();
+                    setExportMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--ink)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    textAlign: 'left',
+                    transition: 'background 0.2s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  Markdown (.md)
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportHTML();
+                    setExportMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--ink)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    textAlign: 'left',
+                    transition: 'background 0.2s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  HTML (.html)
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportPDF();
+                    setExportMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--ink)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    textAlign: 'left',
+                    transition: 'background 0.2s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--surface)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  PDF (.pdf)
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Enhanced Toolbar */}
-      {editor && <EnhancedToolbar editor={editor} />}
+      {editor && (
+        <EnhancedToolbar
+          editor={editor}
+          wikipediaHoverEnabled={wikipediaHoverEnabled}
+          onToggleWikipediaHover={() => setWikipediaHoverEnabled(!wikipediaHoverEnabled)}
+        />
+      )}
 
       {/* Three-Column Layout */}
       <div
@@ -591,6 +820,7 @@ function LectureEditorPageInner() {
             flexDirection: 'column',
             overflow: 'hidden',
             background: 'var(--background)',
+            justifyContent: 'center',
           }}
         >
           <div
@@ -599,27 +829,33 @@ function LectureEditorPageInner() {
               overflow: 'auto',
               display: 'flex',
               justifyContent: 'center',
-              padding: '40px 24px',
+              padding: '20px 24px',
             }}
           >
             <div
               style={{
                 width: '100%',
-                maxWidth: '900px',
-                background: 'var(--surface)',
+                maxWidth: '1200px',
+                background: 'rgb(250, 248, 243)',
                 border: '1px solid var(--border)',
-                borderRadius: '12px',
+                borderRadius: '8px',
                 boxShadow: 'var(--shadow)',
-                padding: '60px 80px',
+                padding: '40px 50px',
                 minHeight: '800px',
+                color: '#000000',
               }}
+              className="lecture-editor-content"
             >
               <LectureEditor
                 content={content}
                 onUpdate={handleContentChange}
                 placeholder="Start writing your lecture..."
                 graphId={activeGraphId}
+                lectureId={lecture?.lecture_id || lectureId || undefined}
+                onMentionClick={handleMentionClick}
                 onEditorReady={setEditor}
+                wikipediaHoverEnabled={wikipediaHoverEnabled}
+                onToggleWikipediaHover={() => setWikipediaHoverEnabled(!wikipediaHoverEnabled)}
               />
             </div>
           </div>
@@ -628,18 +864,79 @@ function LectureEditorPageInner() {
         {/* Right Sidebar - AI Chat */}
         <div
           style={{
-            width: '320px',
+            width: '280px',
             borderLeft: '1px solid var(--border)',
             background: 'var(--surface)',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            height: '100%',
           }}
         >
-          <AIChatSidebar lectureId={lectureId} lectureTitle={title || 'Untitled Lecture'} />
+          <div
+            style={{
+              display: 'flex',
+              gap: '8px',
+              padding: '12px',
+              borderBottom: '1px solid var(--border)',
+            }}
+          >
+            {(['chat', 'concept'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setRightSidebarTab(tab);
+                }}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                }}
+                style={{
+                  flex: 1,
+                  padding: '8px 10px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                  background: rightSidebarTab === tab ? 'var(--panel)' : 'transparent',
+                  color: rightSidebarTab === tab ? 'var(--ink)' : 'var(--muted)',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: rightSidebarTab === tab ? 600 : 500,
+                  textTransform: 'capitalize',
+                  outline: 'none',
+                  userSelect: 'none',
+                }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            {rightSidebarTab === 'chat' && (
+              <AIChatSidebar lectureId={lecture?.lecture_id || lectureId} lectureTitle={title || 'Untitled Lecture'} />
+            )}
+            {rightSidebarTab === 'concept' && (
+              <>
+                {activeMention ? (
+                  <ConceptPanel
+                    conceptId={activeMention.concept.node_id}
+                    mention={activeMention}
+                    onClose={() => {
+                      setRightSidebarTab('chat');
+                      setActiveMention(null);
+                    }}
+                    onBacklinkClick={handleBacklinkClick}
+                  />
+                ) : (
+                  <div style={{ padding: '16px', color: 'var(--muted)', fontSize: '13px' }}>
+                    Click a linked span to open the concept panel.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
   );
 }
-

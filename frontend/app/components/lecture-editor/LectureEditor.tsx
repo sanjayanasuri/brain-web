@@ -5,20 +5,25 @@ import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import Image from '@tiptap/extension-image';
-import TextStyle from '@tiptap/extension-text-style';
+import { TextStyle } from '@tiptap/extension-text-style';
 import { Color } from '@tiptap/extension-color';
 import { Highlight } from '@tiptap/extension-highlight';
 import { Underline } from '@tiptap/extension-underline';
 import { FontFamily } from '@tiptap/extension-font-family';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import tippy from 'tippy.js';
 import { ConceptMention } from './ConceptMention';
 import { CodeBlock } from './CodeBlock';
 import { ConceptHover } from './ConceptHover';
 import { WikipediaHover } from './WikipediaHover';
-import { searchConcepts, getAllGraphData, type Concept } from '../../api-client';
+import { searchConcepts, getAllGraphData, getLectureMentions, createLectureMention, deleteLectureMention, upsertLectureBlocks, type Concept, type LectureMention } from '../../api-client';
 import { FloatingToolbar } from './FloatingToolbar';
 import { fetchWikipediaSummary } from '../../../lib/wikipedia';
+import { BlockId } from './BlockId';
+import { ConceptLink } from './ConceptLink';
+import { ConceptLinkModal } from './ConceptLinkModal';
+import { extractBlocksFromEditor } from './blockUtils';
+import { useTimeTracking } from '../../lib/useTimeTracking';
 import 'tippy.js/dist/tippy.css';
 
 interface LectureEditorProps {
@@ -26,21 +31,84 @@ interface LectureEditorProps {
   onUpdate: (content: string) => void;
   placeholder?: string;
   graphId?: string;
+  lectureId?: string;
+  onMentionClick?: (mention: LectureMention) => void;
+  onEditorReady?: (editor: any) => void;
+  wikipediaHoverEnabled?: boolean;
+  onToggleWikipediaHover?: () => void;
 }
+
+type SelectionInfo = {
+  blockId: string;
+  startOffset: number;
+  endOffset: number;
+  surfaceText: string;
+  blockText: string;
+  mention?: LectureMention | null;
+};
 
 export function LectureEditor({
   content,
   onUpdate,
   placeholder = 'Start writing your lecture...',
   graphId,
+  lectureId,
+  onMentionClick,
   onEditorReady,
+  wikipediaHoverEnabled: propWikipediaHoverEnabled = true,
+  onToggleWikipediaHover,
 }: LectureEditorProps) {
   const [isMounted, setIsMounted] = useState(false);
   const [conceptMap, setConceptMap] = useState<Map<string, Concept>>(new Map());
+  const [wikipediaHoverEnabled, setWikipediaHoverEnabled] = useState(propWikipediaHoverEnabled);
+  const [mentions, setMentions] = useState<LectureMention[]>([]);
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
+  const [pendingLinkSelection, setPendingLinkSelection] = useState<SelectionInfo | null>(null);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [mentionError, setMentionError] = useState<string | null>(null);
+  const [toolbarPosition, setToolbarPosition] = useState<{
+    top: number;
+    left: number;
+    placement: 'top' | 'bottom';
+  } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const linkDisabledReason = lectureId ? null : 'Save this lecture to enable concept links.';
+
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  // Automatic time tracking for lecture viewing/editing
+  useTimeTracking(lectureId, undefined, undefined, undefined, 'read', !!lectureId);
+
+  useEffect(() => {
+    if (!lectureId) {
+      setMentions([]);
+      return;
+    }
+
+    let isActive = true;
+    setMentionError(null);
+
+    getLectureMentions(lectureId)
+      .then((data) => {
+        if (isActive) {
+          setMentions(data);
+        }
+      })
+      .catch((error) => {
+        if (isActive) {
+          console.error('[LectureEditor] Failed to load mentions:', error);
+          setMentionError(error instanceof Error ? error.message : 'Failed to load mentions');
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [lectureId]);
 
   // Load all concepts for hover detection
   useEffect(() => {
@@ -86,10 +154,18 @@ export function LectureEditor({
     loadConcepts();
   }, [graphId]);
 
+  // Sync with prop changes
+  useEffect(() => {
+    if (propWikipediaHoverEnabled !== wikipediaHoverEnabled) {
+      setWikipediaHoverEnabled(propWikipediaHoverEnabled);
+    }
+  }, [propWikipediaHoverEnabled, wikipediaHoverEnabled]);
+
   const editor = useEditor({
     immediatelyRender: false,
     editable: true,
     extensions: [
+      BlockId,
       StarterKit.configure({
         heading: {
           levels: [1, 2, 3],
@@ -140,11 +216,14 @@ export function LectureEditor({
             }),
           ]
         : []),
+      ConceptLink.configure({
+        mentions,
+      }),
       ConceptHover.configure({
         conceptNames: conceptMap,
       }),
       WikipediaHover.configure({
-        enabled: true,
+        enabled: wikipediaHoverEnabled,
         minTermLength: 3,
       }),
     ],
@@ -207,6 +286,138 @@ export function LectureEditor({
     },
   });
 
+  const findBlockAtPos = useCallback((resolvedPos: any) => {
+    for (let depth = resolvedPos.depth; depth > 0; depth -= 1) {
+      const node = resolvedPos.node(depth);
+      const blockId = node.attrs?.blockId;
+      if (node.isBlock && blockId && ['paragraph', 'heading', 'codeBlock'].includes(node.type.name)) {
+        return {
+          node,
+          blockId,
+          pos: resolvedPos.before(depth),
+        };
+      }
+    }
+    return null;
+  }, []);
+
+  const buildSelectionInfo = useCallback(() => {
+    if (!editor) {
+      return { info: null, error: null };
+    }
+
+    const { selection } = editor.state;
+    if (selection.empty) {
+      return { info: null, error: null };
+    }
+
+    const fromBlock = findBlockAtPos(selection.$from);
+    const toBlock = findBlockAtPos(selection.$to);
+    if (!fromBlock || !toBlock || fromBlock.blockId !== toBlock.blockId) {
+      return { info: null, error: 'Select text within a single block to link.' };
+    }
+
+    const blockStart = fromBlock.pos + 1;
+    const blockEnd = fromBlock.pos + fromBlock.node.nodeSize - 1;
+    const blockText = editor.state.doc.textBetween(blockStart, blockEnd, '\n', '\n');
+    const surfaceText = editor.state.doc.textBetween(selection.from, selection.to, '\n', '\n');
+    const startOffset = editor.state.doc.textBetween(blockStart, selection.from, '\n', '\n').length;
+    const endOffset = editor.state.doc.textBetween(blockStart, selection.to, '\n', '\n').length;
+
+    const overlapping = mentions.find(
+      (item) =>
+        item.block_id === fromBlock.blockId &&
+        startOffset < item.end_offset &&
+        endOffset > item.start_offset
+    );
+
+    return {
+      info: {
+        blockId: fromBlock.blockId,
+        startOffset,
+        endOffset,
+        surfaceText,
+        blockText,
+        mention: overlapping || null,
+      },
+      error: null,
+    };
+  }, [editor, mentions, findBlockAtPos]);
+
+  const updateToolbarPosition = useCallback(() => {
+    if (!editor || !containerRef.current) {
+      setToolbarPosition(null);
+      return;
+    }
+
+    const { selection } = editor.state;
+    if (selection.empty) {
+      setToolbarPosition(null);
+      return;
+    }
+
+    const start = editor.view.coordsAtPos(selection.from);
+    const end = editor.view.coordsAtPos(selection.to);
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const left =
+      (Math.min(start.left, end.left) + Math.max(start.right, end.right)) / 2 - containerRect.left;
+    const topCandidate = Math.min(start.top, end.top) - containerRect.top;
+    const bottomCandidate = Math.max(start.bottom, end.bottom) - containerRect.top;
+
+    let placement: 'top' | 'bottom' = 'top';
+    let top = topCandidate;
+    if (topCandidate < 32) {
+      top = bottomCandidate;
+      placement = 'bottom';
+    }
+
+    const horizontalPadding = 16;
+    const clampedLeft = Math.min(
+      containerRect.width - horizontalPadding,
+      Math.max(horizontalPadding, left)
+    );
+
+    setToolbarPosition({
+      top,
+      left: clampedLeft,
+      placement,
+    });
+  }, [editor]);
+
+  useEffect(() => {
+    if (!editor) {
+      setSelectionInfo(null);
+      setSelectionError(null);
+      setToolbarPosition(null);
+      return;
+    }
+
+    const updateSelection = () => {
+      const { info, error } = buildSelectionInfo();
+      setSelectionInfo(info);
+      setSelectionError(error);
+      updateToolbarPosition();
+    };
+
+    updateSelection();
+    editor.on('selectionUpdate', updateSelection);
+    editor.on('transaction', updateToolbarPosition);
+
+    const handleScroll = () => {
+      updateToolbarPosition();
+    };
+
+    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('resize', handleScroll);
+
+    return () => {
+      editor.off('selectionUpdate', updateSelection);
+      editor.off('transaction', updateToolbarPosition);
+      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('resize', handleScroll);
+    };
+  }, [editor, buildSelectionInfo, updateToolbarPosition]);
+
   // Update editor content when prop changes (but not on every keystroke)
   useEffect(() => {
     if (editor && content !== editor.getHTML()) {
@@ -249,6 +460,50 @@ export function LectureEditor({
       console.warn('[LectureEditor] ConceptHover extension not found!');
     }
   }, [editor, conceptMap]);
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    const extension = editor.extensionManager.extensions.find(ext => ext.name === 'conceptLink');
+    if (extension) {
+      extension.options.mentions = mentions;
+      const { state, dispatch } = editor.view;
+      const tr = state.tr.setMeta('forceConceptLinkUpdate', true);
+      dispatch(tr);
+    }
+  }, [editor, mentions]);
+
+  // Update Wikipedia hover extension when toggle changes
+  useEffect(() => {
+    if (!editor) return;
+    
+    const extension = editor.extensionManager.extensions.find(ext => ext.name === 'wikipediaHover');
+    if (extension) {
+      // Update the extension options
+      extension.options.enabled = wikipediaHoverEnabled;
+      
+      // Force editor to re-render decorations by dispatching a transaction with meta
+      // This will trigger the plugin's apply function which checks the enabled option
+      const { state, dispatch } = editor.view;
+      const tr = state.tr.setMeta('forceWikipediaHoverUpdate', true);
+      dispatch(tr);
+      
+      // Also clean up any existing tippy instances if disabling
+      if (!wikipediaHoverEnabled) {
+        const editorElement = editor.view.dom;
+        const triggers = editorElement.querySelectorAll('.wikipedia-hover-trigger');
+        triggers.forEach((trigger) => {
+          const instance = (trigger as any)._wikipediaTippy;
+          if (instance) {
+            instance.destroy();
+            (trigger as any)._wikipediaTippy = null;
+          }
+        });
+      }
+    }
+  }, [editor, wikipediaHoverEnabled]);
 
   // Set up concept hover previews when editor is ready
   useEffect(() => {
@@ -631,7 +886,7 @@ export function LectureEditor({
     // Set up tippy for all existing concept hover triggers
     const setupAllTippies = () => {
       const editorElement = editor.view.dom;
-      const triggers = editorElement.querySelectorAll('.concept-hover-trigger');
+      const triggers = editorElement.querySelectorAll('.concept-hover-trigger, .concept-link');
       console.log(`[LectureEditor] Found ${triggers.length} concept hover triggers in editor`);
       triggers.forEach((trigger) => {
         setupTippyForElement(trigger as HTMLElement);
@@ -655,7 +910,7 @@ export function LectureEditor({
     return () => {
       observer.disconnect();
       // Clean up tippy instances
-      const triggers = editorElement.querySelectorAll('.concept-hover-trigger');
+      const triggers = editorElement.querySelectorAll('.concept-hover-trigger, .concept-link');
       triggers.forEach((trigger) => {
         const instance = (trigger as any)._tippy;
         if (instance) {
@@ -894,26 +1149,170 @@ export function LectureEditor({
     };
   }, [editor]);
 
+  const ensureBlocksSynced = async () => {
+    if (!lectureId || !editor) {
+      return;
+    }
+    const blocks = extractBlocksFromEditor(editor);
+    if (!blocks.length) {
+      return;
+    }
+    await upsertLectureBlocks(lectureId, blocks);
+  };
+
+  const handleOpenLinkModal = () => {
+    if (!selectionInfo) {
+      return;
+    }
+    setMentionError(null);
+    setPendingLinkSelection(selectionInfo);
+    setLinkModalOpen(true);
+  };
+
+  const handleConfirmLink = async (concept: Concept, contextNote?: string) => {
+    if (!lectureId || !pendingLinkSelection) {
+      setLinkModalOpen(false);
+      return;
+    }
+    try {
+      await ensureBlocksSynced();
+      const created = await createLectureMention({
+        lecture_id: lectureId,
+        block_id: pendingLinkSelection.blockId,
+        start_offset: pendingLinkSelection.startOffset,
+        end_offset: pendingLinkSelection.endOffset,
+        surface_text: pendingLinkSelection.surfaceText,
+        concept_id: concept.node_id,
+        context_note: contextNote || null,
+      });
+      setMentions((prev) => [created, ...prev]);
+      setMentionError(null);
+      setLinkModalOpen(false);
+      setPendingLinkSelection(null);
+    } catch (error) {
+      console.error('[LectureEditor] Failed to create mention:', error);
+      setMentionError(error instanceof Error ? error.message : 'Failed to create mention');
+    }
+  };
+
+  const handleRemoveLink = async () => {
+    if (!selectionInfo?.mention) {
+      return;
+    }
+    try {
+      await deleteLectureMention(selectionInfo.mention.mention_id);
+      setMentions((prev) => prev.filter((item) => item.mention_id !== selectionInfo.mention?.mention_id));
+      setMentionError(null);
+    } catch (error) {
+      console.error('[LectureEditor] Failed to remove mention:', error);
+      setMentionError(error instanceof Error ? error.message : 'Failed to remove mention');
+    }
+  };
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) {
+        return;
+      }
+      const linkEl = target.closest('.concept-link') as HTMLElement | null;
+      if (!linkEl) {
+        return;
+      }
+      const mentionId = linkEl.getAttribute('data-mention-id');
+      if (!mentionId) {
+        return;
+      }
+      const mention = mentions.find((item) => item.mention_id === mentionId);
+      if (mention && onMentionClick) {
+        onMentionClick(mention);
+      }
+    };
+
+    const editorElement = editor.view.dom;
+    editorElement.addEventListener('click', handleClick);
+
+    return () => {
+      editorElement.removeEventListener('click', handleClick);
+    };
+  }, [editor, mentions, onMentionClick]);
+
   return (
     <div
       style={{
         position: 'relative',
         width: '100%',
       }}
+      ref={containerRef}
     >
       <EditorContent editor={editor} />
-      {editor && <FloatingToolbar editor={editor} />}
+      {editor && (
+        <FloatingToolbar
+          editor={editor}
+          onLinkConcept={lectureId && !selectionInfo?.mention ? handleOpenLinkModal : undefined}
+          onRemoveLink={lectureId && selectionInfo?.mention ? handleRemoveLink : undefined}
+          selectionError={selectionError}
+          linkDisabledReason={linkDisabledReason}
+          position={toolbarPosition}
+        />
+      )}
+      {mentionError && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '16px',
+            right: '16px',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            padding: '8px 12px',
+            color: 'var(--accent-2)',
+            fontSize: '12px',
+            boxShadow: 'var(--shadow)',
+          }}
+        >
+          {mentionError}
+        </div>
+      )}
+      <ConceptLinkModal
+        isOpen={linkModalOpen}
+        selectionText={pendingLinkSelection?.surfaceText || ''}
+        graphId={graphId}
+        onClose={() => {
+          setLinkModalOpen(false);
+          setPendingLinkSelection(null);
+        }}
+        onLink={handleConfirmLink}
+      />
       <style jsx global>{`
         .lecture-editor-content {
           max-width: 800px;
           margin: 0 auto;
           padding: 40px 24px;
           line-height: 1.7;
-          color: var(--ink);
+          color: #000000 !important;
         }
 
         .lecture-editor-content .ProseMirror {
           outline: none;
+          color: #000000 !important;
+        }
+
+        .lecture-editor-content .ProseMirror p {
+          color: #000000 !important;
+        }
+
+        .lecture-editor-content .ProseMirror h1,
+        .lecture-editor-content .ProseMirror h2,
+        .lecture-editor-content .ProseMirror h3,
+        .lecture-editor-content .ProseMirror h4,
+        .lecture-editor-content .ProseMirror h5,
+        .lecture-editor-content .ProseMirror h6 {
+          color: #000000 !important;
         }
 
         .lecture-editor-content .ProseMirror p {
@@ -921,7 +1320,7 @@ export function LectureEditor({
         }
 
         .lecture-editor-content .ProseMirror p.is-editor-empty:first-child::before {
-          color: var(--muted);
+          color: #666666 !important;
           content: attr(data-placeholder);
           float: left;
           height: 0;
@@ -963,7 +1362,7 @@ export function LectureEditor({
           border-left: 4px solid var(--accent);
           margin: 1.5em 0;
           padding-left: 1.5em;
-          color: var(--muted);
+          color: #333333 !important;
           font-style: italic;
         }
 
@@ -1052,8 +1451,24 @@ export function LectureEditor({
           border-bottom-color: rgba(255, 200, 0, 0.8) !important;
           border-bottom-style: solid !important;
         }
+
+        .concept-link {
+          border-bottom: 2px solid rgba(17, 138, 178, 0.6);
+          background: rgba(17, 138, 178, 0.08);
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+
+        .concept-link:hover {
+          background: rgba(17, 138, 178, 0.16);
+          border-bottom-color: rgba(17, 138, 178, 0.9);
+        }
+
+        .concept-link-repair {
+          border-bottom-style: dashed;
+          background: rgba(243, 156, 18, 0.12);
+        }
       `}</style>
     </div>
   );
 }
-

@@ -3,7 +3,13 @@ import { cacheBootstrap, readBootstrap } from "./cache_db";
 
 async function fetchJSON(url: string) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    // Don't throw for 404s - graph might not exist yet
+    if (res.status === 404) {
+      return null;
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }
   return await res.json();
 }
 
@@ -25,8 +31,12 @@ export async function getOfflineBootstrap(params: { graph_id: string; branch_id:
   // online: revalidate
   try {
     const fresh = await fetchJSON(
-      `/offline/bootstrap?graph_id=${encodeURIComponent(graph_id)}&branch_id=${encodeURIComponent(branch_id)}`
+      `/api/offline/bootstrap?graph_id=${encodeURIComponent(graph_id)}&branch_id=${encodeURIComponent(branch_id)}`
     );
+    // If fetch returned null (404), return cached data if available
+    if (fresh === null) {
+      return cached ?? null;
+    }
     await cacheBootstrap(graph_id, branch_id, fresh);
     return fresh;
   } catch {

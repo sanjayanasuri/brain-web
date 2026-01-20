@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { getFocusAreas, setFocusAreaActive, upsertFocusArea, FocusArea } from '../../api-client';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { getFocusAreas, FocusArea } from '../../api-client';
+import { inputMonitor } from '../../../lib/inputMonitor';
 
 interface LandingPageProps {
   onEnter: () => void;
@@ -9,141 +11,73 @@ interface LandingPageProps {
 }
 
 export default function LandingPage({ onEnter, userName = 'User' }: LandingPageProps) {
+  const router = useRouter();
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
   const [loading, setLoading] = useState(true);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [focusText, setFocusText] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [lastSaved, setLastSaved] = useState<string | null>(null);
-  const [showExistingFocus, setShowExistingFocus] = useState(false);
+  const [apiTiming, setApiTiming] = useState<number | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
     async function loadFocusAreas() {
+      const timingId = inputMonitor.startApiTiming('getFocusAreas');
+      const startTime = Date.now();
+      
       try {
         const areas = await getFocusAreas();
-        setFocusAreas(areas);
+        const duration = Date.now() - startTime;
+        setApiTiming(duration);
+        inputMonitor.completeApiTiming(timingId, true);
+        
+        if (isMounted) {
+          setFocusAreas(areas);
+        }
       } catch (err) {
+        const duration = Date.now() - startTime;
+        setApiTiming(duration);
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        inputMonitor.completeApiTiming(timingId, false, errorMsg);
         console.error('Failed to load focus areas:', err);
+        // Don't block the UI - allow user to proceed even if focus areas fail to load
+        if (isMounted) {
+          setFocusAreas([]);
+        }
       } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    }
+    // Add timeout to prevent infinite loading
+    const timeout = setTimeout(() => {
+      if (isMounted) {
+        console.warn('Focus areas loading timeout - proceeding anyway');
         setLoading(false);
       }
-    }
+    }, 5000);
     loadFocusAreas();
+    return () => {
+      isMounted = false;
+      clearTimeout(timeout);
+    };
   }, []);
 
-  const handleToggleFocus = async (focusId: string, currentActive: boolean) => {
-    try {
-      await setFocusAreaActive(focusId, !currentActive);
-      // Update local state
-      setFocusAreas(prev => prev.map(fa => 
-        fa.id === focusId ? { ...fa, active: !currentActive } : fa
-      ));
-      
-      // Update textarea to reflect active focus areas
-      const updatedAreas = focusAreas.map(fa => 
-        fa.id === focusId ? { ...fa, active: !currentActive } : fa
-      );
-      const activeNames = updatedAreas.filter(a => a.active).map(a => a.name);
-      setFocusText(activeNames.join('\n'));
-    } catch (err) {
-      console.error('Failed to toggle focus area:', err);
-    }
-  };
 
-  const handleSaveFocus = async () => {
-    if (!focusText.trim()) {
-      // If empty, deactivate all focus areas
-      const activeAreas = focusAreas.filter(a => a.active);
-      for (const area of activeAreas) {
-        try {
-          await setFocusAreaActive(area.id, false);
-        } catch (err) {
-          console.error(`Failed to deactivate ${area.id}:`, err);
-        }
-      }
-      setFocusAreas(prev => prev.map(fa => ({ ...fa, active: false })));
-      setFocusText('');
-      setLastSaved('All focus areas cleared');
-      return;
-    }
-
-    try {
-      setSaving(true);
-      
-      // Parse focus areas from text (one per line, or comma-separated)
-      const lines = focusText
-        .split(/[\n,]/)
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-      
-      // Get existing focus areas by name (case-insensitive)
-      const existingByName = new Map(
-        focusAreas.map(fa => [fa.name.toLowerCase(), fa])
-      );
-      
-      const newFocusAreas: FocusArea[] = [];
-      const toDeactivate: string[] = [];
-      
-      // Process each line as a focus area
-      for (const line of lines) {
-        const lowerName = line.toLowerCase();
-        if (existingByName.has(lowerName)) {
-          // Existing focus area - activate it
-          const existing = existingByName.get(lowerName)!;
-          if (!existing.active) {
-            await setFocusAreaActive(existing.id, true);
-          }
-          newFocusAreas.push({ ...existing, active: true });
-        } else {
-          // New focus area - create it
-          const newArea = await upsertFocusArea({
-            id: line.toLowerCase().replace(/\s+/g, '-'),
-            name: line,
-            description: undefined,
-            active: true,
-          });
-          newFocusAreas.push(newArea);
-        }
-      }
-      
-      // Deactivate focus areas that are no longer in the text
-      for (const area of focusAreas) {
-        const isInText = lines.some(
-          line => line.toLowerCase() === area.name.toLowerCase()
-        );
-        if (!isInText && area.active) {
-          toDeactivate.push(area.id);
-          await setFocusAreaActive(area.id, false);
-        }
-      }
-      
-      // Reload focus areas to get updated list
-      const updatedAreas = await getFocusAreas();
-      setFocusAreas(updatedAreas);
-      
-      // Update selected set
-      // Update textarea to reflect saved state (in case names were normalized)
-      const activeNames = updatedAreas.filter(a => a.active).map(a => a.name);
-      setFocusText(activeNames.join('\n'));
-      
-      setLastSaved(`Saved ${newFocusAreas.length} focus area${newFocusAreas.length !== 1 ? 's' : ''}`);
-      setTimeout(() => setLastSaved(null), 3000);
-    } catch (err) {
-      console.error('Failed to save focus areas:', err);
-      setLastSaved('Error saving focus areas');
-      setTimeout(() => setLastSaved(null), 3000);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleEnter = async () => {
+  const handleEnter = useCallback(async () => {
+    inputMonitor.trackInput({
+      type: 'click',
+      target: 'Enter Brain Web',
+    });
+    
     setIsTransitioning(true);
     // Small delay for fade effect
     setTimeout(() => {
-      onEnter();
+      router.push('/home');
     }, 300);
-  };
+  }, [router]);
+
+
 
   if (loading) {
     return (
@@ -158,6 +92,7 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
       </div>
     );
   }
+
 
   return (
     <div style={{
@@ -179,208 +114,67 @@ export default function LandingPage({ onEnter, userName = 'User' }: LandingPageP
         boxShadow: 'var(--shadow)',
         border: '1px solid var(--border)',
       }}>
-        <h1 style={{
-          fontSize: '36px',
-          fontWeight: '700',
-          marginBottom: '8px',
-          color: 'var(--ink)',
+        {/* Welcome Section */}
+        <div style={{
+          marginBottom: '32px',
+          textAlign: 'center',
         }}>
-          Welcome, {userName}
-        </h1>
-        
-        <p style={{
-          fontSize: '20px',
-          color: 'var(--muted)',
-          marginBottom: '8px',
-        }}>
-          What would you like to focus on today?
-        </p>
-        <p style={{
-          fontSize: '13px',
-          color: 'var(--muted)',
-          marginBottom: '24px',
-          fontStyle: 'italic',
-          opacity: 0.8,
-        }}>
-          Your focus areas help Brain Web connect your questions and learning back to these themes
-        </p>
-
-        <div style={{ marginBottom: '24px' }}>
           <div style={{
-            position: 'relative',
+            fontSize: '32px',
+            fontWeight: '600',
+            color: 'var(--ink)',
             marginBottom: '12px',
+            lineHeight: '1.2',
           }}>
-            <textarea
-              value={focusText}
-              onChange={(e) => setFocusText(e.target.value)}
-              placeholder="Type your focus areas here, one per line or separated by commas...&#10;&#10;Examples:&#10;Distributed Systems&#10;Machine Learning&#10;Web Development"
-              style={{
-                width: '100%',
-                minHeight: '120px',
-                padding: '16px',
-                border: '2px solid var(--border)',
-                borderRadius: '8px',
-                fontSize: '16px',
-                fontFamily: 'inherit',
-                color: 'var(--ink)',
-                background: 'var(--surface)',
-                resize: 'vertical',
-                transition: 'border-color 0.2s',
-                lineHeight: '1.6',
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.borderColor = 'var(--accent)';
-                e.currentTarget.style.outline = 'none';
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border)';
-              }}
-            />
-            {lastSaved && (
-              <div style={{
-                position: 'absolute',
-                bottom: '8px',
-                right: '12px',
-                fontSize: '12px',
-                color: 'var(--accent)',
-                background: 'var(--panel)',
-                padding: '4px 8px',
-                borderRadius: '4px',
-              }}>
-                {lastSaved}
-              </div>
-            )}
+            Welcome User
           </div>
-          
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <button
-              onClick={handleSaveFocus}
-              disabled={saving}
-              style={{
-                padding: '10px 20px',
-                fontSize: '14px',
-                fontWeight: '600',
-                background: saving ? 'var(--muted)' : 'var(--accent)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: saving ? 'not-allowed' : 'pointer',
-                transition: 'all 0.2s',
-                boxShadow: saving ? 'none' : '0 10px 20px rgba(17, 138, 178, 0.22)',
-              }}
-              onMouseEnter={(e) => {
-                if (!saving) {
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!saving) {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                }
-              }}
-            >
-              {saving ? 'Saving...' : 'Save Focus'}
-            </button>
-            <span style={{
-              fontSize: '12px',
-              color: 'var(--muted)',
-            }}>
-              This syncs with Profile Customization
-            </span>
+          <div style={{
+            fontSize: '18px',
+            color: 'var(--muted)',
+            marginBottom: '24px',
+          }}>
+            What would you like to focus on today?
           </div>
-          
-          {focusAreas.some(area => area.active) && (
-            <div style={{
-              marginTop: '20px',
-              paddingTop: '20px',
-              borderTop: '1px solid var(--border)',
-            }}>
-              <button
-                onClick={() => setShowExistingFocus(prev => !prev)}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  padding: 0,
-                  color: 'var(--accent)',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                }}
-              >
-                {showExistingFocus ? 'Hide previous focus areas' : 'Show previous focus areas'}
-              </button>
-              {showExistingFocus && (
-                <>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--muted)',
-                    marginBottom: '12px',
-                    marginTop: '12px',
-                    fontWeight: '500',
-                  }}>
-                    Active focus areas (click to toggle):
-                  </p>
-                  <div style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: '8px',
-                  }}>
-                    {focusAreas.filter(area => area.active).map(area => (
-                      <button
-                        key={area.id}
-                        onClick={() => handleToggleFocus(area.id, area.active)}
-                        style={{
-                          padding: '8px 14px',
-                          border: '2px solid var(--accent)',
-                          borderRadius: '6px',
-                          background: 'var(--panel)',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s',
-                          fontSize: '13px',
-                          fontWeight: '500',
-                          color: 'var(--ink)',
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = 'var(--surface)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'var(--panel)';
-                        }}
-                      >
-                        ✓ {area.name}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
         </div>
 
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-          <button
-            onClick={handleEnter}
+        {/* Focus Area Section */}
+        <div style={{ marginBottom: '32px' }}>
+          <input
+            type="text"
+            value={focusText}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Limit length
+              if (value.length <= 1000) {
+                setFocusText(value);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleEnter();
+              }
+            }}
+            placeholder=""
             style={{
-              padding: '14px 32px',
-              fontSize: '16px',
-              fontWeight: '600',
-              background: 'var(--accent)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: 'var(--shadow)',
+              width: '100%',
+              padding: '10px 14px',
+              border: '2px solid var(--border)',
+              borderRadius: '6px',
+              fontSize: '14px',
+              fontFamily: 'inherit',
+              color: 'var(--ink)',
+              background: 'var(--surface)',
+              transition: 'border-color 0.2s',
             }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'translateY(-1px)';
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = 'var(--accent)';
+              e.currentTarget.style.outline = 'none';
             }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)';
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = 'var(--border)';
             }}
-          >
-            Enter Brain Web →
-          </button>
+          />
         </div>
       </div>
     </div>

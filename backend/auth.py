@@ -1,0 +1,231 @@
+"""
+Authentication and authorization module.
+
+Provides:
+- Token-based authentication (Bearer tokens)
+- User/tenant extraction from tokens
+- FastAPI dependencies for route protection
+- Public endpoint exemption
+"""
+import os
+import jwt
+import hashlib
+from typing import Optional, Dict, Any
+from fastapi import HTTPException, Request, Security, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+# Security scheme for Bearer token authentication
+security = HTTPBearer(auto_error=False)
+
+# Public endpoints that don't require authentication
+PUBLIC_ENDPOINTS = {
+    "/",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+}
+
+
+def get_api_token_secret() -> str:
+    """Get API token secret from environment or generate a default for dev."""
+    secret = os.getenv("API_TOKEN_SECRET")
+    if not secret:
+        # In production, this should be set via environment variable
+        # For dev, we'll use a default (not secure, but allows local testing)
+        return "dev-secret-key-change-in-production"
+    return secret
+
+
+def verify_token(token: str) -> Dict[str, Any]:
+    """
+    Verify and decode a JWT token.
+    
+    Returns:
+        Decoded token payload with user_id, tenant_id, etc.
+    
+    Raises:
+        HTTPException if token is invalid
+    """
+    try:
+        secret = get_api_token_secret()
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def create_token(user_id: str, tenant_id: str, expires_in_days: int = 30) -> str:
+    """
+    Create a JWT token for a user/tenant.
+    
+    Args:
+        user_id: User identifier
+        tenant_id: Tenant/organization identifier
+        expires_in_days: Token expiration in days
+    
+    Returns:
+        JWT token string
+    """
+    import datetime
+    secret = get_api_token_secret()
+    payload = {
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=expires_in_days),
+        "iat": datetime.datetime.utcnow(),
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def extract_token_from_request(request: Request) -> Optional[str]:
+    """
+    Extract token from request headers (Authorization: Bearer <token>).
+    
+    Returns:
+        Token string if found, None otherwise
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return None
+
+
+def get_user_context_from_request(request: Request) -> Dict[str, Any]:
+    """
+    Extract user context from request (token).
+    
+    Returns:
+        Dict with user_id, tenant_id, and is_authenticated
+    """
+    # Try to extract token
+    token = extract_token_from_request(request)
+    if not token:
+        return {
+            "user_id": None,
+            "tenant_id": None,
+            "is_authenticated": False,
+        }
+    
+    # Verify token
+    try:
+        payload = verify_token(token)
+        return {
+            "user_id": payload.get("user_id"),
+            "tenant_id": payload.get("tenant_id"),
+            "is_authenticated": True,
+        }
+    except HTTPException:
+        return {
+            "user_id": None,
+            "tenant_id": None,
+            "is_authenticated": False,
+        }
+
+
+def require_auth(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+    request: Request = None,
+) -> Dict[str, Any]:
+    """
+    FastAPI dependency that requires authentication.
+    
+    Usage:
+        @router.get("/protected")
+        def protected_route(auth: dict = Depends(require_auth)):
+            user_id = auth["user_id"]
+            tenant_id = auth["tenant_id"]
+    
+    Raises:
+        HTTPException(401) if not authenticated
+    """
+    # Check for token in Authorization header
+    if credentials:
+        try:
+            payload = verify_token(credentials.credentials)
+            return {
+                "user_id": payload.get("user_id"),
+                "tenant_id": payload.get("tenant_id"),
+                "is_authenticated": True,
+            }
+        except HTTPException:
+            pass
+    
+    # Also check request headers directly (for extension compatibility)
+    if request:
+        token = extract_token_from_request(request)
+        if token:
+            try:
+                payload = verify_token(token)
+                return {
+                    "user_id": payload.get("user_id"),
+                    "tenant_id": payload.get("tenant_id"),
+                    "is_authenticated": True,
+                }
+            except HTTPException:
+                pass
+    
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+def optional_auth(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+    request: Request = None,
+) -> Dict[str, Any]:
+    """
+    FastAPI dependency that optionally extracts auth context.
+    
+    Returns auth context if available, otherwise returns None values.
+    Does not raise exceptions.
+    """
+    # Try to get auth from credentials
+    if credentials:
+        try:
+            payload = verify_token(credentials.credentials)
+            return {
+                "user_id": payload.get("user_id"),
+                "tenant_id": payload.get("tenant_id"),
+                "is_authenticated": True,
+            }
+        except HTTPException:
+            pass
+    
+    # Try request headers
+    if request:
+        token = extract_token_from_request(request)
+        if token:
+            try:
+                payload = verify_token(token)
+                return {
+                    "user_id": payload.get("user_id"),
+                    "tenant_id": payload.get("tenant_id"),
+                    "is_authenticated": True,
+                }
+            except HTTPException:
+                pass
+    
+    # Return unauthenticated context
+    return {
+        "user_id": None,
+        "tenant_id": None,
+        "is_authenticated": False,
+    }
+
+
+def is_public_endpoint(path: str) -> bool:
+    """Check if an endpoint is public (doesn't require auth)."""
+    # Exact match
+    if path in PUBLIC_ENDPOINTS:
+        return True
+    
+    # Check if path starts with any public prefix
+    for public_path in PUBLIC_ENDPOINTS:
+        if path.startswith(public_path):
+            return True
+    
+    return False
+

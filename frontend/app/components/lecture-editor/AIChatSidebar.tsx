@@ -41,6 +41,7 @@ export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
           mode: 'graphrag',
           graph_id: graphId,
           branch_id: branchId,
+          lecture_id: lectureId,
           focus_concept_id: undefined,
           response_prefs: {
             mode: 'compact',
@@ -78,38 +79,10 @@ export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        minHeight: 0,
         background: 'var(--surface)',
-        borderLeft: '1px solid var(--border)',
       }}
     >
-      {/* Header */}
-      <div
-        style={{
-          padding: '16px',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
-        <div
-          style={{
-            fontSize: '14px',
-            fontWeight: 600,
-            color: 'var(--ink)',
-            marginBottom: '4px',
-          }}
-        >
-          AI Assistant
-        </div>
-        {lectureTitle && (
-          <div
-            style={{
-              fontSize: '12px',
-              color: 'var(--muted)',
-            }}
-          >
-            {lectureTitle}
-          </div>
-        )}
-      </div>
 
       {/* Messages */}
       <div
@@ -120,20 +93,9 @@ export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
           display: 'flex',
           flexDirection: 'column',
           gap: '16px',
+          borderTop: '1px solid var(--border)',
         }}
       >
-        {messages.length === 0 && (
-          <div
-            style={{
-              color: 'var(--muted)',
-              fontSize: '13px',
-              textAlign: 'center',
-              padding: '20px',
-            }}
-          >
-            Ask me anything about your lecture or concepts in your knowledge graph.
-          </div>
-        )}
         {messages.map((msg, idx) => (
           <div
             key={idx}
@@ -254,4 +216,3 @@ export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
     </div>
   );
 }
-

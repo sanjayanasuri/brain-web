@@ -22,6 +22,22 @@ from services_branch_explorer import (
 from config import PROPOSED_VISIBILITY_THRESHOLD
 
 
+def _build_tenant_filter_clause(tenant_id: Optional[str]) -> str:
+    """
+    Build Cypher WHERE clause snippet for tenant filtering on GraphSpace.
+    
+    Args:
+        tenant_id: Optional tenant identifier. If None, no filtering (backward compatibility).
+    
+    Returns:
+        Cypher WHERE clause snippet: "AND (g.tenant_id IS NULL OR g.tenant_id = $tenant_id)"
+        or empty string if tenant_id is None
+    """
+    if tenant_id:
+        return "AND (g.tenant_id IS NULL OR g.tenant_id = $tenant_id)"
+    return ""
+
+
 def _normalize_include_proposed(include_proposed: Optional[str]) -> str:
     """
     Normalize include_proposed parameter to valid values: 'auto', 'all', or 'none'.
@@ -102,24 +118,45 @@ def _normalize_concept_from_db(record_data: Dict[str, Any]) -> Concept:
     return Concept(**data)
 
 
-def get_concept_by_name(session: Session, name: str, include_archived: bool = False) -> Optional[Concept]:
+def get_concept_by_name(session: Session, name: str, include_archived: bool = False, tenant_id: Optional[str] = None) -> Optional[Concept]:
     """
     Find a concept by name (exact match) or by alias (normalized match).
     Phase 2: Now checks both name and aliases field.
+    
+    Args:
+        session: Neo4j session
+        name: Concept name to search for
+        include_archived: Whether to include archived concepts
+        tenant_id: Optional tenant_id for multi-tenant isolation
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
     where_clauses = [
         "$branch_id IN COALESCE(c.on_branches, [])"
     ]
     if not include_archived:
         where_clauses.append("COALESCE(c.archived, false) = false")
     
+    # Add tenant filtering
+    tenant_filter = _build_tenant_filter_clause(tenant_id)
+    if tenant_filter:
+        where_clauses.append(tenant_filter.replace("AND ", ""))  # Remove leading AND since it's in WHERE
+    
     # Normalize name for matching
     normalized_name = name.lower().strip()
     
+    params = {
+        "name": name,
+        "normalized_name": normalized_name,
+        "graph_id": graph_id,
+        "branch_id": branch_id,
+    }
+    if tenant_id:
+        params["tenant_id"] = tenant_id
+    
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    {tenant_filter}
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE {' AND '.join(where_clauses)}
       AND (
@@ -142,7 +179,7 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
            c.last_updated_by AS last_updated_by
     LIMIT 1
     """
-    result = session.run(query, name=name, normalized_name=normalized_name, graph_id=graph_id, branch_id=branch_id)
+    result = session.run(query, **params)
     record = result.single()
     if not record:
         return None
@@ -183,14 +220,58 @@ def get_concept_by_id(session: Session, node_id: str, include_archived: bool = F
     return _normalize_concept_from_db(record.data())
 
 
+def get_concept_by_slug(session: Session, slug: str, include_archived: bool = False) -> Optional[Concept]:
+    """Get a concept by its URL slug (Wikipedia-style)."""
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    where_clauses = [
+        "c.url_slug = $slug",
+        "$branch_id IN COALESCE(c.on_branches, [])"
+    ]
+    if not include_archived:
+        where_clauses.append("COALESCE(c.archived, false) = false")
+    
+    query = f"""
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (c:Concept)-[:BELONGS_TO]->(g)
+    WHERE {' AND '.join(where_clauses)}
+    RETURN c.node_id AS node_id,
+           c.name AS name,
+           c.domain AS domain,
+           c.type AS type,
+           c.description AS description,
+           c.tags AS tags,
+           c.notes_key AS notes_key,
+           c.lecture_key AS lecture_key,
+           c.url_slug AS url_slug,
+           COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
+           c.created_by AS created_by,
+           c.last_updated_by AS last_updated_by
+    LIMIT 1
+    """
+    record = session.run(query, slug=slug, graph_id=graph_id, branch_id=branch_id).single()
+    if not record:
+        return None
+    return _normalize_concept_from_db(record.data())
+
+
 def create_concept(session: Session, payload: ConceptCreate) -> Concept:
     """
     Creates a concept node with a generated node_id if not present.
     For now, node_id is just a UUID string.
     """
     from uuid import uuid4
+    from utils.slug import generate_slug, ensure_unique_slug
 
     node_id = f"N{uuid4().hex[:8].upper()}"
+    
+    # Auto-generate slug if not provided
+    if not payload.url_slug:
+        base_slug = generate_slug(payload.name)
+        url_slug = ensure_unique_slug(session, base_slug)
+    else:
+        url_slug = payload.url_slug
     
     # Handle backward compatibility: if lecture_key is provided but lecture_sources is not
     lecture_sources = payload.lecture_sources or []
@@ -273,7 +354,7 @@ def create_concept(session: Session, payload: ConceptCreate) -> Concept:
         "tags": payload.tags,
         "notes_key": payload.notes_key,
         "lecture_key": payload.lecture_key,
-        "url_slug": payload.url_slug,
+        "url_slug": url_slug,
         "lecture_sources": lecture_sources,
         "created_by": created_by,
         "last_updated_by": last_updated_by,
@@ -840,10 +921,7 @@ def get_neighbors_with_relationships(session: Session, node_id: str, include_pro
 def get_all_concepts(session: Session) -> List[Concept]:
     """
     Returns all Concept nodes in the database, excluding merged nodes.
-    In demo mode, falls back to returning all concepts if GraphSpace structure is missing.
     """
-    from config import DEMO_MODE
-    
     ensure_graph_scoping_initialized(session)
     graph_id, branch_id = get_active_graph_context(session)
     
@@ -870,29 +948,6 @@ def get_all_concepts(session: Session) -> List[Concept]:
     """
     result = session.run(query, graph_id=graph_id, branch_id=branch_id)
     concepts = [_normalize_concept_from_db(record.data()) for record in result]
-    
-    # In demo mode, if no concepts found and GraphSpace might not exist, try fallback query
-    if DEMO_MODE and len(concepts) == 0:
-        fallback_query = """
-        MATCH (c:Concept)
-        WHERE COALESCE(c.is_merged, false) = false
-        RETURN c.node_id AS node_id,
-               c.name AS name,
-               c.domain AS domain,
-               c.type AS type,
-               c.description AS description,
-               c.tags AS tags,
-               c.notes_key AS notes_key,
-               c.lecture_key AS lecture_key,
-               c.url_slug AS url_slug,
-               COALESCE(c.lecture_sources, []) AS lecture_sources,
-               c.created_by AS created_by,
-               c.last_updated_by AS last_updated_by
-        ORDER BY c.node_id
-        LIMIT 1000
-        """
-        fallback_result = session.run(fallback_query)
-        concepts = [_normalize_concept_from_db(record.data()) for record in fallback_result]
     
     return concepts
 
@@ -1108,8 +1163,6 @@ def get_all_relationships(session: Session, include_proposed: str = "auto") -> L
             - "all": ACCEPTED + all PROPOSED
             - "none": Only ACCEPTED
     """
-    from config import DEMO_MODE
-    
     ensure_graph_scoping_initialized(session)
     graph_id, branch_id = get_active_graph_context(session)
     
@@ -1158,43 +1211,6 @@ def get_all_relationships(session: Session, include_proposed: str = "auto") -> L
         }
         for record in result
     ]
-    
-    # In demo mode, if no relationships found and GraphSpace might not exist, try fallback query
-    if DEMO_MODE and len(relationships) == 0:
-        fallback_edge_clause = _build_edge_visibility_where_clause(include_proposed)
-        fallback_params = {
-            "include_proposed": include_proposed,
-            "threshold": PROPOSED_VISIBILITY_THRESHOLD,
-        }
-        fallback_query = f"""
-        MATCH (s:Concept)-[r]->(t:Concept)
-        WHERE {fallback_edge_clause}
-        RETURN s.node_id AS source_id,
-               t.node_id AS target_id,
-               type(r) AS predicate,
-               COALESCE(r.status, 'ACCEPTED') AS status,
-               COALESCE(r.confidence, 0.0) AS confidence,
-               COALESCE(r.method, 'unknown') AS method,
-               r.rationale AS rationale,
-               r.source_id AS relationship_source_id,
-               r.chunk_id AS chunk_id
-        LIMIT 5000
-        """
-        fallback_result = session.run(fallback_query, **fallback_params)
-        relationships = [
-            {
-                "source_id": record.data()["source_id"],
-                "target_id": record.data()["target_id"],
-                "predicate": record.data()["predicate"],
-                "status": record.data()["status"],
-                "confidence": record.data()["confidence"],
-                "method": record.data()["method"],
-                "rationale": record.data()["rationale"],
-                "relationship_source_id": record.data()["relationship_source_id"],
-                "chunk_id": record.data()["chunk_id"],
-            }
-            for record in fallback_result
-        ]
     
     return relationships
 
@@ -2536,7 +2552,10 @@ def upsert_claim(
     source_span: str,
     chunk_id: str,
     embedding: Optional[List[float]] = None,
-    ingestion_run_id: Optional[str] = None
+    ingestion_run_id: Optional[str] = None,
+    status: Optional[str] = None,
+    evidence_ids: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """
     Create or update a Claim node and link it to SourceChunk.
@@ -2554,11 +2573,23 @@ def upsert_claim(
         chunk_id: Chunk ID this claim is supported by
         embedding: Optional embedding vector
         ingestion_run_id: Optional ingestion run ID that created this claim
+        status: Claim status ("PROPOSED", "VERIFIED", "REJECTED"). Defaults to "PROPOSED"
+        evidence_ids: Optional list of evidence IDs (quote_ids, chunk_ids, etc.)
     
     Returns:
         dict with claim_id and basic fields
     """
     ensure_graph_scoping_initialized(session)
+    
+    # Default status to PROPOSED if not provided
+    claim_status = status or "PROPOSED"
+    
+    # Build evidence_ids array (include chunk_id and any additional evidence)
+    evidence_list = [chunk_id]
+    if evidence_ids:
+        evidence_list.extend(evidence_ids)
+    # Deduplicate
+    evidence_list = list(dict.fromkeys(evidence_list))  # Preserves order while deduplicating
     
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
@@ -2571,6 +2602,8 @@ def upsert_claim(
         c.source_span = $source_span,
         c.embedding = $embedding,
         c.ingestion_run_id = $ingestion_run_id,
+        c.status = $status,
+        c.evidence_ids = $evidence_ids,
         c.on_branches = [$branch_id],
         c.created_at = timestamp()
     ON MATCH SET
@@ -2581,6 +2614,12 @@ def upsert_claim(
         c.source_span = $source_span,
         c.embedding = $embedding,
         c.ingestion_run_id = COALESCE(c.ingestion_run_id, $ingestion_run_id),
+        c.status = COALESCE(c.status, $status),
+        c.evidence_ids = CASE
+            WHEN $evidence_ids IS NOT NULL THEN $evidence_ids
+            WHEN c.evidence_ids IS NULL THEN $evidence_ids
+            ELSE c.evidence_ids
+        END,
         c.on_branches = CASE
             WHEN c.on_branches IS NULL THEN [$branch_id]
             WHEN $branch_id IN c.on_branches THEN c.on_branches
@@ -2593,7 +2632,9 @@ def upsert_claim(
     MERGE (c)-[:SUPPORTED_BY]->(s)
     RETURN c.claim_id AS claim_id,
            c.text AS text,
-           c.confidence AS confidence
+           c.confidence AS confidence,
+           c.status AS status,
+           c.evidence_ids AS evidence_ids
     """
     result = session.run(
         query,
@@ -2607,11 +2648,43 @@ def upsert_claim(
         source_span=source_span,
         chunk_id=chunk_id,
         embedding=embedding,
-        ingestion_run_id=ingestion_run_id
+        ingestion_run_id=ingestion_run_id,
+        status=claim_status,
+        evidence_ids=evidence_list,
     )
     record = result.single()
     if not record:
         raise ValueError(f"Failed to create/update Claim {claim_id}")
+    
+    # Emit event for claim upsert
+    try:
+        from events.emitter import emit_event
+        from events.schema import EventType, ObjectRef
+        from projectors.session_context import SessionContextProjector
+        
+        # Use provided session_id or fallback
+        event_session_id = session_id or getattr(session, '_session_id', None) or "unknown"
+        
+        # Emit event
+        emit_event(
+            event_type=EventType.CLAIM_UPSERTED,
+            session_id=event_session_id,
+            object_ref=ObjectRef(type="claim", id=claim_id),
+            payload={
+                "claim_id": claim_id,
+                "text": text[:200],  # Truncate for payload
+                "confidence": confidence,
+                "method": method,
+                "source_id": source_id,
+                "concept_ids": [],  # Could be extracted from claim mentions if needed
+            },
+        )
+        
+        # Projection is now handled asynchronously via background task queue
+        # No need to update synchronously here
+    except Exception:
+        pass  # Don't fail on event emission
+    
     return record.data()
 
 
@@ -2800,7 +2873,9 @@ def link_claim_evidenced_by_quote(
     quote_id: str
 ) -> None:
     """
-    Create (Claim)-[:EVIDENCED_BY]->(Quote) relationship.
+    Create (Claim)-[:EVIDENCED_BY]->(Quote) relationship and update evidence_ids.
+    
+    This is a required path for claim verification - quotes are the strongest evidence unit.
     
     Args:
         session: Neo4j session
@@ -2817,6 +2892,12 @@ def link_claim_evidenced_by_quote(
     WHERE $branch_id IN COALESCE(cl.on_branches, [])
       AND $branch_id IN COALESCE(q.on_branches, [])
     MERGE (cl)-[:EVIDENCED_BY]->(q)
+    WITH cl
+    SET cl.evidence_ids = CASE
+        WHEN cl.evidence_ids IS NULL THEN [$quote_id]
+        WHEN $quote_id IN cl.evidence_ids THEN cl.evidence_ids
+        ELSE cl.evidence_ids + $quote_id
+    END
     """
     session.run(query, graph_id=graph_id, branch_id=branch_id, claim_id=claim_id, quote_id=quote_id)
 
@@ -3917,3 +3998,395 @@ def get_linked_cross_graph_instances(session: Session, node_id: str) -> List[Dic
         })
     
     return instances
+
+
+# ---------- Evidence Snapshot & Change Event Functions ----------
+
+def upsert_evidence_snapshot(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    snapshot_id: str,
+    source_document_id: str,
+    source_type: str,
+    source_url: str,
+    content_hash: str,
+    normalized_title: str,
+    normalized_published_at: Optional[int] = None,
+    extraction_version: str = "v1",
+    company_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    metadata_json: Optional[str] = None,
+) -> dict:
+    """
+    Create or update an EvidenceSnapshot node.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        branch_id: Branch ID for scoping
+        snapshot_id: Unique snapshot identifier (UUID)
+        source_document_id: SourceDocument doc_id this snapshot is for
+        source_type: Source type ("EDGAR" | "IR" | "NEWS_RSS" | "BROWSER_USE" | "UPLOAD")
+        source_url: URL of the source document
+        content_hash: SHA256 hash of normalized content
+        normalized_title: Normalized title
+        normalized_published_at: Optional publication timestamp (Unix ms)
+        extraction_version: Version of extraction logic used
+        company_id: Optional Concept node_id for Company
+        tenant_id: Optional tenant identifier
+        metadata_json: Optional JSON string with additional metadata
+    
+    Returns:
+        dict with snapshot_id and basic fields
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    now_ts = int(datetime.utcnow().timestamp() * 1000)
+    
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MERGE (s:EvidenceSnapshot {graph_id: $graph_id, snapshot_id: $snapshot_id})
+    ON CREATE SET
+        s.source_document_id = $source_document_id,
+        s.source_type = $source_type,
+        s.source_url = $source_url,
+        s.observed_at = $now_ts,
+        s.content_hash = $content_hash,
+        s.normalized_title = $normalized_title,
+        s.normalized_published_at = $normalized_published_at,
+        s.extraction_version = $extraction_version,
+        s.company_id = $company_id,
+        s.tenant_id = $tenant_id,
+        s.metadata_json = $metadata_json,
+        s.on_branches = [$branch_id],
+        s.created_at = $now_ts
+    ON MATCH SET
+        s.source_document_id = $source_document_id,
+        s.source_type = $source_type,
+        s.source_url = $source_url,
+        s.content_hash = $content_hash,
+        s.normalized_title = $normalized_title,
+        s.normalized_published_at = $normalized_published_at,
+        s.extraction_version = $extraction_version,
+        s.company_id = $company_id,
+        s.tenant_id = $tenant_id,
+        s.metadata_json = $metadata_json,
+        s.on_branches = CASE
+            WHEN s.on_branches IS NULL THEN [$branch_id]
+            WHEN $branch_id IN s.on_branches THEN s.on_branches
+            ELSE s.on_branches + $branch_id
+        END,
+        s.updated_at = $now_ts
+    MERGE (s)-[:BELONGS_TO]->(g)
+    WITH s, g
+    // Link to SourceDocument if it exists
+    OPTIONAL MATCH (d:SourceDocument {graph_id: $graph_id, doc_id: $source_document_id})
+    WITH s, g, d
+    FOREACH (x IN CASE WHEN d IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (s)-[:HAS_SNAPSHOT]->(d)
+    )
+    // Link to Company Concept if provided
+    OPTIONAL MATCH (c:Concept {graph_id: $graph_id, node_id: $company_id})
+    WITH s, g, d, c
+    FOREACH (x IN CASE WHEN c IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (c)-[:HAS_SOURCE]->(d)
+    )
+    RETURN s.snapshot_id AS snapshot_id,
+           s.source_document_id AS source_document_id,
+           s.content_hash AS content_hash,
+           s.observed_at AS observed_at
+    """
+    
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        snapshot_id=snapshot_id,
+        source_document_id=source_document_id,
+        source_type=source_type,
+        source_url=source_url,
+        content_hash=content_hash,
+        normalized_title=normalized_title,
+        normalized_published_at=normalized_published_at,
+        extraction_version=extraction_version,
+        company_id=company_id,
+        tenant_id=tenant_id,
+        metadata_json=metadata_json,
+        now_ts=now_ts
+    )
+    record = result.single()
+    if not record:
+        raise ValueError(f"Failed to create/update EvidenceSnapshot {snapshot_id}")
+    return record.data()
+
+
+def get_snapshot_by_hash(
+    session: Session,
+    graph_id: str,
+    source_url: str,
+    content_hash: str,
+) -> Optional[dict]:
+    """
+    Find an existing snapshot by source_url and content_hash.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        source_url: Source URL
+        content_hash: Content hash to match
+    
+    Returns:
+        dict with snapshot data or None if not found
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    query = """
+    MATCH (s:EvidenceSnapshot {graph_id: $graph_id, source_url: $source_url, content_hash: $content_hash})
+    RETURN s.snapshot_id AS snapshot_id,
+           s.source_document_id AS source_document_id,
+           s.source_type AS source_type,
+           s.source_url AS source_url,
+           s.observed_at AS observed_at,
+           s.content_hash AS content_hash,
+           s.normalized_title AS normalized_title,
+           s.normalized_published_at AS normalized_published_at,
+           s.company_id AS company_id
+    ORDER BY s.observed_at DESC
+    LIMIT 1
+    """
+    
+    result = session.run(query, graph_id=graph_id, source_url=source_url, content_hash=content_hash)
+    record = result.single()
+    if record:
+        return record.data()
+    return None
+
+
+def get_latest_snapshot_for_url(
+    session: Session,
+    graph_id: str,
+    source_url: str,
+) -> Optional[dict]:
+    """
+    Get the most recent snapshot for a given source_url.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        source_url: Source URL
+    
+    Returns:
+        dict with snapshot data or None if not found
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    query = """
+    MATCH (s:EvidenceSnapshot {graph_id: $graph_id, source_url: $source_url})
+    RETURN s.snapshot_id AS snapshot_id,
+           s.source_document_id AS source_document_id,
+           s.source_type AS source_type,
+           s.source_url AS source_url,
+           s.observed_at AS observed_at,
+           s.content_hash AS content_hash,
+           s.normalized_title AS normalized_title,
+           s.normalized_published_at AS normalized_published_at,
+           s.company_id AS company_id
+    ORDER BY s.observed_at DESC
+    LIMIT 1
+    """
+    
+    result = session.run(query, graph_id=graph_id, source_url=source_url)
+    record = result.single()
+    if record:
+        return record.data()
+    return None
+
+
+def upsert_change_event(
+    session: Session,
+    graph_id: str,
+    branch_id: str,
+    change_event_id: str,
+    source_url: str,
+    change_type: str,
+    new_snapshot_id: str,
+    prev_snapshot_id: Optional[str] = None,
+    diff_summary: Optional[str] = None,
+    severity: str = "MEDIUM",
+    company_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    metadata_json: Optional[str] = None,
+) -> dict:
+    """
+    Create a ChangeEvent node.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        branch_id: Branch ID for scoping
+        change_event_id: Unique change event identifier (UUID)
+        source_url: Source URL that changed
+        change_type: Change type ("NEW_DOCUMENT" | "CONTENT_UPDATED" | "METADATA_UPDATED" | "REMOVED" | "REDIRECTED")
+        new_snapshot_id: Snapshot ID after the change
+        prev_snapshot_id: Optional snapshot ID before the change
+        diff_summary: Optional summary of changes
+        severity: Severity level ("LOW" | "MEDIUM" | "HIGH")
+        company_id: Optional Concept node_id for Company
+        tenant_id: Optional tenant identifier
+        metadata_json: Optional JSON string with additional metadata
+    
+    Returns:
+        dict with change_event_id and basic fields
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    now_ts = int(datetime.utcnow().timestamp() * 1000)
+    
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    CREATE (e:ChangeEvent {
+        graph_id: $graph_id,
+        change_event_id: $change_event_id,
+        source_url: $source_url,
+        detected_at: $now_ts,
+        change_type: $change_type,
+        prev_snapshot_id: $prev_snapshot_id,
+        new_snapshot_id: $new_snapshot_id,
+        diff_summary: $diff_summary,
+        severity: $severity,
+        company_id: $company_id,
+        tenant_id: $tenant_id,
+        metadata_json: $metadata_json,
+        on_branches: [$branch_id],
+        created_at: $now_ts
+    })
+    MERGE (e)-[:BELONGS_TO]->(g)
+    WITH e, g
+    // Link to new snapshot
+    MATCH (s_new:EvidenceSnapshot {graph_id: $graph_id, snapshot_id: $new_snapshot_id})
+    MERGE (e)-[:TO_SNAPSHOT]->(s_new)
+    WITH e, g, s_new
+    // Link to previous snapshot if provided
+    OPTIONAL MATCH (s_prev:EvidenceSnapshot {graph_id: $graph_id, snapshot_id: $prev_snapshot_id})
+    WITH e, g, s_new, s_prev
+    FOREACH (x IN CASE WHEN s_prev IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (e)-[:FROM_SNAPSHOT]->(s_prev)
+        MERGE (s_prev)-[:PREV_SNAPSHOT]->(s_new)
+    )
+    // Link to Company Concept if provided
+    OPTIONAL MATCH (c:Concept {graph_id: $graph_id, node_id: $company_id})
+    WITH e, g, s_new, s_prev, c
+    FOREACH (x IN CASE WHEN c IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (c)-[:HAS_CHANGE]->(e)
+    )
+    RETURN e.change_event_id AS change_event_id,
+           e.detected_at AS detected_at,
+           e.change_type AS change_type,
+           e.severity AS severity
+    """
+    
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        change_event_id=change_event_id,
+        source_url=source_url,
+        change_type=change_type,
+        new_snapshot_id=new_snapshot_id,
+        prev_snapshot_id=prev_snapshot_id,
+        diff_summary=diff_summary,
+        severity=severity,
+        company_id=company_id,
+        tenant_id=tenant_id,
+        metadata_json=metadata_json,
+        now_ts=now_ts
+    )
+    record = result.single()
+    if not record:
+        raise ValueError(f"Failed to create ChangeEvent {change_event_id}")
+    return record.data()
+
+
+def stale_claims_for_change(
+    session: Session,
+    graph_id: str,
+    change_event_id: str,
+) -> List[str]:
+    """
+    Find all claims that should be marked stale due to a ChangeEvent.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        change_event_id: ChangeEvent ID
+    
+    Returns:
+        List of claim_ids that should be marked stale
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    query = """
+    MATCH (e:ChangeEvent {graph_id: $graph_id, change_event_id: $change_event_id})
+    MATCH (e)-[:FROM_SNAPSHOT]->(s_prev:EvidenceSnapshot {graph_id: $graph_id})
+    MATCH (s_prev)<-[:HAS_SNAPSHOT]-(d:SourceDocument {graph_id: $graph_id})
+    MATCH (d)<-[:FROM_DOCUMENT]-(chunk:SourceChunk {graph_id: $graph_id})
+    MATCH (chunk)<-[:SUPPORTED_BY]-(claim:Claim {graph_id: $graph_id})
+    WHERE claim.status <> 'STALE'
+    RETURN DISTINCT claim.claim_id AS claim_id
+    """
+    
+    result = session.run(query, graph_id=graph_id, change_event_id=change_event_id)
+    claim_ids = [record["claim_id"] for record in result]
+    return claim_ids
+
+
+def mark_claims_stale(
+    session: Session,
+    graph_id: str,
+    claim_ids: List[str],
+    change_event_id: Optional[str] = None,
+) -> int:
+    """
+    Mark claims as stale.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID for scoping
+        claim_ids: List of claim_ids to mark stale
+        change_event_id: Optional ChangeEvent ID that caused staleness
+    
+    Returns:
+        Number of claims marked stale
+    """
+    if not claim_ids:
+        return 0
+    
+    ensure_graph_scoping_initialized(session)
+    
+    now_ts = int(datetime.utcnow().timestamp() * 1000)
+    
+    query = """
+    MATCH (c:Claim {graph_id: $graph_id})
+    WHERE c.claim_id IN $claim_ids
+    SET c.status = 'STALE',
+        c.updated_at = $now_ts
+    WITH c
+    // Link to ChangeEvent if provided
+    OPTIONAL MATCH (e:ChangeEvent {graph_id: $graph_id, change_event_id: $change_event_id})
+    WITH c, e
+    FOREACH (x IN CASE WHEN e IS NOT NULL THEN [1] ELSE [] END |
+        MERGE (c)-[:STALED_BY]->(e)
+    )
+    RETURN count(c) AS count
+    """
+    
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        claim_ids=claim_ids,
+        change_event_id=change_event_id,
+        now_ts=now_ts
+    )
+    record = result.single()
+    return record["count"] if record else 0

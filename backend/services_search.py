@@ -194,7 +194,21 @@ def semantic_search_nodes(
     """
     Performs semantic search over all nodes in the graph.
     Returns list of dicts with 'node' (Concept) and 'score' (float).
+    
+    This function now delegates to Qdrant-based search if available,
+    falling back to the old in-memory approach if Qdrant is not configured.
     """
+    # Try to use Qdrant if enabled
+    from config import USE_QDRANT
+    if USE_QDRANT:
+        try:
+            from services_search_qdrant import semantic_search_nodes as qdrant_search
+            return qdrant_search(query, session, limit)
+        except Exception as e:
+            print(f"WARNING: Qdrant search failed, falling back to in-memory: {e}")
+            # Fall through to old implementation
+    
+    # Old in-memory implementation (fallback)
     if not client:
         print("ERROR: Cannot perform semantic search - OpenAI client not initialized.")
         print("Please set OPENAI_API_KEY in backend/.env file")

@@ -149,7 +149,7 @@ export default function StyleFeedbackForm({
       
       <div style={{ marginBottom: '12px' }}>
         <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>
-          Test Label (optional, e.g., "Test1"):
+          Test Label (optional, e.g., &quot;Test1&quot;):
         </label>
         <input
           type="text"

@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useCallback, useState, ReactNode } from 'react';
+import { createContext, useContext, useCallback, useState, ReactNode, Dispatch, SetStateAction } from 'react';
 import type { Concept, GraphSummary, BranchSummary, FocusArea } from '../../api-client';
 
 export interface VisualGraph {
@@ -24,7 +24,7 @@ export interface VisualGraph {
 interface GraphContextType {
   // Graph data
   graphData: VisualGraph;
-  setGraphData: (data: VisualGraph) => void;
+  setGraphData: Dispatch<SetStateAction<VisualGraph>>;
   
   // Selected node
   selectedNode: Concept | null;

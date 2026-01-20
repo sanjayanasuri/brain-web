@@ -321,34 +321,46 @@ def main():
 
     create_constraints()
     
-    # TEMPORARY: Only import personal finance graph for testing
-    # Skip all legacy files and other graphs to speed up testing
+    # Import default graph (most important - this is the main graph)
+    default_nodes_file = GRAPH_DIR / "nodes_Gdefault.csv"
+    default_edges_file = GRAPH_DIR / "edges_Gdefault.csv"
+    
+    if default_nodes_file.exists():
+        print(f"\n[Importing default graph nodes: {default_nodes_file.name}]")
+        try:
+            import_nodes(default_nodes_file)
+        except Exception as e:
+            print(f"[ERROR] Failed to import {default_nodes_file.name}: {e}")
+    else:
+        print(f"[WARNING] Default nodes file not found: {default_nodes_file.name}")
+    
+    if default_edges_file.exists():
+        print(f"\n[Importing default graph edges: {default_edges_file.name}]")
+        try:
+            import_edges(default_edges_file)
+        except Exception as e:
+            print(f"[ERROR] Failed to import {default_edges_file.name}: {e}")
+    else:
+        print(f"[INFO] Default edges file not found (this is OK if you have no relationships yet): {default_edges_file.name}")
+    
+    # Also import personal finance graph if it exists
     FINANCE_GRAPH_ID = "G0F87FFD7"
     finance_nodes_file = GRAPH_DIR / f"nodes_G{FINANCE_GRAPH_ID}.csv"
     finance_edges_file = GRAPH_DIR / f"edges_G{FINANCE_GRAPH_ID}.csv"
     
-    print(f"\n[TEST MODE] Only importing personal finance graph: {FINANCE_GRAPH_ID}")
-    print(f"[SKIPPING] Legacy files and other graphs for faster testing\n")
-    
-    # Import finance nodes
     if finance_nodes_file.exists():
-        print(f"[Importing finance nodes: {finance_nodes_file.name}]")
+        print(f"\n[Importing finance graph nodes: {finance_nodes_file.name}]")
         try:
             import_nodes(finance_nodes_file)
         except Exception as e:
             print(f"[ERROR] Failed to import {finance_nodes_file.name}: {e}")
-    else:
-        print(f"[WARNING] Finance nodes file not found: {finance_nodes_file.name}")
     
-    # Import finance edges (may be empty, that's OK)
     if finance_edges_file.exists():
-        print(f"\n[Importing finance edges: {finance_edges_file.name}]")
+        print(f"\n[Importing finance graph edges: {finance_edges_file.name}]")
         try:
             import_edges(finance_edges_file)
         except Exception as e:
             print(f"[ERROR] Failed to import {finance_edges_file.name}: {e}")
-    else:
-        print(f"[INFO] Finance edges file not found (this is OK if you have no relationships yet): {finance_edges_file.name}")
     
     # SKIP legacy files for now (comment out to re-enable)
     # if NODES_FILE.exists():

@@ -5,15 +5,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db_neo4j import get_neo4j_session
+from auth import require_auth
 from services_browser_use import execute_skill, BrowserUseAPIError
 from services_resources import create_resource, link_resource_to_concept
 from services_graph import create_concept, get_concept_by_name
-from models import ConceptCreate, Resource
-from config import DEMO_MODE, DEMO_ALLOW_WRITES
+from models import ConceptCreate, Resource, FinanceSourceRun
 
 router = APIRouter(prefix="/finance", tags=["finance"])
 logger = logging.getLogger("brain_web")
@@ -391,7 +391,11 @@ def _get_latest_snapshots_for_tickers(session, tickers: List[str]) -> List[Lates
 # -------------------- Endpoints --------------------
 
 @router.post("/discover")
-def discover_companies(req: FinanceDiscoverRequest, session=Depends(get_neo4j_session)):
+def discover_companies(
+    req: FinanceDiscoverRequest,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     if not DISCOVERY_SKILL_ID:
         raise HTTPException(status_code=500, detail="BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID not configured")
 
@@ -448,7 +452,8 @@ def discover_companies(req: FinanceDiscoverRequest, session=Depends(get_neo4j_se
 @router.post("/track", response_model=FinanceTrackResponse)
 def track_company(
     req: FinanceTrackRequest,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Track a company ticker using Browser Use finance tracker skill.
@@ -456,13 +461,6 @@ def track_company(
     Creates/upserts a Company concept and stores the finance snapshot as a Resource.
     The Resource is linked to the Company concept and becomes retrievable by GraphRAG.
     """
-    # Check allow_writes in demo mode
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        raise HTTPException(
-            status_code=403,
-            detail="Writes are disabled in demo mode. Set DEMO_ALLOW_WRITES=true to enable, or use a non-demo environment."
-        )
-    
     if not TRACKER_SKILL_ID:
         raise HTTPException(
             status_code=500,
@@ -572,19 +570,13 @@ def track_company(
 @router.post("/snapshot", response_model=Resource)
 def fetch_snapshot(
     req: FinanceSnapshotRequest,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """
     Fetch a finance snapshot for a ticker and store it as a Resource.
     If concept_id is provided, link the resource to that concept.
     """
-    # Check allow_writes in demo mode
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        raise HTTPException(
-            status_code=403,
-            detail="Writes are disabled in demo mode. Set DEMO_ALLOW_WRITES=true to enable, or use a non-demo environment."
-        )
-    
     skill_id = FINANCE_SKILL_ID or TRACKER_SKILL_ID
     if not skill_id:
         raise HTTPException(
@@ -680,7 +672,8 @@ def fetch_snapshot(
 @router.get("/tracking", response_model=Optional[FinanceTrackingResponse])
 def get_tracking(
     ticker: str,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """Get tracking configuration for a ticker."""
     return _get_finance_tracking(session, ticker)
@@ -689,16 +682,10 @@ def get_tracking(
 @router.post("/tracking", response_model=FinanceTrackingResponse)
 def set_tracking(
     req: FinanceTrackingConfig,
-    session=Depends(get_neo4j_session)
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
 ):
     """Create or update tracking configuration for a ticker."""
-    # Check allow_writes in demo mode
-    if DEMO_MODE and not DEMO_ALLOW_WRITES:
-        raise HTTPException(
-            status_code=403,
-            detail="Writes are disabled in demo mode. Set DEMO_ALLOW_WRITES=true to enable, or use a non-demo environment."
-        )
-    
     if req.cadence not in ["daily", "weekly", "monthly"]:
         raise HTTPException(
             status_code=400,
@@ -709,7 +696,10 @@ def set_tracking(
 
 
 @router.get("/tracking/list", response_model=FinanceTrackingListResponse)
-def list_tracking(session=Depends(get_neo4j_session)):
+def list_tracking(
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
     """List all tickers with tracking enabled."""
     tickers = _list_all_tracked_tickers(session)
     return FinanceTrackingListResponse(tickers=tickers)
@@ -733,3 +723,417 @@ def get_latest_snapshots(
     
     snapshots = _get_latest_snapshots_for_tickers(session, ticker_list)
     return LatestSnapshotsResponse(snapshots=snapshots)
+
+
+# -------------------- Ticker Dashboard & Freshness Metrics --------------------
+
+class TickerFreshnessMetrics(BaseModel):
+    """Freshness metrics for a ticker."""
+    ticker: str
+    level: str  # "Fresh" | "Aging" | "Stale" | "No evidence"
+    newest_evidence_at: Optional[str]  # ISO format
+    age_days: Optional[int]
+    documents_count: int
+    claims_count: int
+    last_ingested_at: Optional[str]  # ISO format
+
+
+class TickerDashboardResponse(BaseModel):
+    """Ticker dashboard with coverage, freshness, and evidence density."""
+    ticker: str
+    freshness: TickerFreshnessMetrics
+    coverage: Dict[str, Any]  # Coverage metrics
+    evidence_density: Dict[str, Any]  # Evidence density metrics
+
+
+def _compute_ticker_freshness(session, ticker: str) -> TickerFreshnessMetrics:
+    """Compute freshness metrics for a ticker."""
+    # Find concept(s) for this ticker
+    query = """
+    MATCH (c:Concept)
+    WHERE c.name CONTAINS $ticker
+       OR c.tags CONTAINS $ticker
+    RETURN c.node_id AS concept_id
+    LIMIT 5
+    """
+    result = session.run(query, ticker=ticker)
+    concept_ids = [record["concept_id"] for record in result]
+    
+    # Get documents and claims for this ticker
+    doc_query = """
+    MATCH (d:SourceDocument)
+    WHERE d.company_ticker = $ticker
+    RETURN count(d) AS doc_count,
+           max(d.published_at) AS latest_published_at
+    """
+    doc_result = session.run(doc_query, ticker=ticker)
+    doc_record = doc_result.single()
+    documents_count = doc_record["doc_count"] if doc_record else 0
+    latest_published_at = doc_record["latest_published_at"] if doc_record else None
+    
+    # Count claims
+    claim_query = """
+    MATCH (d:SourceDocument {company_ticker: $ticker})<-[:SUPPORTED_BY]-(chunk:SourceChunk)<-[:SUPPORTED_BY]-(claim:Claim)
+    RETURN count(DISTINCT claim) AS claim_count
+    """
+    claim_result = session.run(claim_query, ticker=ticker)
+    claim_record = claim_result.single()
+    claims_count = claim_record["claim_count"] if claim_record else 0
+    
+    # Get last ingestion time
+    tracking_query = """
+    MATCH (t:FinanceTrack {ticker: $ticker})
+    RETURN t.last_ingested_at AS last_ingested_at
+    """
+    tracking_result = session.run(tracking_query, ticker=ticker)
+    tracking_record = tracking_result.single()
+    last_ingested_at = tracking_record["last_ingested_at"] if tracking_record else None
+    
+    # Compute freshness level
+    if latest_published_at:
+        # Convert timestamp to datetime
+        if isinstance(latest_published_at, (int, float)):
+            latest_dt = datetime.fromtimestamp(latest_published_at)
+        else:
+            latest_dt = datetime.utcnow()
+        
+        now = datetime.utcnow()
+        age_days = (now - latest_dt).days
+        
+        if age_days <= 30:
+            level = "Fresh"
+        elif age_days <= 120:
+            level = "Aging"
+        else:
+            level = "Stale"
+        
+        newest_evidence_at = latest_dt.isoformat() + "Z"
+    else:
+        level = "No evidence"
+        newest_evidence_at = None
+        age_days = None
+    
+    return TickerFreshnessMetrics(
+        ticker=ticker,
+        level=level,
+        newest_evidence_at=newest_evidence_at,
+        age_days=age_days,
+        documents_count=documents_count,
+        claims_count=claims_count,
+        last_ingested_at=last_ingested_at,
+    )
+
+
+# -------------------- Research Memo Export --------------------
+
+class ResearchMemoRequest(BaseModel):
+    """Request to generate a research memo."""
+    query: str
+    ticker: Optional[str] = None
+    evidence_strictness: str = "medium"
+    include_claims: bool = True
+    include_concepts: bool = True
+
+
+class ResearchMemoResponse(BaseModel):
+    """Response with research memo and citations."""
+    memo_text: str
+    citations: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+
+
+@router.post("/memo", response_model=ResearchMemoResponse)
+def generate_research_memo_endpoint(
+    request: ResearchMemoRequest,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Generate an exportable research memo with citations.
+    
+    Returns a formatted markdown memo with:
+    - Query summary
+    - Key findings (claims with citations)
+    - Related concepts
+    - Full citation list
+    """
+    from services_research_memo import generate_research_memo
+    
+    # Build query (add ticker context if provided)
+    query = request.query
+    if request.ticker:
+        query = f"{request.ticker}: {query}"
+    
+    result = generate_research_memo(
+        session=session,
+        query=query,
+        evidence_strictness=request.evidence_strictness,
+        include_claims=request.include_claims,
+        include_concepts=request.include_concepts,
+    )
+    
+    return ResearchMemoResponse(**result)
+
+
+@router.get("/dashboard/{ticker}", response_model=TickerDashboardResponse)
+def get_ticker_dashboard(
+    ticker: str,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Get ticker dashboard with coverage, freshness, and evidence density metrics.
+    """
+    ticker_upper = ticker.upper()
+    
+    # Compute freshness
+    freshness = _compute_ticker_freshness(session, ticker_upper)
+    
+    # Compute coverage (simplified - can be enhanced)
+    coverage = {
+        "documents_count": freshness.documents_count,
+        "claims_count": freshness.claims_count,
+        "sources": ["edgar", "ir", "news"],  # Could be dynamic
+    }
+    
+    # Compute evidence density (claims per document)
+    evidence_density = {
+        "claims_per_document": (
+            freshness.claims_count / freshness.documents_count
+            if freshness.documents_count > 0
+            else 0
+        ),
+        "total_claims": freshness.claims_count,
+        "total_documents": freshness.documents_count,
+    }
+    
+    return TickerDashboardResponse(
+        ticker=ticker_upper,
+        freshness=freshness,
+        coverage=coverage,
+        evidence_density=evidence_density,
+    )
+
+
+@router.get("/freshness/{ticker}", response_model=TickerFreshnessMetrics)
+def get_ticker_freshness(
+    ticker: str,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Get freshness metrics for a ticker.
+    """
+    return _compute_ticker_freshness(session, ticker.upper())
+
+
+# ---------- Finance Acquisition Endpoints ----------
+
+class FinanceAcquisitionRequest(BaseModel):
+    """Request to run finance acquisition for a company."""
+    ticker: str
+    company_id: Optional[str] = None  # Optional - will be looked up if not provided
+    sources: List[str] = Field(default=["edgar", "ir", "news"], description="Sources to acquire from")
+    since_days: int = Field(default=30, ge=1, le=365)
+    limit_per_source: int = Field(default=20, ge=1, le=100)
+
+
+class FinanceAcquisitionResponse(BaseModel):
+    """Response from finance acquisition run."""
+    run: FinanceSourceRun
+    message: str
+
+
+@router.post("/run", response_model=FinanceAcquisitionResponse)
+def run_finance_acquisition(
+    req: FinanceAcquisitionRequest,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Run a finance acquisition cycle for a company.
+    
+    Acquires documents from EDGAR, IR (Browser Use), and News RSS,
+    creates EvidenceSnapshots, and detects changes.
+    """
+    from services_finance_acquisition import run_company_acquisition
+    from services_graph import get_concept_by_name
+    from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
+    import os
+    
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    ticker_upper = req.ticker.upper()
+    
+    # Get or find company_id
+    company_id = req.company_id
+    if not company_id:
+        # Try to find company concept by ticker
+        concept = get_concept_by_name(session, ticker_upper)
+        if concept and concept.type and "company" in concept.type.lower():
+            company_id = concept.node_id
+        else:
+            # Try searching by tags
+            query = """
+            MATCH (c:Concept {graph_id: $graph_id})
+            WHERE c.tags IS NOT NULL AND $ticker IN c.tags
+              AND c.type CONTAINS 'company'
+            RETURN c.node_id AS node_id
+            LIMIT 1
+            """
+            result = session.run(query, graph_id=graph_id, ticker=f"ticker:{ticker_upper}")
+            record = result.single()
+            if record:
+                company_id = record["node_id"]
+    
+    if not company_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Company concept not found for ticker {ticker_upper}. Please track the company first using POST /finance/track"
+        )
+    
+    # Get Browser Use IR skill ID from env
+    browser_use_ir_skill_id = os.environ.get("BROWSER_USE_FINANCE_IR_SKILL_ID")
+    
+    # Run acquisition
+    try:
+        run = run_company_acquisition(
+            session=session,
+            company_id=company_id,
+            ticker=ticker_upper,
+            sources=req.sources,
+            since_days=req.since_days,
+            limit_per_source=req.limit_per_source,
+            browser_use_ir_skill_id=browser_use_ir_skill_id,
+        )
+        
+        message = f"Acquisition completed: {run.snapshots_created} snapshots, {run.change_events_created} changes detected"
+        if run.sources_failed:
+            message += f", {len(run.sources_failed)} source(s) failed"
+        
+        return FinanceAcquisitionResponse(run=run, message=message)
+        
+    except Exception as e:
+        logger.error(f"[Finance Acquisition] Failed for {ticker_upper}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Finance acquisition failed: {str(e)}"
+        )
+
+
+class ChangeEventResponse(BaseModel):
+    """ChangeEvent response model."""
+    change_event_id: str
+    source_url: str
+    detected_at: int
+    change_type: str
+    severity: str
+    diff_summary: Optional[str] = None
+    prev_snapshot_id: Optional[str] = None
+    new_snapshot_id: str
+
+
+class CompanyChangesResponse(BaseModel):
+    """Response with change timeline for a company."""
+    ticker: str
+    company_id: str
+    changes: List[ChangeEventResponse]
+    total_changes: int
+
+
+@router.get("/company/{ticker}/changes", response_model=CompanyChangesResponse)
+def get_company_changes(
+    ticker: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    since_days: Optional[int] = Query(default=None, ge=1, le=365),
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Get change timeline for a company.
+    
+    Returns ChangeEvents ordered by detected_at DESC.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    ticker_upper = ticker.upper()
+    
+    # Find company concept
+    from services_graph import get_concept_by_name
+    concept = get_concept_by_name(session, ticker_upper)
+    company_id = None
+    if concept and concept.type and "company" in concept.type.lower():
+        company_id = concept.node_id
+    else:
+        # Try searching by tags
+        query = """
+        MATCH (c:Concept {graph_id: $graph_id})
+        WHERE c.tags IS NOT NULL AND $ticker IN c.tags
+          AND c.type CONTAINS 'company'
+        RETURN c.node_id AS node_id
+        LIMIT 1
+        """
+        result = session.run(query, graph_id=graph_id, ticker=f"ticker:{ticker_upper}")
+        record = result.single()
+        if record:
+            company_id = record["node_id"]
+    
+    if not company_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Company concept not found for ticker {ticker_upper}"
+        )
+    
+    # Build query
+    query = """
+    MATCH (e:ChangeEvent {graph_id: $graph_id})
+    WHERE e.company_id = $company_id
+    """
+    
+    if since_days:
+        cutoff_ts = int((datetime.utcnow().timestamp() - (since_days * 86400)) * 1000)
+        query += " AND e.detected_at >= $cutoff_ts"
+    
+    query += """
+    RETURN e.change_event_id AS change_event_id,
+           e.source_url AS source_url,
+           e.detected_at AS detected_at,
+           e.change_type AS change_type,
+           e.severity AS severity,
+           e.diff_summary AS diff_summary,
+           e.prev_snapshot_id AS prev_snapshot_id,
+           e.new_snapshot_id AS new_snapshot_id
+    ORDER BY e.detected_at DESC
+    LIMIT $limit
+    """
+    
+    params = {
+        "graph_id": graph_id,
+        "company_id": company_id,
+        "limit": limit,
+    }
+    if since_days:
+        params["cutoff_ts"] = cutoff_ts
+    
+    result = session.run(query, **params)
+    changes = []
+    for record in result:
+        changes.append(ChangeEventResponse(
+            change_event_id=record["change_event_id"],
+            source_url=record["source_url"],
+            detected_at=record["detected_at"],
+            change_type=record["change_type"],
+            severity=record["severity"],
+            diff_summary=record.get("diff_summary"),
+            prev_snapshot_id=record.get("prev_snapshot_id"),
+            new_snapshot_id=record["new_snapshot_id"],
+        ))
+    
+    return CompanyChangesResponse(
+        ticker=ticker_upper,
+        company_id=company_id,
+        changes=changes,
+        total_changes=len(changes),
+    )

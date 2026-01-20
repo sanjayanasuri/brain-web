@@ -73,6 +73,7 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
     MATCH (g:GraphSpace {graph_id: $graph_id})
     MATCH (l:Lecture {lecture_id: $lecture_id, graph_id: $graph_id})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(l.on_branches, [])
+    OPTIONAL MATCH (l)-[:HAS_SEGMENT]->(seg:LectureSegment)
     RETURN l.lecture_id AS lecture_id,
            l.title AS title,
            l.description AS description,
@@ -81,18 +82,22 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
            l.estimated_time AS estimated_time,
            l.slug AS slug,
            l.raw_text AS raw_text,
-           l.metadata_json AS metadata_json
+           l.metadata_json AS metadata_json,
+           count(DISTINCT seg) AS segment_count
     LIMIT 1
     """
     record = session.run(query, graph_id=graph_id, branch_id=branch_id, lecture_id=lecture_id).single()
     if record:
-        return Lecture(**record.data())
+        data = record.data()
+        data["segment_count"] = data.get("segment_count", 0) or 0
+        return Lecture(**data)
     
     # Fallback: non-graph-scoped lookup (for ingested lectures)
     # If graph-scoped lookup failed, try to find the lecture by ID only
     # This handles lectures created during ingestion that don't have graph scoping
     fallback_query = """
     MATCH (l:Lecture {lecture_id: $lecture_id})
+    OPTIONAL MATCH (l)-[:HAS_SEGMENT]->(seg:LectureSegment)
     RETURN l.lecture_id AS lecture_id,
            l.title AS title,
            l.description AS description,
@@ -101,12 +106,15 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
            l.estimated_time AS estimated_time,
            l.slug AS slug,
            l.raw_text AS raw_text,
-           l.metadata_json AS metadata_json
+           l.metadata_json AS metadata_json,
+           count(DISTINCT seg) AS segment_count
     LIMIT 1
     """
     fallback_record = session.run(fallback_query, lecture_id=lecture_id).single()
     if fallback_record:
-        return Lecture(**fallback_record.data())
+        data = fallback_record.data()
+        data["segment_count"] = data.get("segment_count", 0) or 0
+        return Lecture(**data)
     
     return None
 
@@ -213,6 +221,7 @@ def list_lectures(session: Session) -> List[Lecture]:
             slug=record["slug"],
             raw_text=record.get("raw_text"),
             metadata_json=record.get("metadata_json"),
+            segment_count=record.get("segment_count", 0) or 0,
         ))
 
     # If no lectures found in active branch, try to get all lectures in the graph
@@ -246,6 +255,7 @@ def list_lectures(session: Session) -> List[Lecture]:
                 slug=record["slug"],
                 raw_text=record.get("raw_text"),
                 metadata_json=record.get("metadata_json"),
+                segment_count=record.get("segment_count", 0) or 0,
             ))
 
     return lectures

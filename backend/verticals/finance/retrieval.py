@@ -147,10 +147,12 @@ def filter_claims_by_recency(
     query = """
     MATCH (claim:Claim {graph_id: $graph_id})
     WHERE claim.claim_id IN $claim_ids
+      AND (claim.status IS NULL OR claim.status <> 'STALE')
     OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
     OPTIONAL MATCH (chunk)-[:FROM_DOCUMENT]->(doc:SourceDocument {graph_id: $graph_id})
     RETURN claim.claim_id AS claim_id, 
-           COALESCE(doc.published_at, claim.created_at, 0) AS published_at
+           COALESCE(doc.published_at, claim.created_at, 0) AS published_at,
+           claim.status AS status
     """
     
     try:
@@ -160,21 +162,30 @@ def filter_claims_by_recency(
             claim_ids=claim_ids
         )
         
-        # Build a map of claim_id -> published_at
+        # Build a map of claim_id -> published_at and status
         claim_timestamps = {}
+        claim_statuses = {}
         for record in result:
             claim_id = record["claim_id"]
             published_at = record["published_at"]
+            status = record.get("status")
             if published_at:
                 claim_timestamps[claim_id] = published_at
+            if status:
+                claim_statuses[claim_id] = status
         
-        # Filter claims by recency
+        # Filter claims by recency and staleness
         filtered_claims = []
         for claim in claims:
             claim_id = claim.get("claim_id")
             if not claim_id:
                 # Include claims without IDs (shouldn't happen, but be safe)
                 filtered_claims.append(claim)
+                continue
+            
+            # Exclude stale claims
+            status = claim_statuses.get(claim_id) or claim.get("status")
+            if status == "STALE":
                 continue
             
             published_at = claim_timestamps.get(claim_id)
@@ -409,9 +420,9 @@ def retrieve(
     ticker_count = sum(1 for c in all_claims if c.get("company_ticker") == ticker_for_filter) if ticker_for_filter else 0
     print(f"[Finance Retrieval] Found {len(all_claims)} total claims" + (f" ({ticker_count} with ticker {ticker_for_filter})" if ticker_for_filter else ""))
     
-    # Apply recency filtering (stub for now)
+    # Apply recency filtering (includes stale claim filtering)
     all_claims = filter_claims_by_recency(
-        all_claims, req.recency_days, session, req.graph_id
+        all_claims, req.recency_days, session, req.graph_id, exclude_stale=True
     )
     
     # Apply evidence strictness filtering

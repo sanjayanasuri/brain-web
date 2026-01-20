@@ -8,14 +8,16 @@ Handles:
 - Searching resources within the active graph + branch
 """
 
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Request
 from typing import List, Optional, Dict, Any, Tuple
 import mimetypes
-import uuid
 import os
 
 from models import Resource
 from db_neo4j import get_neo4j_session
+from auth import require_auth
+from storage import save_file, read_file, get_file_url
+from audit_log import log_resource_access
 from services_resources import (
     create_resource,
     get_resources_for_concept,
@@ -33,8 +35,6 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/resources", tags=["resources"])
 
-UPLOAD_DIR = os.environ.get("RESOURCE_UPLOAD_DIR", "uploaded_resources")
-
 
 class ConfusionSkillRequest(BaseModel):
     concept_id: Optional[str] = None
@@ -43,44 +43,59 @@ class ConfusionSkillRequest(BaseModel):
     limit: int = 8
 
 
-def _save_upload_to_disk(file: UploadFile) -> Tuple[str, str]:
+def _save_upload(file: UploadFile, tenant_id: Optional[str] = None) -> Tuple[str, str]:
     """
-    Save uploaded file to disk and return (url_path, file_path).
+    Save uploaded file using configured storage backend (local or S3).
+    
+    Returns:
+        (url_path, storage_path) tuple
     """
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    ext = os.path.splitext(file.filename or "")[1]
-    filename = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
-
-    with open(file_path, "wb") as f:
-        f.write(file.file.read())
-
-    url_path = f"/static/resources/{filename}"
-    return url_path, file_path
+    file_content = file.file.read()
+    filename = file.filename or "upload"
+    url_path, storage_path = save_file(file_content, filename, tenant_id=tenant_id)
+    return url_path, storage_path
 
 
 @router.get("/by-concept/{concept_id}", response_model=List[Resource])
 def list_resources_for_concept(
     concept_id: str,
+    request: Request,
+    auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    return get_resources_for_concept(session=session, concept_id=concept_id)
+    resources = get_resources_for_concept(session=session, concept_id=concept_id)
+    # Log access to resources for audit trail
+    for resource in resources:
+        try:
+            log_resource_access(request, resource.resource_id, access_type="VIEW")
+        except Exception:
+            pass  # Don't fail on audit logging
+    return resources
 
 
 @router.get("/search", response_model=List[Resource])
 def search_resources_endpoint(
     query: str,
+    request: Request,
     limit: int = 20,
+    auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
     """
     Search resources in the active graph + branch by title/caption/url.
     """
-    return search_resources(
+    resources = search_resources(
         session=session,
         query=query,
         limit=limit,
     )
+    # Log access to resources for audit trail
+    for resource in resources:
+        try:
+            log_resource_access(request, resource.resource_id, access_type="VIEW")
+        except Exception:
+            pass  # Don't fail on audit logging
+    return resources
 
 
 @router.post("/upload", response_model=Resource)
@@ -89,12 +104,15 @@ async def upload_resource(
     concept_id: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
     source: Optional[str] = Form("upload"),
+    request: Request = None,
+    auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
 
-    url, file_path = _save_upload_to_disk(file)
+    tenant_id = getattr(request.state, "tenant_id", None) if request else None
+    url, storage_path = _save_upload(file, tenant_id=tenant_id)
 
     mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
     kind = (
@@ -106,13 +124,20 @@ async def upload_resource(
 
     caption = None
     try:
+        # Read file for AI processing (works with both local and S3)
+        file_content = read_file(storage_path)
+        
+        # Generate captions using bytes (works with both local and S3)
         if kind == "image":
-            caption = generate_image_caption(file_path)
+            caption = generate_image_caption(storage_path, image_bytes=file_content)
         elif kind == "pdf":
-            pdf_text = extract_pdf_text(file_path)
+            # PDF processing can work with bytes
+            pdf_text = extract_pdf_text(storage_path, pdf_bytes=file_content)
             if pdf_text:
                 caption = summarize_pdf_text(pdf_text)
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger("brain_web").warning(f"Failed to generate caption: {e}")
         caption = None
 
     resource = create_resource(
@@ -132,6 +157,8 @@ async def upload_resource(
             raise HTTPException(status_code=400, detail=str(e))
 
     return resource
+
+
 
 
 def _caption_from_confusion_output(out: Dict[str, Any]) -> str:
@@ -154,6 +181,7 @@ def _caption_from_confusion_output(out: Dict[str, Any]) -> str:
 @router.post("/fetch/confusions", response_model=Resource)
 def fetch_confusions(
     req: ConfusionSkillRequest,
+    auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
     if not BROWSER_USE_CONFUSION_SKILL_ID:

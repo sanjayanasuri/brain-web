@@ -18,6 +18,9 @@ from models import (
     LectureIngestResult,
     LectureSegment,
     LectureSegmentUpdate,
+    LectureBlock,
+    LectureBlocksUpsertRequest,
+    LectureMention,
     Concept,
     Analogy,
 )
@@ -30,7 +33,9 @@ from services_lectures import (
     list_lectures,
 )
 from services_graph import update_lecture_segment
+from services_lecture_blocks import upsert_lecture_blocks, list_lecture_blocks
 from services_lecture_ingestion import ingest_lecture
+from services_lecture_mentions import list_lecture_mentions
 from services_lecture_draft import draft_next_lecture
 from services_sync import auto_export_csv
 
@@ -164,6 +169,34 @@ def update_lecture_endpoint(
     return lecture
 
 
+@router.post("/{lecture_id}/blocks", response_model=List[LectureBlock])
+def upsert_blocks_endpoint(
+    lecture_id: str,
+    payload: LectureBlocksUpsertRequest,
+    session=Depends(get_neo4j_session),
+):
+    """
+    Upsert lecture blocks with stable block IDs.
+    """
+    return upsert_lecture_blocks(session, lecture_id, payload.blocks)
+
+
+@router.get("/{lecture_id}/blocks", response_model=List[LectureBlock])
+def list_blocks_endpoint(lecture_id: str, session=Depends(get_neo4j_session)):
+    """
+    List lecture blocks by lecture ID.
+    """
+    return list_lecture_blocks(session, lecture_id)
+
+
+@router.get("/{lecture_id}/mentions", response_model=List[LectureMention])
+def list_mentions_endpoint(lecture_id: str, session=Depends(get_neo4j_session)):
+    """
+    List linked mentions for a lecture.
+    """
+    return list_lecture_mentions(session, lecture_id)
+
+
 @router.post("/{lecture_id}/steps", response_model=LectureStep)
 def add_lecture_step_endpoint(
     lecture_id: str,
@@ -286,8 +319,12 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
     
     query = """
     MATCH (lec:Lecture {lecture_id: $lecture_id})-[:HAS_SEGMENT]->(seg:LectureSegment)
+    WITH lec, seg
+    ORDER BY seg.segment_index
     OPTIONAL MATCH (seg)-[:COVERS]->(c:Concept)
+    WITH lec, seg, collect(DISTINCT c) AS concept_nodes
     OPTIONAL MATCH (seg)-[:USES_ANALOGY]->(a:Analogy)
+    WITH lec, seg, concept_nodes, collect(DISTINCT a) AS analogy_nodes
     RETURN seg.segment_id AS segment_id,
            seg.lecture_id AS lecture_id,
            seg.segment_index AS segment_index,
@@ -297,7 +334,7 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
            seg.summary AS summary,
            seg.style_tags AS style_tags,
            lec.title AS lecture_title,
-           collect(DISTINCT {
+           [c IN concept_nodes WHERE c IS NOT NULL | {
              node_id: c.node_id,
              name: c.name,
              domain: c.domain,
@@ -310,13 +347,13 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
              lecture_sources: COALESCE(c.lecture_sources, []),
              created_by: c.created_by,
              last_updated_by: c.last_updated_by
-           }) AS concepts,
-           collect(DISTINCT {
+           }] AS concepts,
+           [a IN analogy_nodes WHERE a IS NOT NULL | {
              analogy_id: a.analogy_id,
              label: a.label,
              description: a.description,
              tags: a.tags
-           }) AS analogies
+           }] AS analogies
     ORDER BY seg.segment_index
     """
     records = session.run(query, lecture_id=lecture_id)

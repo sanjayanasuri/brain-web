@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any, Literal
 # It also serializes Pydantic models back into JSON.
 # Famous in FastAPI development to ensure user input is clean. 
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 # BaseModel is the core Pydantic class that lets you define structured data models with validation. 
 # It has automatic validation. If someone inputs, age = "abc", the request will instantly be rejected.
 # It automatically converts input types to the right Python types where possible. 
@@ -128,6 +128,7 @@ class Lecture(BaseModel):
     slug: Optional[str] = None
     raw_text: Optional[str] = None  # Full lecture content (saved immediately, before AI processing)
     metadata_json: Optional[str] = None  # JSON metadata (e.g., markdown for Notion pages)
+    segment_count: Optional[int] = None  # Number of segments (for performance, included in list responses)
 
 """
 the lecture create class defines how lectures are created.
@@ -259,6 +260,59 @@ class LectureSegmentUpdate(BaseModel):
     start_time_sec: Optional[float] = None
     end_time_sec: Optional[float] = None
     style_tags: Optional[List[str]] = None
+
+
+class LectureBlock(BaseModel):
+    block_id: str
+    lecture_id: str
+    block_index: int
+    block_type: str
+    text: str
+
+
+class LectureBlockUpsert(BaseModel):
+    block_id: Optional[str] = None
+    block_index: int
+    block_type: str
+    text: str
+
+
+class LectureBlocksUpsertRequest(BaseModel):
+    blocks: List[LectureBlockUpsert]
+
+
+class LectureMention(BaseModel):
+    mention_id: str
+    lecture_id: str
+    block_id: str
+    start_offset: int
+    end_offset: int
+    surface_text: str
+    concept: Concept
+    context_note: Optional[str] = None
+    sense_label: Optional[str] = None
+    lecture_title: Optional[str] = None
+    block_text: Optional[str] = None
+
+
+class LectureMentionCreate(BaseModel):
+    lecture_id: str
+    block_id: str
+    start_offset: int
+    end_offset: int
+    surface_text: str
+    concept_id: str
+    context_note: Optional[str] = None
+    sense_label: Optional[str] = None
+
+
+class LectureMentionUpdate(BaseModel):
+    concept_id: Optional[str] = None
+    start_offset: Optional[int] = None
+    end_offset: Optional[int] = None
+    surface_text: Optional[str] = None
+    context_note: Optional[str] = None
+    sense_label: Optional[str] = None
 
 
 class LectureIngestResult(BaseModel):
@@ -668,6 +722,7 @@ class GraphSummary(BaseModel):
     template_description: Optional[str] = None
     template_tags: Optional[List[str]] = None
     intent: Optional[str] = None
+    tenant_id: Optional[str] = None  # Tenant/organization identifier for multi-tenant isolation
 
 
 class GraphCreateRequest(BaseModel):
@@ -702,6 +757,7 @@ class BranchSummary(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     source_node_id: Optional[str] = None
+    tenant_id: Optional[str] = None  # Tenant/organization identifier for multi-tenant isolation
 
 
 class BranchCreateRequest(BaseModel):
@@ -777,6 +833,96 @@ class IngestionRunCreate(BaseModel):
     focused_node_id: Optional[str] = None
 
 
+# ---------- Evidence Snapshot & Change Event Models ----------
+
+class EvidenceSnapshotCreate(BaseModel):
+    """Request to create a new EvidenceSnapshot."""
+    source_document_id: str
+    source_type: str  # "EDGAR" | "IR" | "NEWS_RSS" | "BROWSER_USE" | "UPLOAD"
+    source_url: str
+    content_hash: str  # SHA256 of normalized content
+    normalized_title: str
+    normalized_published_at: Optional[int] = None  # Unix timestamp (ms)
+    extraction_version: str = "v1"
+    company_id: Optional[str] = None  # Concept node_id for Company
+    tenant_id: Optional[str] = None
+    graph_id: Optional[str] = None
+    metadata_json: Optional[str] = None  # Stringified JSON
+
+
+class EvidenceSnapshot(BaseModel):
+    """EvidenceSnapshot node model."""
+    snapshot_id: str  # UUID
+    source_document_id: str
+    source_type: str
+    source_url: str
+    observed_at: int  # Unix timestamp (ms)
+    content_hash: str
+    normalized_title: str
+    normalized_published_at: Optional[int] = None
+    extraction_version: str
+    company_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    graph_id: str
+    metadata_json: Optional[str] = None
+
+
+class ChangeEventCreate(BaseModel):
+    """Request to create a new ChangeEvent."""
+    source_url: str
+    change_type: str  # "NEW_DOCUMENT" | "CONTENT_UPDATED" | "METADATA_UPDATED" | "REMOVED" | "REDIRECTED"
+    prev_snapshot_id: Optional[str] = None
+    new_snapshot_id: str
+    diff_summary: Optional[str] = None
+    severity: str = "MEDIUM"  # "LOW" | "MEDIUM" | "HIGH"
+    company_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    graph_id: Optional[str] = None
+    metadata_json: Optional[str] = None
+
+
+class ChangeEvent(BaseModel):
+    """ChangeEvent node model."""
+    change_event_id: str  # UUID
+    source_url: str
+    detected_at: int  # Unix timestamp (ms)
+    change_type: str
+    prev_snapshot_id: Optional[str] = None
+    new_snapshot_id: str
+    diff_summary: Optional[str] = None
+    severity: str
+    company_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    graph_id: str
+    metadata_json: Optional[str] = None
+
+
+class ChangeDetectionResult(BaseModel):
+    """Result of change detection between two snapshots."""
+    prev_hash: Optional[str] = None
+    new_hash: str
+    diff_summary: Optional[str] = None
+    change_type: str  # "NEW_DOCUMENT" | "CONTENT_UPDATED" | "METADATA_UPDATED"
+    severity: str  # "LOW" | "MEDIUM" | "HIGH"
+    prev_snapshot_id: Optional[str] = None
+
+
+class FinanceSourceRun(BaseModel):
+    """Represents a single acquisition run for a company."""
+    run_id: str  # UUID
+    company_id: str  # Concept node_id
+    ticker: str
+    sources_attempted: List[str]  # ["edgar", "ir", "news"]
+    sources_succeeded: List[str]
+    sources_failed: List[str]
+    snapshots_created: int
+    change_events_created: int
+    started_at: str  # ISO timestamp
+    completed_at: Optional[str] = None  # ISO timestamp
+    status: str  # "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED"
+    errors: Optional[List[str]] = None
+
+
 class SnapshotListResponse(BaseModel):
     snapshots: List[SnapshotSummary]
 
@@ -799,6 +945,8 @@ class RelationshipEdge(BaseModel):
 
 class RelationshipReviewItem(BaseModel):
     """A single relationship item in the review queue."""
+    model_config = ConfigDict(protected_namespaces=())
+    
     src_node_id: str
     src_name: str
     dst_node_id: str
@@ -913,3 +1061,348 @@ class MergeExecuteResponse(BaseModel):
     relationships_skipped: int
     relationships_deleted: int
     graph_id: str
+
+
+# ---------- Signal Models (Learning State Engine) ----------
+
+class SignalType(str, Enum):
+    """Types of learning behavior signals."""
+    TEXT_AUTHORING = "TEXT_AUTHORING"
+    SPAN_LINK = "SPAN_LINK"
+    EMPHASIS = "EMPHASIS"
+    FILE_INGESTION = "FILE_INGESTION"
+    VOICE_CAPTURE = "VOICE_CAPTURE"
+    VOICE_COMMAND = "VOICE_COMMAND"
+    QUESTION = "QUESTION"
+    TIME = "TIME"
+    ASSESSMENT = "ASSESSMENT"
+
+
+class Signal(BaseModel):
+    """Base signal model representing a learning observation."""
+    signal_id: str
+    signal_type: SignalType
+    timestamp: int  # Unix timestamp in milliseconds
+    graph_id: str
+    branch_id: str
+    # Context: what the user was working on
+    document_id: Optional[str] = None  # Lecture, Document, or Artifact ID
+    block_id: Optional[str] = None  # Block within document
+    concept_id: Optional[str] = None  # Related concept
+    # Signal-specific payload
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    # Provenance
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    created_at: Optional[str] = None  # ISO timestamp
+
+
+class TextAuthoringSignal(BaseModel):
+    """Signal for typed content creation."""
+    block_id: str
+    text: str
+    block_type: Optional[str] = None  # "paragraph", "heading", etc.
+    document_id: Optional[str] = None
+
+
+class SpanLinkSignal(BaseModel):
+    """Signal for linking text spans to concepts."""
+    block_id: str
+    start_offset: int
+    end_offset: int
+    surface_text: str
+    concept_id: str
+    context_note: Optional[str] = None
+    document_id: Optional[str] = None
+
+
+class EmphasisSignal(BaseModel):
+    """Signal for highlight, bold, underline, stylus marks."""
+    block_id: str
+    start_offset: int
+    end_offset: int
+    emphasis_type: str  # "highlight", "bold", "underline", "circle", "stylus"
+    text: str
+    document_id: Optional[str] = None
+
+
+class FileIngestionSignal(BaseModel):
+    """Signal for file uploads (PDFs, slides, books, homework, exams)."""
+    file_id: str
+    file_type: str  # "pdf", "slides", "textbook", "homework", "exam"
+    file_name: str
+    document_id: Optional[str] = None  # Created document ID
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class VoiceCaptureSignal(BaseModel):
+    """Signal for passive voice transcription (Mode A)."""
+    transcript: str
+    block_id: Optional[str] = None  # Attach to current block
+    concept_id: Optional[str] = None  # Attach to concept
+    classification: Optional[str] = None  # "reflection", "confusion", "explanation"
+    document_id: Optional[str] = None
+
+
+class VoiceCommandSignal(BaseModel):
+    """Signal for active voice commands (Mode B)."""
+    transcript: str
+    intent: str  # Parsed intent: "generate_answers", "summarize", "explain", "pause", etc.
+    params: Optional[Dict[str, Any]] = None
+    task_id: Optional[str] = None  # Created background task ID
+    document_id: Optional[str] = None
+    block_id: Optional[str] = None
+    concept_id: Optional[str] = None
+
+
+class QuestionSignal(BaseModel):
+    """Signal for explicit user questions."""
+    question: str
+    context_block_id: Optional[str] = None
+    context_concept_id: Optional[str] = None
+
+
+class TimeSignal(BaseModel):
+    """Signal for time spent, revisits."""
+    document_id: Optional[str] = None
+    block_id: Optional[str] = None
+    concept_id: Optional[str] = None
+    duration_ms: int
+    action: str  # "read", "write", "review", "revisit"
+
+
+class AssessmentSignal(BaseModel):
+    """Signal for homework, exams, practice problems."""
+    assessment_id: str
+    assessment_type: str  # "homework", "exam", "practice"
+    question_id: Optional[str] = None
+    question_text: str
+    required_concepts: List[str] = []  # Concept IDs
+    user_answer: Optional[str] = None
+    correct: Optional[bool] = None
+
+
+class SignalCreate(BaseModel):
+    """Request to create a signal."""
+    signal_type: SignalType
+    document_id: Optional[str] = None
+    block_id: Optional[str] = None
+    concept_id: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    session_id: Optional[str] = None
+
+
+class SignalListResponse(BaseModel):
+    """Response for listing signals."""
+    signals: List[Signal]
+    total: int
+
+
+# ---------- Task Models (Background AI Work) ----------
+
+class TaskStatus(str, Enum):
+    """Status of background tasks."""
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    READY = "READY"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class TaskType(str, Enum):
+    """Types of background tasks."""
+    GENERATE_ANSWERS = "GENERATE_ANSWERS"
+    SUMMARIZE = "SUMMARIZE"
+    EXPLAIN = "EXPLAIN"
+    GAP_ANALYSIS = "GAP_ANALYSIS"
+    RETRIEVE_CONTEXT = "RETRIEVE_CONTEXT"
+    EXTRACT_CONCEPTS = "EXTRACT_CONCEPTS"
+
+
+class Task(BaseModel):
+    """Background AI task requested via voice or UI."""
+    task_id: str
+    task_type: TaskType
+    status: TaskStatus
+    created_at: int  # Unix timestamp in milliseconds
+    started_at: Optional[int] = None
+    completed_at: Optional[int] = None
+    # Context
+    graph_id: str
+    branch_id: str
+    document_id: Optional[str] = None
+    block_id: Optional[str] = None
+    concept_id: Optional[str] = None
+    # Task parameters
+    params: Dict[str, Any] = Field(default_factory=dict)
+    # Results
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    # Provenance
+    created_by_signal_id: Optional[str] = None  # Voice command signal
+    session_id: Optional[str] = None
+
+
+class TaskCreate(BaseModel):
+    """Request to create a task."""
+    task_type: TaskType
+    document_id: Optional[str] = None
+    block_id: Optional[str] = None
+    concept_id: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    created_by_signal_id: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class TaskListResponse(BaseModel):
+    """Response for listing tasks."""
+    tasks: List[Task]
+    total: int
+
+
+# ---------- Calendar Event Models ----------
+
+class CalendarEvent(BaseModel):
+    """A calendar event stored natively in the system."""
+    event_id: str
+    title: str
+    description: Optional[str] = None
+    location: Optional[str] = None  # Event location (e.g., building, room, address)
+    start_date: str  # ISO date string (YYYY-MM-DD)
+    end_date: Optional[str] = None  # ISO date string (YYYY-MM-DD), defaults to start_date
+    start_time: Optional[str] = None  # ISO time string (HH:MM) or full datetime
+    end_time: Optional[str] = None  # ISO time string (HH:MM) or full datetime
+    all_day: bool = True  # Default to all-day events
+    color: Optional[str] = None  # Hex color code for display
+    created_at: Optional[str] = None  # ISO timestamp
+    updated_at: Optional[str] = None  # ISO timestamp
+
+
+class CalendarEventCreate(BaseModel):
+    """Request to create a calendar event."""
+    title: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    start_date: str  # ISO date string (YYYY-MM-DD)
+    end_date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    all_day: bool = True
+    color: Optional[str] = None
+
+
+class CalendarEventUpdate(BaseModel):
+    """Request to update a calendar event."""
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    all_day: Optional[bool] = None
+    color: Optional[str] = None
+
+
+class CalendarEventListResponse(BaseModel):
+    """Response for listing calendar events."""
+    events: List[CalendarEvent]
+    total: int
+
+
+# ---------- Smart Scheduler Models ----------
+
+class Task(BaseModel):
+    """A todo task that can be scheduled."""
+    id: str
+    title: str
+    notes: Optional[str] = None
+    estimated_minutes: int
+    due_date: Optional[str] = None  # ISO date string (YYYY-MM-DD)
+    priority: str = "medium"  # "low", "medium", "high"
+    energy: str = "med"  # "low", "med", "high"
+    tags: List[str] = Field(default_factory=list)
+    preferred_time_windows: Optional[List[str]] = None  # e.g., ["morning", "afternoon"]
+    dependencies: List[str] = Field(default_factory=list)  # List of task IDs
+    location: Optional[str] = None  # Location name/address
+    location_lat: Optional[float] = None  # Latitude for travel time calculation
+    location_lon: Optional[float] = None  # Longitude for travel time calculation
+    created_at: Optional[str] = None  # ISO timestamp
+    updated_at: Optional[str] = None  # ISO timestamp
+
+
+class TaskCreate(BaseModel):
+    """Request to create a task."""
+    title: str
+    notes: Optional[str] = None
+    estimated_minutes: int
+    due_date: Optional[str] = None
+    priority: str = "medium"
+    energy: str = "med"
+    tags: Optional[List[str]] = None
+    preferred_time_windows: Optional[List[str]] = None
+    dependencies: Optional[List[str]] = None
+    location: Optional[str] = None
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
+
+
+class TaskUpdate(BaseModel):
+    """Request to update a task."""
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    estimated_minutes: Optional[int] = None
+    due_date: Optional[str] = None
+    priority: Optional[str] = None
+    energy: Optional[str] = None
+    tags: Optional[List[str]] = None
+    preferred_time_windows: Optional[List[str]] = None
+    dependencies: Optional[List[str]] = None
+    location: Optional[str] = None
+    location_lat: Optional[float] = None
+    location_lon: Optional[float] = None
+
+
+class PlanSuggestion(BaseModel):
+    """A suggested time block for a task."""
+    id: str
+    task_id: str
+    task_title: str
+    start: str  # ISO datetime string
+    end: str  # ISO datetime string
+    confidence: float  # 0.0 to 1.0
+    reasons: List[str]  # 1-3 reasoning bullets
+    status: str  # "suggested", "accepted", "rejected", "completed"
+    created_at: Optional[str] = None  # ISO timestamp
+
+
+class FreeBlock(BaseModel):
+    """A free time block available for scheduling."""
+    start: str  # ISO datetime string
+    end: str  # ISO datetime string
+    duration_minutes: int
+    date: str  # ISO date string (YYYY-MM-DD)
+
+
+class SuggestionGroupedByDay(BaseModel):
+    """Suggestions grouped by day."""
+    date: str  # ISO date string (YYYY-MM-DD)
+    suggestions: List[PlanSuggestion]
+
+
+class SuggestionsResponse(BaseModel):
+    """Response for listing suggestions."""
+    suggestions_by_day: List[SuggestionGroupedByDay]
+    total: int
+
+
+class TaskListResponse(BaseModel):
+    """Response for listing tasks."""
+    tasks: List[Task]
+    total: int
+
+
+class FreeBlocksResponse(BaseModel):
+    """Response for listing free blocks."""
+    blocks: List[FreeBlock]
+    total: int

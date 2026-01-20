@@ -1,6 +1,6 @@
 
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from pathlib import Path
@@ -19,6 +19,7 @@ from notion_wrapper import get_database_pages
 from services_graph import unlink_lecture, get_notion_config, update_notion_config
 from db_neo4j import get_neo4j_session
 from models import NotionConfig
+from auth import require_auth
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -33,11 +34,11 @@ class NotionUnlinkPageRequest(BaseModel):
 
 
 @router.post("/import")
-def run_import():
+def run_import(auth: dict = Depends(require_auth)):
     """
     Admin-only endpoint: run CSV -> Neo4j import.
-
-    WARNING: This is powerful. In a real deployment, protect this with auth.
+    
+    Requires authentication.
     """
     try:
         import_csv_to_neo4j.main()
@@ -50,9 +51,14 @@ def run_import():
 
 
 @router.post("/export")
-def run_export(per_graph: bool = Query(True, description="Also export separate CSV files for each graph")):
+def run_export(
+    per_graph: bool = Query(True, description="Also export separate CSV files for each graph"),
+    auth: dict = Depends(require_auth),
+):
     """
     Admin-only endpoint: export current Neo4j graph to CSV.
+    
+    Requires authentication.
     
     Args:
         per_graph: If True (default), exports separate CSV files for each graph
@@ -71,7 +77,10 @@ def run_export(per_graph: bool = Query(True, description="Also export separate C
 
 
 @router.post("/sync-notion")
-def sync_notion_endpoint(force_full: bool = Query(False, description="If True, sync all pages regardless of last sync timestamp")):
+def sync_notion_endpoint(
+    force_full: bool = Query(False, description="If True, sync all pages regardless of last sync timestamp"),
+    auth: dict = Depends(require_auth),
+):
     """
     Runs a single Notion sync cycle.
     Useful for manual testing before enabling background sync.
@@ -101,7 +110,7 @@ def sync_notion_endpoint(force_full: bool = Query(False, description="If True, s
 
 
 @router.get("/notion/pages")
-def list_notion_pages_with_index_status():
+def list_notion_pages_with_index_status(auth: dict = Depends(require_auth)):
     """
     List all Notion pages from configured databases with their indexing status.
     
@@ -193,7 +202,7 @@ def list_notion_pages_with_index_status():
 
 
 @router.post("/notion/pages/index")
-def toggle_page_indexing(payload: NotionPageIndexRequest):
+def toggle_page_indexing(payload: NotionPageIndexRequest, auth: dict = Depends(require_auth)):
     """
     Toggle whether a Notion page should be indexed.
     
@@ -216,7 +225,7 @@ def toggle_page_indexing(payload: NotionPageIndexRequest):
 
 
 @router.post("/notion/index-mode")
-def set_notion_index_mode(payload: dict):
+def set_notion_index_mode(payload: dict, auth: dict = Depends(require_auth)):
     """
     Set the Notion indexing mode.
     
@@ -243,7 +252,7 @@ def set_notion_index_mode(payload: dict):
 
 
 @router.get("/notion/index-state")
-def get_notion_index_state():
+def get_notion_index_state(auth: dict = Depends(require_auth)):
     """
     Get the current Notion indexing state.
     
@@ -264,7 +273,7 @@ def get_notion_index_state():
 
 
 @router.get("/notion/sync-history")
-def get_notion_sync_history(limit: int = 20):
+def get_notion_sync_history(limit: int = 20, auth: dict = Depends(require_auth)):
     """
     Get recent Notion sync activity history.
     
@@ -328,7 +337,7 @@ def get_notion_sync_history(limit: int = 20):
 
 
 @router.post("/notion/unlink-page")
-def unlink_notion_page(payload: NotionUnlinkPageRequest):
+def unlink_notion_page(payload: NotionUnlinkPageRequest, auth: dict = Depends(require_auth)):
     """
     Unlink a Notion page from the graph by removing nodes that only came from it.
     
@@ -408,7 +417,10 @@ def unlink_notion_page(payload: NotionUnlinkPageRequest):
 
 
 @router.get("/notion-config", response_model=NotionConfig)
-def get_notion_config_endpoint(session=Depends(get_neo4j_session)):
+def get_notion_config_endpoint(
+    session=Depends(get_neo4j_session),
+    auth: dict = Depends(require_auth),
+):
     """
     Get the Notion sync configuration.
     Returns which databases are configured for sync and whether auto-sync is enabled.
@@ -417,7 +429,11 @@ def get_notion_config_endpoint(session=Depends(get_neo4j_session)):
 
 
 @router.post("/notion-config", response_model=NotionConfig)
-def update_notion_config_endpoint(config: NotionConfig, session=Depends(get_neo4j_session)):
+def update_notion_config_endpoint(
+    config: NotionConfig,
+    session=Depends(get_neo4j_session),
+    auth: dict = Depends(require_auth),
+):
     """
     Update the Notion sync configuration.
     Sets which databases should be synced and whether to enable auto-sync.
@@ -426,7 +442,11 @@ def update_notion_config_endpoint(config: NotionConfig, session=Depends(get_neo4
 
 
 @router.get("/graph-files/preview/{filename}")
-def preview_graph_file(filename: str, lines: int = Query(10, ge=1, le=50, description="Number of lines to preview")):
+def preview_graph_file(
+    filename: str,
+    lines: int = Query(10, ge=1, le=50, description="Number of lines to preview"),
+    auth: dict = Depends(require_auth),
+):
     """
     Preview the first few lines of a CSV file.
     
@@ -482,7 +502,7 @@ def preview_graph_file(filename: str, lines: int = Query(10, ge=1, le=50, descri
 
 
 @router.get("/graph-files/download/{filename}")
-def download_graph_file(filename: str):
+def download_graph_file(filename: str, auth: dict = Depends(require_auth)):
     """
     Download a CSV file from the graph directory.
     
@@ -520,7 +540,7 @@ def download_graph_file(filename: str):
 
 
 @router.get("/graph-files")
-def list_graph_files():
+def list_graph_files(auth: dict = Depends(require_auth)):
     """
     List all files in the graph directory with metadata.
     Useful for development/debugging to see which CSV files make up the knowledge graph.
