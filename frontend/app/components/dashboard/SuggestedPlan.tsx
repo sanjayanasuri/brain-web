@@ -8,7 +8,6 @@ import {
   rejectSuggestion,
   completeSuggestion,
   type SuggestionsResponse,
-  type PlanSuggestion,
 } from '../../api-client';
 
 interface SuggestedPlanProps {

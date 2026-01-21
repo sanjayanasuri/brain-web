@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
@@ -15,8 +17,6 @@ function getOpenAIApiKey(): string | undefined {
   // If key is too short or missing, try reading from file directly
   if (!key || key.length < 20) {
     try {
-      const fs = require('fs');
-      const path = require('path');
       
       // First try repo root .env.local (same as backend uses)
       const repoRootEnvPath = path.join(process.cwd(), '..', '.env.local');
@@ -389,7 +389,10 @@ export async function POST(request: NextRequest) {
     const body: ChatRequest = await request.json();
     // Default to GraphRAG for better evidence and structured context
     // Frontend can override with 'classic' for simple queries
-    let { message, mode = 'graphrag', graph_id, branch_id, lecture_id, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url } = body;
+    const { message: initialMessage, mode = 'graphrag', graph_id, branch_id, lecture_id, vertical: initialVertical, lens: initialLens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url } = body;
+    let message = initialMessage;
+    let vertical = initialVertical;
+    let lens = initialLens;
     
     // Default ResponsePreferences if not provided
     const defaultResponsePrefs: ResponsePreferences = {
@@ -652,7 +655,7 @@ Return ONLY the JSON object:`;
     }
 
     // Step 3: Build context string
-    let contextParts: string[] = [];
+    const contextParts: string[] = [];
     
     // For gap questions, include all domain nodes
     if (isGapQuestion && allDomainNodes.length > 0) {
@@ -805,7 +808,7 @@ Return ONLY the JSON object:`;
     const openaiStartTime = Date.now();
     
     // Build base system prompt (simpler for draft)
-    let baseSystemPrompt = isGapQuestion
+    const baseSystemPrompt = isGapQuestion
       ? `You are Brain Web, a learning companion that answers using ONLY the graph context provided.
 
 IMPORTANT: This is a question about GAPS in knowledge. Your task is to:
@@ -1485,7 +1488,7 @@ Return ONLY the JSON object:`;
               taskExtractionResult = parsed.task_data;
               console.log(`[Chat API] LLM intent analysis: is_task_creation=${isTaskCreationQuery}, confidence=${parsed.confidence}`);
             }
-          } catch (parseErr) {
+          } catch {
             console.error('[Chat API] Failed to parse LLM intent response:', intentText);
           }
         }
@@ -1566,7 +1569,7 @@ Return ONLY the JSON object:`;
               itineraryDateInfo = parsed.date_info || null;
               console.log(`[Chat API] LLM itinerary analysis: is_itinerary_query=${isItineraryQuery}, confidence=${parsed.confidence}, date_info=${JSON.stringify(itineraryDateInfo)}`);
             }
-          } catch (parseErr) {
+          } catch {
             console.error('[Chat API] Failed to parse LLM itinerary intent response:', itineraryIntentText);
           }
         }
@@ -1934,7 +1937,7 @@ Return ONLY the JSON object:`;
     let styleFeedbackResponse: PromiseSettledResult<Response | null>;
     
     // Only fetch retrieval for non-conversational queries, with timeout
-    let retrievalStartTime = Date.now();
+    const retrievalStartTime = Date.now();
     let retrievalLatency = 0;
     if (!isSimpleConversational) {
       // Build request body for intent-based retrieval
@@ -1979,7 +1982,7 @@ Return ONLY the JSON object:`;
         parallelFetches.push(lectureMentionsPromise);
       }
       
-      const [retrievalResponse, styleFeedbackResponseResult, lectureMentionsResponse] = await Promise.allSettled(parallelFetches);
+      const [retrievalResponse, styleFeedbackResponseResult] = await Promise.allSettled(parallelFetches);
       
       // Store style feedback response for later processing  
       styleFeedbackResponse = styleFeedbackResponseResult;
@@ -2605,7 +2608,6 @@ Use these examples to refine your responses. Pay attention to what the user like
     const suggestedQuestionsFromContext = contextSuggestions.map((s: any) => s.query || s.label).slice(0, 3);
     
     const duration = Date.now() - startTime;
-    const isDev = process.env.NODE_ENV !== 'production';
     
     // Extract evidence_used from context
     const evidenceUsed: EvidenceItem[] = context.evidence_used || [];
@@ -2613,7 +2615,6 @@ Use these examples to refine your responses. Pay attention to what the user like
     // Phase E: Populate meta.trace from retrievalData + session/focus contexts
     const traceIds = context.trace_ids || {};
     const sessionContext = context.session_context || {};
-    const focusContext = context.focus_context || {};
     
     // Build used_trail_steps from session_context
     const usedTrailSteps = (sessionContext.steps || []).map((s: any) => ({
@@ -2896,7 +2897,7 @@ function checkStrictnessValidation(answerText: string): { passes: boolean; reaso
   const citationPattern = /\[(Claim|Quote|Source):\s*[^\]]+\]/g;
   let sentencesWithCitations = 0;
   let sentencesRequiringCitations = 0;
-  let sentencesMissingCitations: string[] = [];
+  const sentencesMissingCitations: string[] = [];
   
   for (const sentence of sentences) {
     const hasCitation = citationPattern.test(sentence);

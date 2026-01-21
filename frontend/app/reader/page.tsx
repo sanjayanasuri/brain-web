@@ -7,9 +7,9 @@ import { setLastSession, trackResourceOpened, trackEvent } from '../lib/sessionS
 import { logEvent } from '../lib/eventsClient';
 import TopBar from '../components/topbar/TopBar';
 
-interface ReaderPageProps {}
+type ReaderPageProps = Record<string, never>;
 
-export default function ReaderPage(props: ReaderPageProps) {
+export default function ReaderPage(_props: ReaderPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   

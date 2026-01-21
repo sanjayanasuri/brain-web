@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { getFocusAreas, listGraphs, type FocusArea, type GraphSummary, listCalendarEvents, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, getLocationSuggestions, type CalendarEvent, type LocationSuggestion } from '../api-client';
 import SessionDrawer from '../components/navigation/SessionDrawer';
 import { fetchRecentSessions, type SessionSummary } from '../lib/eventsClient';
-import { getLastSession } from '../lib/sessionState';
-import { getChatSessions, setCurrentSessionId, createChatSession, addMessageToSession, getCurrentSessionId, type ChatSession } from '../lib/chatSessions';
+import { getChatSessions, setCurrentSessionId, createChatSession, addMessageToSession, type ChatSession } from '../lib/chatSessions';
 
 interface ChatMessage {
   id: string;
@@ -480,7 +479,7 @@ function CalendarWidget({
                         width: '100%',
                         overflow: 'hidden',
                       }}>
-                        {dayEvents.slice(0, 3).map((event, eventIdx) => (
+                        {dayEvents.slice(0, 3).map((event) => (
                           <div
                             key={event.event_id}
                             onClick={(e) => handleEventClick(e, event)}
@@ -744,7 +743,7 @@ function EventModal({
 
   // Fetch location suggestions - only when user is typing
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: NodeJS.Timeout | undefined;
     
     // Don't fetch if input is empty
     if (location.trim().length === 0) {
@@ -1394,11 +1393,11 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
   const [activeGraphId, setActiveGraphId] = useState<string>('');
-  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
+  const [_suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [graphs, setGraphs] = useState<GraphSummary[]>([]);
+  const [_graphs, setGraphs] = useState<GraphSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -1582,7 +1581,7 @@ export default function HomePage() {
     }
   }, [query, loading, activeGraphId]);
 
-  const handleSuggestionClick = (suggestion: string) => {
+  const _handleSuggestionClick = (suggestion: string) => {
     setQuery(suggestion);
     inputRef.current?.focus();
   };
@@ -1678,7 +1677,7 @@ export default function HomePage() {
       if (diffDays < 7) return `${diffDays}d ago`;
       
       return date.toLocaleDateString();
-    } catch (e) {
+    } catch {
       return 'Recent';
     }
   };

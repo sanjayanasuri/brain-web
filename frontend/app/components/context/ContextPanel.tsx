@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { Concept, Resource, Suggestion, SuggestionType } from '../../api-client';
 import { fetchEvidenceForConcept, type FetchEvidenceResult } from '../../lib/evidenceFetch';
@@ -15,9 +14,8 @@ import {
   SNOOZE_DURATIONS,
 } from '../../lib/suggestionPrefs';
 import { saveItem, removeSavedItem, isItemSaved, getSavedItems } from '../../lib/savedItems';
-import { getConceptQuality, type ConceptQuality, getCrossGraphInstances, linkCrossGraphInstances, getLinkedInstances, updateConcept, getNeighborsWithRelationships, getClaimsForConcept } from '../../api-client';
-import { CoveragePill, FreshnessPill } from '../ui/QualityIndicators';
-import { generateConceptObservation, generateSuggestionObservation } from '../../lib/observations';
+import { getConceptQuality, type ConceptQuality, updateConcept, getNeighborsWithRelationships, getClaimsForConcept } from '../../api-client';
+import { generateSuggestionObservation } from '../../lib/observations';
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
@@ -254,8 +252,8 @@ export default function ContextPanel({
   connections = [],
   IS_DEMO_MODE,
   activityEvents = [],
-  activeGraphId,
-  onSwitchGraph,
+  activeGraphId: _activeGraphId,
+  onSwitchGraph: _onSwitchGraph,
 }: ContextPanelProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -284,8 +282,8 @@ export default function ContextPanel({
   const [pathsLoading, setPathsLoading] = useState(false);
   
   // Quality indicators state
-  const [conceptQuality, setConceptQuality] = useState<ConceptQuality | null>(null);
-  const [qualityLoading, setQualityLoading] = useState(false);
+  const [_conceptQuality, setConceptQuality] = useState<ConceptQuality | null>(null);
+  const [_qualityLoading, setQualityLoading] = useState(false);
   const qualityCacheRef = useRef<Map<string, ConceptQuality>>(new Map());
   const qualityLoadingRef = useRef<Set<string>>(new Set());
   
@@ -999,9 +997,6 @@ export default function ContextPanel({
 
   const hasResources = evidenceCount > 0;
   const isFetching = currentFetchState.status === 'loading';
-  const fetchSuccess = currentFetchState.status === 'success';
-  const fetchEmpty = currentFetchState.status === 'empty';
-  const fetchError = currentFetchState.status === 'error';
 
   const domainColor = domainColors.get(selectedNode.domain) || 'var(--ink)';
 
@@ -1334,7 +1329,7 @@ export default function ContextPanel({
         overflowX: 'auto',
       }}>
         {(['overview', 'evidence', 'notes', 'connections', 'activity'] as const).map(tab => {
-          let label = tab.charAt(0).toUpperCase() + tab.slice(1);
+          const label = tab.charAt(0).toUpperCase() + tab.slice(1);
           let badge: number | null = null;
           
           if (tab === 'evidence') {

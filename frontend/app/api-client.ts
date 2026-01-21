@@ -1944,7 +1944,7 @@ export async function getResourcesForConcept(conceptId: string): Promise<Resourc
       throw new Error(`Failed to fetch resources for concept ${conceptId}: ${res.statusText}`);
     }
     return res.json();
-  } catch (error) {
+  } catch {
     // Network error - try offline cache
     const { getResourcesForConceptOffline } = await import('../lib/offline/api_wrapper');
     const cached = await getResourcesForConceptOffline(conceptId);

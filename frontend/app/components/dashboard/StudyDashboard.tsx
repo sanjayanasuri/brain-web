@@ -57,7 +57,7 @@ interface DashboardData {
 import { getDashboardData, type DashboardData } from '../../api-client';
 
 export default function StudyDashboard() {
-  const router = useRouter();
+  const _router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

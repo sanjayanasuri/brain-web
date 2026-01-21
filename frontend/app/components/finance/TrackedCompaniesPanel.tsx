@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { computeSnapshotStaleness, getStalenessBadgeStyle } from '../../utils/financeStaleness';
-import type { FinanceTrackingConfig, LatestSnapshotMetadata } from '../../api-client';
+import type { LatestSnapshotMetadata } from '../../api-client';
 
 interface TrackedCompany {
   ticker: string;

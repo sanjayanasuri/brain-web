@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 
 function getOpenAIApiKey(): string | undefined {
   // Try to read directly from .env.local file as a fallback
@@ -8,8 +10,6 @@ function getOpenAIApiKey(): string | undefined {
   // If key is too short or missing, try reading from file directly
   if (!key || key.length < 20) {
     try {
-      const fs = require('fs');
-      const path = require('path');
       
       // First try repo root .env.local (same as backend uses)
       const repoRootEnvPath = path.join(process.cwd(), '..', '.env.local');
