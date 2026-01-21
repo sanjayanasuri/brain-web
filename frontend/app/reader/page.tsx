@@ -1,15 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getConcept, getResourcesForConcept, type Resource, type Concept } from '../api-client';
 import { setLastSession, trackResourceOpened, trackEvent } from '../lib/sessionState';
 import { logEvent } from '../lib/eventsClient';
 import TopBar from '../components/topbar/TopBar';
 
-type ReaderPageProps = Record<string, never>;
-
-export default function ReaderPage(_props: ReaderPageProps) {
+export default function ReaderPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   

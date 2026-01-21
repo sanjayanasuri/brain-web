@@ -19,7 +19,7 @@ import { generateSuggestionObservation } from '../../lib/observations';
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
-  suggestion,
+  suggestion: _suggestion,
   onDismiss,
   onSnooze1Day,
   onSnooze1Week,
@@ -660,7 +660,7 @@ export default function ContextPanel({
       // (user might have switched nodes while generation was in progress)
       if (descriptionGenerationNodeIdRef.current === currentNodeId && selectedNode?.node_id === currentNodeId) {
         // Update the concept with the generated description
-        const updatedConcept = await updateConcept(selectedNode.node_id, {
+        await updateConcept(selectedNode.node_id, {
           description: data.description,
         });
         

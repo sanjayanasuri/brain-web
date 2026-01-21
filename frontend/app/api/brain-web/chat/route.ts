@@ -1258,7 +1258,7 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
               payload: { conceptIdsUsed: usedNodes.map(n => n.node_id) },
             }),
           }).catch(() => {}); // Swallow errors
-        } catch (err) {
+        } catch {
           // Ignore event logging errors
         }
       } else {
@@ -1758,7 +1758,6 @@ Return ONLY the JSON object:`;
         if (schedulerResponse.ok) {
           const suggestionsData = await schedulerResponse.json();
           const suggestions = suggestionsData.suggestions || [];
-          const groupedByDay = suggestionsData.grouped_by_day || {};
           
           console.log(`[Chat API] Scheduler returned ${suggestions.length} suggestions`);
           
@@ -2556,7 +2555,7 @@ Use these examples to refine your responses. Pay attention to what the user like
               payload: { conceptIdsUsed: context.focus_entities?.map((e: any) => e.node_id) || [] },
             }),
           }).catch(() => {}); // Swallow errors
-        } catch (err) {
+        } catch {
           // Ignore event logging errors
         }
       } else {

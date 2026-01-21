@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
-export async function GET(_request: NextRequest) {
+export async function GET() {
   try {
     const response = await fetch(`${API_BASE_URL}/admin/notion/pages`, {
       method: 'GET',

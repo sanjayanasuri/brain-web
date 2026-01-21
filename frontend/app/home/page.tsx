@@ -743,8 +743,6 @@ function EventModal({
 
   // Fetch location suggestions - only when user is typing
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout | undefined;
-    
     // Don't fetch if input is empty
     if (location.trim().length === 0) {
       setLocationSuggestions([]);
@@ -791,7 +789,7 @@ function EventModal({
     };
 
     // Debounce API calls - wait for user to stop typing
-    timeoutId = setTimeout(fetchSuggestions, 300);
+    const timeoutId = setTimeout(fetchSuggestions, 300);
 
     return () => {
       if (timeoutId) clearTimeout(timeoutId);
@@ -980,7 +978,7 @@ function EventModal({
                   fontSize: '14px',
                   transition: 'border-color 0.2s',
                 }}
-                onBlur={(e) => {
+                onBlur={() => {
                   // Delay closing to allow click on dropdown
                   setTimeout(() => {
                     if (!locationDropdownRef.current?.contains(document.activeElement)) {
