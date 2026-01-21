@@ -112,7 +112,6 @@ export function mapGapToNarrative(
   switch (gap.type) {
     case 'missing_description':
       return {
-        section: 'unsettled',
         title: observation,
         description: '',
         tag: TAG.CONTEXT_LIGHT,
@@ -128,7 +127,6 @@ export function mapGapToNarrative(
     
     case 'low_connectivity':
       return {
-        section: 'unsettled',
         title: observation,
         description: '',
         tag: TAG.LOOSELY_GROUNDED,
@@ -140,7 +138,6 @@ export function mapGapToNarrative(
     
     case 'high_interest_low_coverage':
       return {
-        section: 'takingShape',
         title: observation,
         description: '',
         tag: TAG.UNDEREXPLORED,
@@ -156,7 +153,6 @@ export function mapGapToNarrative(
     
     default:
       return {
-        section: 'unsettled',
         title: observation,
         description: '',
         tag: TAG.UNDEREXPLORED,
