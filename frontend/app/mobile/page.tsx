@@ -32,7 +32,6 @@ export default function MobilePage() {
       left: 0,
       right: 0,
       bottom: 0,
-      height: '100vh',
       height: '100dvh',
       width: '100vw',
       overflow: 'hidden',
