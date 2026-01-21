@@ -30,7 +30,7 @@ export function useConceptHoverPreviews() {
       loadingContent.style.color = 'var(--muted)';
       loadingContent.textContent = 'Loading...';
 
-      const tippyInstances = tippy(target, {
+      const tippyInstance = tippy(target as Element, {
         content: loadingContent,
         placement: 'top',
         delay: [300, 0],
@@ -39,7 +39,8 @@ export function useConceptHoverPreviews() {
         appendTo: () => document.body,
         maxWidth: 350,
         onShow: (instance) => {
-          (async () => {
+          // Wrap async work in IIFE - onShow callback must be synchronous
+          void (async () => {
             try {
               const concept = await getConcept(conceptId);
               const content = createConceptPreview(concept);
@@ -56,7 +57,6 @@ export function useConceptHoverPreviews() {
           })();
         },
       });
-      const tippyInstance = Array.isArray(tippyInstances) ? tippyInstances[0] : tippyInstances;
 
       (target as any)._tippy = tippyInstance;
     };
