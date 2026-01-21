@@ -11,50 +11,34 @@ import { listGraphs, type GraphSummary } from '../../api-client';
 
 // Todo List Component
 function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
-  // Initialize state from localStorage immediately to prevent empty state flash
-  const [todos, setTodos] = useState<Array<{ id: string; text: string; completed: boolean }>>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const savedTodos = localStorage.getItem('brain-web-todos');
-      if (savedTodos) {
-        const parsed = JSON.parse(savedTodos);
-        // Validate that it's an array
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load todos on init:', e);
-    }
-    return [];
-  });
+  // Always initialize with empty array to match server render (prevent hydration mismatch)
+  const [todos, setTodos] = useState<Array<{ id: string; text: string; completed: boolean }>>([]);
   const [newTodo, setNewTodo] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
-  // Load todos from localStorage on mount (backup in case initial state didn't work)
+  // Load todos from localStorage after mount (client-only)
   useEffect(() => {
-    if (typeof window === 'undefined' || isInitialized) return;
+    setIsMounted(true);
+    if (typeof window === 'undefined') return;
     
     try {
       const savedTodos = localStorage.getItem('brain-web-todos');
       if (savedTodos) {
         const parsed = JSON.parse(savedTodos);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           setTodos(parsed);
         }
       }
-      setIsInitialized(true);
     } catch (e) {
       console.error('Failed to load todos:', e);
-      setIsInitialized(true);
     }
-  }, [isInitialized]);
+  }, []);
 
   // Save todos to localStorage whenever they change (but skip initial empty state)
   useEffect(() => {
-    if (typeof window === 'undefined' || !isInitialized) return;
+    if (typeof window === 'undefined' || !isMounted) return;
     
     try {
       const todosToSave = JSON.stringify(todos);
@@ -75,7 +59,7 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
         }
       }
     }
-  }, [todos, isInitialized]);
+  }, [todos, isMounted]);
 
   const addTodo = () => {
     if (newTodo.trim()) {
