@@ -113,7 +113,7 @@ function LectureStudioPageInner() {
     const id = lectureId;
     if (!id) {
       // Load all lectures for landing page
-      async function loadAllLectures() {
+      const loadAllLectures = async () => {
         try {
           setLoading(true);
           const lectures = await listLectures();
@@ -124,7 +124,7 @@ function LectureStudioPageInner() {
         } finally {
           setLoading(false);
         }
-      }
+      };
       loadAllLectures();
       return;
     }
