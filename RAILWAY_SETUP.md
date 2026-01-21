@@ -15,10 +15,14 @@ Deploy Brain Web backend to Railway for **$5-10/month** (vs $70+/month on AWS).
 4. Select the repository
 
 ### Step 3: Deploy Backend Service
-1. Railway will detect `railway.json` and `backend/Dockerfile`
-2. Click "Add Service" → "GitHub Repo"
-3. Select your repo
-4. Railway will auto-detect and deploy
+1. Click "Add Service" → "GitHub Repo"
+2. Select your repo
+3. **IMPORTANT**: Set the Root Directory:
+   - Go to the service → "Settings" tab
+   - Scroll to "Root Directory"
+   - Set it to: `backend`
+   - This tells Railway to build from the `backend/` directory
+4. Railway will detect `backend/Dockerfile` and deploy
 
 ### Step 4: Add Database Services
 
