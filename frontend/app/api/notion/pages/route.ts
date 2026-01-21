@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 
 // Force dynamic rendering - this API route should not be statically generated
 export const dynamic = 'force-dynamic';

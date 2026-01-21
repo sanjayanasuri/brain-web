@@ -45,15 +45,6 @@ interface ResumePoint {
   url: string;
 }
 
-interface DashboardData {
-  study_time_by_domain: StudyTimeData[];
-  upcoming_exams: ExamData[];
-  study_recommendations: StudyRecommendation[];
-  resume_points: ResumePoint[];
-  total_study_hours: number;
-  days_looked_back: number;
-}
-
 import { getDashboardData, type DashboardData } from '../../api-client';
 
 export default function StudyDashboard() {
