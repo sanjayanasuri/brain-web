@@ -204,7 +204,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
           </button>
         </div>
         <div style={{ color: '#6b7280', textAlign: 'center', padding: '24px' }}>
-          No suggestions yet. Click "Generate" to create a plan.
+          No suggestions yet. Click &quot;Generate&quot; to create a plan.
         </div>
       </div>
     );

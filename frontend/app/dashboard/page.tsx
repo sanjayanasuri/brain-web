@@ -28,11 +28,11 @@ export default function DashboardPage() {
     setShowLanding(false);
   };
 
+  const [refreshKey, setRefreshKey] = useState(0);
+
   if (showLanding) {
     return <LandingPage onEnter={handleEnter} />;
   }
-
-  const [refreshKey, setRefreshKey] = useState(0);
 
   const handleTaskCreated = () => {
     // Trigger refresh of suggestions

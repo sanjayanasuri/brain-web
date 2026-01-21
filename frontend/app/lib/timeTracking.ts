@@ -226,7 +226,9 @@ if (typeof window !== 'undefined') {
 
 /**
  * React hook for automatic time tracking.
- * Import this in React components.
+ * NOTE: This is a legacy implementation. Use useTimeTracking from ./useTimeTracking.ts instead.
+ * This function is kept for backward compatibility but should not be used in new code.
+ * @deprecated Use the hook from ./useTimeTracking.ts instead
  */
 export function useTimeTracking(
   documentId?: string,
@@ -236,8 +238,11 @@ export function useTimeTracking(
   action: 'read' | 'write' | 'review' | 'revisit' = 'read',
   enabled: boolean = true
 ): void {
-  // This will be implemented by the component using React hooks
-  // For now, we'll use a simpler approach
+  // This is not a proper React hook - it's a regular function
+  // The actual hook implementation is in ./useTimeTracking.ts
+  // This function is kept for backward compatibility
+  console.warn('useTimeTracking from timeTracking.ts is deprecated. Use the hook from ./useTimeTracking.ts instead.');
+  
   if (typeof window === 'undefined' || !enabled) {
     return;
   }
@@ -254,14 +259,6 @@ export function useTimeTracking(
     (window as any).__timeTracking[trackingKey] = startKey;
   }
   
-  // Cleanup function (called by component)
-  return () => {
-    if (typeof window !== 'undefined' && (window as any).__timeTracking) {
-      const key = (window as any).__timeTracking[trackingKey];
-      if (key) {
-        stopTimeTracking(key);
-        delete (window as any).__timeTracking[trackingKey];
-      }
-    }
-  };
+  // Note: This function cannot return a cleanup function because it's not a React hook
+  // Components using this should manually call stopTimeTracking on unmount
 }
