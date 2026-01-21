@@ -155,7 +155,7 @@ export const ConceptMention = Node.create<ConceptMentionOptions>({
         },
         render: () => {
           let component: ReactRenderer | null = null;
-          let popup: TippyInstance[] | null = null;
+          let popup: TippyInstance | null = null;
 
           return {
             onStart: (props) => {
@@ -192,20 +192,20 @@ export const ConceptMention = Node.create<ConceptMentionOptions>({
                 command: props.command,
               });
 
-              if (!props.clientRect || !popup || !popup[0]) {
+              if (!props.clientRect || !popup) {
                 return;
               }
 
-              popup[0].setProps({
+              popup.setProps({
                 getReferenceClientRect: props.clientRect as any,
               });
             },
 
             onKeyDown(props) {
-              if (!popup || !popup[0] || !component) return false;
+              if (!popup || !component) return false;
 
               if (props.event.key === 'Escape') {
-                popup[0].hide();
+                popup.hide();
                 return true;
               }
 
@@ -213,8 +213,8 @@ export const ConceptMention = Node.create<ConceptMentionOptions>({
             },
 
             onExit() {
-              if (popup && popup[0]) {
-                popup[0].destroy();
+              if (popup) {
+                popup.destroy();
               }
               if (component) {
                 component.destroy();
