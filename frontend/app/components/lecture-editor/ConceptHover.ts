@@ -60,7 +60,7 @@ export const ConceptHover = Extension.create<ConceptHoverOptions>({
                 
                 // Get unique concepts (avoid duplicates from case-insensitive keys)
                 const uniqueConcepts = new Map<string, Concept>();
-                for (const concept of conceptNamesRef.values()) {
+                for (const concept of Array.from(conceptNamesRef.values())) {
                   // Use the actual concept name as key to avoid duplicates
                   if (!uniqueConcepts.has(concept.name.toLowerCase())) {
                     uniqueConcepts.set(concept.name.toLowerCase(), concept);
