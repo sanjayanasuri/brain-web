@@ -64,7 +64,7 @@ async function getTurndownService() {
     
     // Custom rule for concept mentions
     turndownServiceInstance.addRule('conceptMention', {
-      filter: (node) => {
+      filter: (node: any) => {
         return (
           node.nodeName === 'SPAN' &&
           node.getAttribute('data-type') === 'conceptMention'

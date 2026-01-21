@@ -74,7 +74,7 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
       onStart?.();
     };
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: any) => {
       let interimTranscript = '';
       let finalTranscript = finalTranscriptRef.current;
 
@@ -98,7 +98,7 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
       onResult?.(fullTranscript.trim(), interimTranscript === '');
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    recognition.onerror = (event: any) => {
       const error = new Error(`Speech recognition error: ${event.error}`);
       setState((prev) => ({
         ...prev,
