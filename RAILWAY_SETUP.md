@@ -111,19 +111,24 @@ STORAGE_BACKEND=local
 2. Link: Neo4j, PostgreSQL, Redis, Qdrant
 3. This makes their connection strings available as env vars
 
-### Step 7: Deploy & Get URL
+### Step 7: Deploy & Get Public URL
 1. Railway will auto-deploy on git push
-2. Go to Backend service → "Settings" → "Networking"
-3. Generate a public domain (e.g., `brain-web-production.up.railway.app`)
-4. Copy the URL - this is your backend API URL
+2. Go to your service → **"Settings"** tab → **"Networking"** section
+3. Under **"Public Networking"**, click **"Generate Domain"**
+4. Railway will create a public URL like: `brain-web-production.up.railway.app`
+5. **Copy this URL** - this is your backend API URL (you'll need it for Step 8)
+6. The service is now publicly accessible at this URL!
 
 ### Step 8: Update Frontend (Vercel)
 1. Go to Vercel dashboard → Your project → Settings → Environment Variables
 2. Add/Update:
    ```
-   NEXT_PUBLIC_API_URL=https://brain-web-production.up.railway.app
+   NEXT_PUBLIC_API_URL=https://your-railway-url.railway.app
    ```
-3. Redeploy frontend
+   (Replace with your actual Railway URL from Step 7)
+3. Redeploy frontend (Vercel will auto-redeploy when you save env vars)
+
+**See `VERCEL_SETUP.md` for detailed Vercel configuration instructions.**
 
 ### Step 9: Custom Domain (Optional)
 1. In Railway Backend service → "Settings" → "Networking"
