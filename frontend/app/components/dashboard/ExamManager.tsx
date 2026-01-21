@@ -4,10 +4,10 @@ import React, { useState, useEffect } from 'react';
 
 // Exam type is imported from api-client
 
-import { listExams, createExam, deleteExam, type Exam } from '../../api-client';
+import { listExams, createExam, deleteExam, type ExamData } from '../../api-client';
 
 export default function ExamManager() {
-  const [exams, setExams] = useState<Exam[]>([]);
+  const [exams, setExams] = useState<ExamData[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState({
