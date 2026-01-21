@@ -1,7 +1,8 @@
 'use client';
 
 import { useReducer, useCallback } from 'react';
-import type { EvidenceItem, Concept } from '../../../types/evidence';
+import type { EvidenceItem } from '../../../types/evidence';
+import type { Concept } from '../../../api-client';
 
 interface AnswerSection {
   id: string;
