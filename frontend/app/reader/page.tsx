@@ -117,7 +117,7 @@ export default function ReaderPage() {
   const handleResourceSelect = (resource: Resource) => {
     setSelectedResource(resource);
     // Update URL without navigation (shallow routing)
-    const params = new URLSearchParams(searchParams.toString());
+    const params = new URLSearchParams(searchParams?.toString() || '');
     params.set('resource_id', resource.resource_id);
     router.replace(`/reader?${params.toString()}`, { scroll: false });
     
