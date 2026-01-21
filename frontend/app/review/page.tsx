@@ -48,14 +48,14 @@ export default function ReviewPage() {
       setGraphId(graphIdParam);
     } else {
       // Only load graphs if graphId not in URL params
-      async function loadGraphs() {
+      const loadGraphs = async () => {
         try {
           const data = await listGraphs();
           setGraphId(data.active_graph_id || 'demo');
         } catch (err) {
           setGraphId('demo');
         }
-      }
+      };
       loadGraphs();
     }
   }, [searchParams]);
