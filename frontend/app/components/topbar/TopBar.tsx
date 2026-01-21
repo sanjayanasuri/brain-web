@@ -1141,7 +1141,9 @@ export default function TopBar() {
         // Get effective graph_id for search
         const searchGraphId = getSearchGraphId();
         const lastSession = getLastSession();
-        const branchId = lastSession?.branch_id || 'main';
+        const branchId = typeof window !== 'undefined' 
+          ? sessionStorage.getItem('brainweb:activeBranchId') || 'main'
+          : 'main';
 
         // Check if offline search is enabled
         const offlineSearchEnabled = typeof window !== 'undefined' 

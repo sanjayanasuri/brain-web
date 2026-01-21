@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useVoiceRecognition } from '../../hooks/useVoiceRecognition';
-import { sendVoiceCommand, getTask, type VoiceCommandRequest, type Task } from '../../api-client';
+import { sendVoiceCommand, getTask, type VoiceCommandRequest, type BackgroundTask } from '../../api-client';
 
 export interface VoiceCommandProps {
   /** Current block ID (optional) */
@@ -14,7 +14,7 @@ export interface VoiceCommandProps {
   /** Callback when command is sent */
   onCommandSent?: (taskId: string) => void;
   /** Callback when task completes */
-  onTaskComplete?: (task: Task) => void;
+  onTaskComplete?: (task: BackgroundTask) => void;
   /** Callback on error */
   onError?: (error: Error) => void;
   /** Auto-detect intent from transcript */

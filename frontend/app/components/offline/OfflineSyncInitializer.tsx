@@ -24,11 +24,13 @@ export default function OfflineSyncInitializer() {
 
       const session = getLastSession();
       let graphId: string | null = session?.graph_id || null;
-      let branchId: string = session?.branch_id || 'main';
+      let branchId: string = 'main';
 
-      if (!graphId && typeof window !== 'undefined') {
+      if (typeof window !== 'undefined') {
         // Try sessionStorage as fallback
-        graphId = sessionStorage.getItem('brainweb:activeGraphId');
+        if (!graphId) {
+          graphId = sessionStorage.getItem('brainweb:activeGraphId');
+        }
         branchId = sessionStorage.getItem('brainweb:activeBranchId') || 'main';
       }
 

@@ -248,9 +248,14 @@ export default function ConceptWikiPage() {
     );
   }
 
+  // At this point, concept must be non-null
+  if (!concept) {
+    return null;
+  }
+
   // Convert markdown description to HTML for display
   const renderContent = () => {
-    if (!concept.description) {
+    if (!concept || !concept.description) {
       return <p style={{ color: 'var(--muted)', fontStyle: 'italic' }}>No content yet. Click Edit to add content.</p>;
     }
     

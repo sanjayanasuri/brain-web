@@ -248,7 +248,7 @@ export function LectureEditor({
               const reader = new FileReader();
               reader.onload = (e) => {
                 const src = e.target?.result as string;
-                if (src) {
+                if (src && editor) {
                   editor.chain().focus().setImage({ src }).run();
                 }
               };
@@ -267,7 +267,7 @@ export function LectureEditor({
             const reader = new FileReader();
             reader.onload = (e) => {
               const src = e.target?.result as string;
-              if (src) {
+              if (src && editor) {
                 const coordinates = view.posAtCoords({
                   left: event.clientX,
                   top: event.clientY,
@@ -421,7 +421,7 @@ export function LectureEditor({
   // Update editor content when prop changes (but not on every keystroke)
   useEffect(() => {
     if (editor && content !== editor.getHTML()) {
-      editor.commands.setContent(content, false);
+      editor.commands.setContent(content, { emitUpdate: false });
     }
   }, [content, editor]);
 
@@ -542,7 +542,7 @@ export function LectureEditor({
       loadingContent.style.textAlign = 'center';
       loadingContent.textContent = 'Loading...';
 
-      const tippyInstance = tippy(target, {
+      const tippyInstance = tippy(target as Element, {
         content: loadingContent,
         placement: 'top',
         delay: [300, 0],
@@ -552,7 +552,8 @@ export function LectureEditor({
         appendTo: () => document.body,
         maxWidth: 420,
         offset: [0, 8],
-        onShow: async () => {
+        onShow: () => {
+          void (async () => {
           try {
             const { getConcept, getNeighborsWithRelationships } = await import('../../api-client');
             const [concept, neighborsData] = await Promise.all([
@@ -560,17 +561,8 @@ export function LectureEditor({
               getNeighborsWithRelationships(conceptId).catch(() => []),
             ]);
             
-            // Use the graphId prop if available, otherwise try to get it from graph data
-            let currentGraphId: string | undefined = graphId;
-            if (!currentGraphId) {
-              try {
-                const { getAllGraphData } = await import('../../api-client');
-                const graphData = await getAllGraphData();
-                currentGraphId = graphData.graph_id;
-              } catch (err) {
-                // Ignore if we can't get graph data
-              }
-            }
+            // Use the graphId prop if available
+            const currentGraphId: string | undefined = graphId;
             
             const container = document.createElement('div');
             container.style.maxWidth = '480px';
@@ -588,7 +580,7 @@ export function LectureEditor({
 
             const title = document.createElement('div');
             title.style.fontSize = '18px';
-            title.style.fontWeight = 600;
+            title.style.fontWeight = '600';
             title.style.color = 'var(--ink)';
             title.style.marginBottom = '4px';
             title.style.lineHeight = '1.3';
@@ -877,8 +869,9 @@ export function LectureEditor({
             errorContent.textContent = 'Failed to load concept';
             tippyInstance.setContent(errorContent);
           }
+          })();
         },
-      })[0];
+      });
 
       (target as any)._tippy = tippyInstance;
     };
@@ -948,7 +941,7 @@ export function LectureEditor({
       loadingContent.style.textAlign = 'center';
       loadingContent.textContent = 'Loading Wikipedia...';
 
-      const tippyInstance = tippy(target, {
+      const tippyInstance = tippy(target as Element, {
         content: loadingContent,
         placement: 'top',
         delay: [400, 0], // Slightly longer delay than concept hover
@@ -958,32 +951,33 @@ export function LectureEditor({
         appendTo: () => document.body,
         maxWidth: 450,
         offset: [0, 8],
-        onShow: async () => {
-          try {
-            // First check if this term exists in the user's graph
-            // If it does, don't show Wikipedia hover (concept hover will handle it)
+        onShow: () => {
+          void (async () => {
             try {
-              const { searchConcepts } = await import('../../api-client');
-              const searchResult = await searchConcepts(term, graphId, 1);
-              if (searchResult.results && searchResult.results.length > 0) {
-                // Term exists in graph - don't show Wikipedia hover
-                // The concept hover will show it with Wikipedia as supplementary
-                const existsMsg = document.createElement('div');
-                existsMsg.style.padding = '16px';
-                existsMsg.style.fontSize = '14px';
-                existsMsg.style.color = 'var(--muted)';
-                existsMsg.style.textAlign = 'center';
-                existsMsg.innerHTML = `"${term}" exists in your graph.<br/>Hover over it to see your definition and context.`;
-                tippyInstance.setContent(existsMsg);
-                return;
+              // First check if this term exists in the user's graph
+              // If it does, don't show Wikipedia hover (concept hover will handle it)
+              try {
+                const { searchConcepts } = await import('../../api-client');
+                const searchResult = await searchConcepts(term, graphId, 1);
+                if (searchResult.results && searchResult.results.length > 0) {
+                  // Term exists in graph - don't show Wikipedia hover
+                  // The concept hover will show it with Wikipedia as supplementary
+                  const existsMsg = document.createElement('div');
+                  existsMsg.style.padding = '16px';
+                  existsMsg.style.fontSize = '14px';
+                  existsMsg.style.color = 'var(--muted)';
+                  existsMsg.style.textAlign = 'center';
+                  existsMsg.innerHTML = `"${term}" exists in your graph.<br/>Hover over it to see your definition and context.`;
+                  tippyInstance.setContent(existsMsg);
+                  return;
+                }
+              } catch (err) {
+                // If search fails, continue to Wikipedia
+                console.log('Concept search failed, showing Wikipedia:', err);
               }
-            } catch (err) {
-              // If search fails, continue to Wikipedia
-              console.log('Concept search failed, showing Wikipedia:', err);
-            }
-            
-            // Term doesn't exist in graph - show Wikipedia info
-            const summary = await fetchWikipediaSummary(term);
+              
+              // Term doesn't exist in graph - show Wikipedia info
+              const summary = await fetchWikipediaSummary(term);
             
             if (!summary) {
               const noResult = document.createElement('div');
@@ -1027,7 +1021,7 @@ export function LectureEditor({
 
             const title = document.createElement('div');
             title.style.fontSize = '18px';
-            title.style.fontWeight = 600;
+            title.style.fontWeight = '600';
             title.style.color = 'var(--ink)';
             title.style.marginBottom = '4px';
             title.style.lineHeight = '1.3';
@@ -1106,8 +1100,9 @@ export function LectureEditor({
             errorContent.textContent = 'Failed to load Wikipedia information';
             tippyInstance.setContent(errorContent);
           }
+          })();
         },
-      })[0];
+      });
 
       (target as any)._wikipediaTippy = tippyInstance;
     };

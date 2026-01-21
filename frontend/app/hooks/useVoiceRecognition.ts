@@ -43,7 +43,7 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
     error: null,
   });
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<any>(null);
   const finalTranscriptRef = useRef<string>('');
 
   // Initialize recognition

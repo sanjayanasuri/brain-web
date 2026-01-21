@@ -378,8 +378,6 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
           resourceResults = (resources || []).map(r => ({ 
             type: 'evidence', 
             resource: r,
-            concept_id: r.concept_id,
-            concept_name: r.concept_name,
           }));
         } catch (resourceErr) {
           console.warn('[SearchBox] Resource search failed:', resourceErr);
@@ -403,7 +401,7 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
         if (!abortController.signal.aborted) {
           console.error('Search failed:', err);
           console.error('Error details:', {
-            query,
+            query: searchQuery,
             activeGraphId,
             error: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined,

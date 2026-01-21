@@ -35,6 +35,7 @@ export default function TrailSidebar({ trailId, onClose, onStepClick }: TrailSid
       try {
         setLoading(true);
         setError(null);
+        if (!trailId) return;
         const data = await getTrail(trailId);
         setTrail(data);
         

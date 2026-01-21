@@ -1020,7 +1020,6 @@ function EventModal({
                   maxHeight: '280px',
                   overflowY: 'auto',
                   zIndex: 1001,
-                  border: '1px solid var(--border)',
                 }}
               >
                 {locationSuggestions.map((suggestion, idx) => (

@@ -35,7 +35,7 @@ export const WikipediaHover = Extension.create<WikipediaHoverOptions>({
             // Store both decorations and last enabled state
             return { decorations: DecorationSet.empty, lastEnabled: extension.options.enabled };
           },
-          apply(tr, value) {
+          apply(tr, value, oldState) {
             // Read enabled from extension options dynamically (not captured in closure)
             const enabled = extension.options.enabled;
             const lastEnabled = value.lastEnabled;
@@ -116,7 +116,7 @@ export const WikipediaHover = Extension.create<WikipediaHoverOptions>({
         },
         props: {
           decorations(state) {
-            return this.getState(state).decorations;
+            return this.getState(state)?.decorations || DecorationSet.empty;
           },
         },
       }),

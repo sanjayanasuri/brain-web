@@ -48,7 +48,7 @@ function isConceptPinned(graphId: string, conceptId: string): boolean {
 export default function GraphBrowserPage() {
   const params = useParams();
   const router = useRouter();
-  const graphId = params.graph_id as string;
+  const graphId = params?.graph_id as string;
   
   const [graph, setGraph] = useState<GraphSummary | null>(null);
   const [graphs, setGraphs] = useState<GraphSummary[]>([]);
