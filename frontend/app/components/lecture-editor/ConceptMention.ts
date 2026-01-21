@@ -3,6 +3,7 @@ import { ReactRenderer } from '@tiptap/react';
 import tippy, { Instance as TippyInstance } from 'tippy.js';
 import { SuggestionOptions } from '@tiptap/suggestion';
 import { Suggestion } from '@tiptap/suggestion';
+import { PluginKey } from '@tiptap/pm/state';
 import { Concept } from '../../api-client';
 import { ConceptMentionList, ConceptMentionListRef } from './ConceptMentionList';
 import { ConceptMentionNode } from './ConceptMentionNode';
@@ -121,7 +122,7 @@ export const ConceptMention = Node.create<ConceptMentionOptions>({
       Suggestion({
         editor: this.editor,
         char: '@',
-        pluginKey: 'conceptMention',
+        pluginKey: new PluginKey('conceptMention'),
         command: ({ editor, range, props }) => {
           editor
             .chain()
