@@ -30,7 +30,7 @@ export function useConceptHoverPreviews() {
       loadingContent.style.color = 'var(--muted)';
       loadingContent.textContent = 'Loading...';
 
-      const tippyInstance = tippy(target, {
+      const tippyInstances = tippy(target, {
         content: loadingContent,
         placement: 'top',
         delay: [300, 0],
@@ -38,22 +38,25 @@ export function useConceptHoverPreviews() {
         theme: 'light-border',
         appendTo: () => document.body,
         maxWidth: 350,
-        onShow: async () => {
-          try {
-            const concept = await getConcept(conceptId);
-            const content = createConceptPreview(concept);
-            tippyInstance.setContent(content);
-          } catch (error) {
-            console.error('Failed to load concept:', error);
-            const errorContent = document.createElement('div');
-            errorContent.style.padding = '8px';
-            errorContent.style.fontSize = '13px';
-            errorContent.style.color = 'var(--accent-2)';
-            errorContent.textContent = 'Failed to load concept';
-            tippyInstance.setContent(errorContent);
-          }
+        onShow: (instance) => {
+          (async () => {
+            try {
+              const concept = await getConcept(conceptId);
+              const content = createConceptPreview(concept);
+              instance.setContent(content);
+            } catch (error) {
+              console.error('Failed to load concept:', error);
+              const errorContent = document.createElement('div');
+              errorContent.style.padding = '8px';
+              errorContent.style.fontSize = '13px';
+              errorContent.style.color = 'var(--accent-2)';
+              errorContent.textContent = 'Failed to load concept';
+              instance.setContent(errorContent);
+            }
+          })();
         },
-      })[0];
+      });
+      const tippyInstance = Array.isArray(tippyInstances) ? tippyInstances[0] : tippyInstances;
 
       (target as any)._tippy = tippyInstance;
     };
