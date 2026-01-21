@@ -210,7 +210,7 @@ if (typeof window !== 'undefined') {
       if (visibilityStartTime) {
         const hiddenDuration = Date.now() - visibilityStartTime;
         // Adjust all active session start times
-        for (const session of activeSessions.values()) {
+        for (const session of Array.from(activeSessions.values())) {
           session.startTime += hiddenDuration;
         }
         visibilityStartTime = null;
