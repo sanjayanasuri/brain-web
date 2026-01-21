@@ -200,7 +200,11 @@ origins = [
     "https://brain-web-delta.vercel.app",
     "https://brain-web-git-main-sanjayanasuris-projects.vercel.app",
     "https://brain-htt06gwfr-sanjayanasuris-projects.vercel.app",
+    # Railway domains (will be auto-detected)
+    os.getenv("RAILWAY_PUBLIC_DOMAIN", ""),
+    os.getenv("RAILWAY_STATIC_URL", ""),
 ]
+origins = [origin for origin in origins if origin]  # Remove empty strings
 
 # CORS configuration
 cors_kwargs = {

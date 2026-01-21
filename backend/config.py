@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 repo_root = Path(__file__).parent.parent
@@ -85,24 +86,48 @@ S3_REGION = os.getenv("S3_REGION", "us-east-1")
 S3_PREFIX = os.getenv("S3_PREFIX", "resources")  # S3 key prefix for all resources
 
 # Qdrant Vector Database configuration
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+# Support Railway's service discovery via environment variables
+QDRANT_HOST = os.getenv("QDRANT_HOST") or os.getenv("QDRANT_PRIVATE_HOST") or "localhost"
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "concepts")
 USE_QDRANT = os.getenv("USE_QDRANT", "true").lower() in ("true", "1", "yes")  # Enable Qdrant by default
 
 # PostgreSQL configuration (for event store)
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-POSTGRES_DB = os.getenv("POSTGRES_DB", "brainweb")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "brainweb")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "brainweb")
-POSTGRES_CONNECTION_STRING = os.getenv(
-    "POSTGRES_CONNECTION_STRING",
-    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-)
+# Support Railway's DATABASE_URL format: postgresql://user:pass@host:port/db
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    # Parse Railway's DATABASE_URL format
+    parsed = urlparse(DATABASE_URL)
+    POSTGRES_HOST = parsed.hostname or os.getenv("POSTGRES_HOST", "localhost")
+    POSTGRES_PORT = parsed.port or int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_DB = parsed.path.lstrip("/") or os.getenv("POSTGRES_DB", "brainweb")
+    POSTGRES_USER = parsed.username or os.getenv("POSTGRES_USER", "brainweb")
+    POSTGRES_PASSWORD = parsed.password or os.getenv("POSTGRES_PASSWORD", "brainweb")
+    POSTGRES_CONNECTION_STRING = DATABASE_URL
+else:
+    # Fallback to individual env vars
+    POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+    POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_DB = os.getenv("POSTGRES_DB", "brainweb")
+    POSTGRES_USER = os.getenv("POSTGRES_USER", "brainweb")
+    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "brainweb")
+    POSTGRES_CONNECTION_STRING = os.getenv(
+        "POSTGRES_CONNECTION_STRING",
+        f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+    )
 
 # Redis configuration (for caching)
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+# Support Railway's REDIS_URL format: redis://:password@host:port
+REDIS_URL = os.getenv("REDIS_URL")
+if REDIS_URL:
+    parsed = urlparse(REDIS_URL)
+    REDIS_HOST = parsed.hostname or os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT = parsed.port or int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PASSWORD = parsed.password or None
+    REDIS_DB = int(parsed.path.lstrip("/") or os.getenv("REDIS_DB", "0"))
+else:
+    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+    REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 USE_REDIS = os.getenv("USE_REDIS", "true").lower() in ("true", "1", "yes")  # Enable Redis by default
