@@ -70,7 +70,7 @@ async function getTurndownService() {
           node.getAttribute('data-type') === 'conceptMention'
         );
       },
-      replacement: (content, node) => {
+      replacement: (content: any, node: any) => {
         const label = (node as HTMLElement).getAttribute('data-label') || 'concept';
         return `@${label}`;
       },
