@@ -44,7 +44,11 @@ export const lecturePlugin: DomainPlugin = {
   },
   
   handleIngestion: async (graphId: string, title: string, text: string, domain?: string) => {
-    return await ingestLecture(graphId, title, text, domain);
+    return await ingestLecture({
+      lecture_title: title,
+      lecture_text: text,
+      domain: domain,
+    });
   },
 };
 
