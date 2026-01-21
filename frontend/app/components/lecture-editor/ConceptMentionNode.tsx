@@ -108,7 +108,7 @@ export function ConceptMentionNode({ nodeId, label }: ConceptMentionNodeProps) {
             interactive: true,
             theme: 'light-border',
             appendTo: () => document.body,
-          })[0];
+          });
         }
       }, 300);
     };
