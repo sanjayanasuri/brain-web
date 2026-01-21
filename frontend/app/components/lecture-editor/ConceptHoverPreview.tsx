@@ -86,7 +86,7 @@ function createConceptPreview(concept: Concept): HTMLElement {
   // Title
   const title = document.createElement('div');
   title.style.fontSize = '16px';
-  title.style.fontWeight = 600;
+  title.style.fontWeight = '600';
   title.style.color = 'var(--ink)';
   title.style.marginBottom = '8px';
   title.style.lineHeight = '1.3';
