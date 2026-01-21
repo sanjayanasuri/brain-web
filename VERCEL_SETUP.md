@@ -9,16 +9,18 @@
 4. Vercel will auto-detect Next.js
 
 ### Step 2: Configure Build Settings
-**IMPORTANT**: Set the Root Directory in Vercel dashboard:
+**CRITICAL**: Set the Root Directory in Vercel dashboard:
 1. Go to **Settings** → **General**
 2. Scroll to **Root Directory**
 3. Set it to: `frontend`
-4. Save
+4. Click **Save**
 
-Vercel will then:
+**Why this is needed**: Your Next.js app is in the `frontend/` subdirectory, not the repo root. Setting Root Directory tells Vercel to treat `frontend/` as the project root.
+
+After setting Root Directory, Vercel will:
 - Auto-detect Next.js framework
-- Use build commands from `vercel.json`
-- Build from the `frontend/` directory
+- Run `npm install` and `npm run build` from the `frontend/` directory
+- Use the `.next` output directory automatically
 
 ### Step 3: Set Environment Variables
 Go to **Settings** → **Environment Variables** and add:
