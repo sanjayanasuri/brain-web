@@ -190,7 +190,7 @@ export function mapSuggestionToNarrative(
   // Determine section based on suggestion type
   let section: NarrativeSection = 'takingShape';
   let tag: string | undefined;
-  let primaryLabel = CTA.EXPLORE;
+  let primaryLabel: string = CTA.EXPLORE;
   
   if (suggestion.type?.startsWith('GAP_')) {
     section = 'takingShape';
