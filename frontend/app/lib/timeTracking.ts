@@ -84,7 +84,7 @@ export function stopTimeTracking(sessionKey: string): void {
  */
 export function stopAllTracking(): void {
   const now = Date.now();
-  for (const [sessionKey, session] of activeSessions.entries()) {
+  for (const [sessionKey, session] of Array.from(activeSessions.entries())) {
     const duration = now - session.startTime;
     if (duration >= MIN_DURATION_MS) {
       pendingSignals.push({ session, duration });
