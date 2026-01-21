@@ -16,7 +16,9 @@ export default function OfflineSettingsPage() {
     const lastSession = getLastSession();
     if (lastSession) {
       setGraphId(lastSession.graph_id || '');
-      setBranchId(lastSession.branch_id || 'main');
+      setBranchId(typeof window !== 'undefined' 
+        ? sessionStorage.getItem('brainweb:activeBranchId') || 'main'
+        : 'main');
     }
     const activeTrail = getActiveTrailId();
     if (activeTrail) {
