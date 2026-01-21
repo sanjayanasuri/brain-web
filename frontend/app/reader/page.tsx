@@ -11,10 +11,10 @@ export default function ReaderPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
-  const conceptId = searchParams.get('concept_id');
-  const resourceId = searchParams.get('resource_id');
-  const from = searchParams.get('from'); // 'evidence' | 'chat' | etc.
-  const graphId = searchParams.get('graph_id');
+  const conceptId = searchParams?.get('concept_id') || null;
+  const resourceId = searchParams?.get('resource_id') || null;
+  const from = searchParams?.get('from') || null; // 'evidence' | 'chat' | etc.
+  const graphId = searchParams?.get('graph_id') || null;
 
   const [concept, setConcept] = useState<Concept | null>(null);
   const [resources, setResources] = useState<Resource[]>([]);
