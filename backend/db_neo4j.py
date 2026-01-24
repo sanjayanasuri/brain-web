@@ -1,8 +1,13 @@
 from neo4j import GraphDatabase  # type: ignore[reportMissingImports]
+from neo4j.exceptions import SessionExpired, ServiceUnavailable, TransientError
 from typing import Generator, Optional
+import time
+import logging
 
 from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from config import NEO4J_DATABASE, NEO4J_QUERY_TIMEOUT_SECONDS
+
+logger = logging.getLogger(__name__)
 
 _driver: Optional[GraphDatabase.driver] = None
 
@@ -43,6 +48,33 @@ def _get_driver():
     return _driver
 
 
+def retry_neo4j_operation(func, max_retries=3, delay=1):
+    """
+    Retry wrapper for Neo4j operations that may fail due to connection issues.
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except (SessionExpired, ServiceUnavailable, TransientError, ConnectionResetError, TimeoutError) as e:
+            logger.warning(f"Neo4j operation failed on attempt {attempt + 1}: {e}")
+            if attempt == max_retries - 1:
+                raise
+            
+            # Reset the driver on connection errors
+            global _driver
+            if _driver:
+                try:
+                    _driver.close()
+                except Exception:
+                    pass
+                _driver = None
+            
+            time.sleep(delay * (attempt + 1))  # Exponential backoff
+        except Exception as e:
+            # Don't retry on non-connection errors
+            raise
+
+
 def get_neo4j_session() -> Generator:
     """
     FastAPI dependency that yields a Neo4j session.
@@ -50,24 +82,21 @@ def get_neo4j_session() -> Generator:
     
     Sessions are configured with query timeout to prevent long-running queries.
     """
-    driver = _get_driver()
-    session = None
-    try:
+    def create_session():
+        driver = _get_driver()
         session_kwargs = {
             "database": NEO4J_DATABASE,
-            # Set query timeout (in seconds, converted to milliseconds for Neo4j)
             "fetch_size": 1000,  # Batch size for large result sets
         }
-
-        session = driver.session(**session_kwargs)
-        
-        # Note: Neo4j Python driver doesn't support per-query timeout directly,
-        # but we can set it at the transaction level. For now, we rely on the
-        # request timeout middleware to catch long-running queries.
-
+        return driver.session(**session_kwargs)
+    
+    session = None
+    try:
+        session = retry_neo4j_operation(create_session)
         yield session
 
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to create Neo4j session after retries: {e}")
         global _driver
         try:
             if _driver:

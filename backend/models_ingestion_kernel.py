@@ -29,7 +29,7 @@ class IngestionActions(BaseModel):
 
 class ArtifactInput(BaseModel):
     """Input specification for ingesting an artifact."""
-    artifact_type: Literal["webpage", "notion_page", "finance_doc", "lecture", "manual"]
+    artifact_type: Literal["webpage", "notion_page", "finance_doc", "lecture", "manual", "pdf"]
     source_url: Optional[str] = None
     source_id: Optional[str] = None  # Notion page id, EDGAR accession, etc.
     title: Optional[str] = None

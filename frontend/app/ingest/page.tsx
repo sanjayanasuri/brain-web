@@ -10,7 +10,10 @@ import {
   restoreIngestionRun,
   type IngestionRun,
   type IngestionRunChanges,
+  type PDFIngestResponse,
 } from '../api-client';
+import PDFIngestionUpload from '../components/pdf/PDFIngestionUpload';
+import PDFIngestionResults from '../components/pdf/PDFIngestionResults';
 
 export default function IngestionHubPage() {
   const router = useRouter();
@@ -24,10 +27,39 @@ export default function IngestionHubPage() {
   const [showUndoDialog, setShowUndoDialog] = useState<string | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [pdfIngestionResult, setPdfIngestionResult] = useState<PDFIngestResponse | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [liveExtractions, setLiveExtractions] = useState<ExtractionItem[]>([]);
+  const [ingestionProgress, setIngestionProgress] = useState({ progress: 0, stage: '' });
+  const [runsListExpanded, setRunsListExpanded] = useState(false);
 
   useEffect(() => {
     loadRuns();
   }, []);
+
+  // Create object URL for PDF display
+  useEffect(() => {
+    if (selectedFile) {
+      const url = URL.createObjectURL(selectedFile);
+      setPdfUrl(url);
+      return () => URL.revokeObjectURL(url);
+    } else {
+      setPdfUrl(null);
+      setLiveExtractions([]);
+      setIngestionProgress({ progress: 0, stage: '' });
+    }
+  }, [selectedFile]);
+
+  async function handlePDFIngestionComplete(result: PDFIngestResponse) {
+    setPdfIngestionResult(result);
+    // Reload runs to show the new ingestion run
+    await loadRuns();
+  }
+
+  function handlePDFIngestionError(error: Error) {
+    setError(error.message);
+  }
 
   async function loadRuns() {
     try {
@@ -126,7 +158,7 @@ export default function IngestionHubPage() {
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(180deg, #fdf7ec 0%, #eef6ff 60%, #f7f9fb 100%)',
+      background: 'var(--page-bg)',
       padding: '20px',
     }}>
       <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
@@ -135,30 +167,324 @@ export default function IngestionHubPage() {
           <Link href="/" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '14px' }}>
             ← Back to Graph
           </Link>
-          <h1 style={{ fontSize: '32px', fontWeight: '700', margin: '12px 0' }}>
+          <h1 style={{ fontSize: '32px', fontWeight: '700', margin: '12px 0', color: 'var(--ink)' }}>
             Ingestion Hub
           </h1>
           <p style={{ color: 'var(--muted)', fontSize: '14px' }}>
-            Review and manage ingestion runs
+            Upload PDFs, review and manage ingestion runs
           </p>
         </div>
 
+        {/* Top Section - File Upload */}
+        <div style={{
+          marginBottom: '20px',
+          background: 'var(--panel)',
+          borderRadius: '12px',
+          padding: '20px',
+          boxShadow: 'var(--shadow)',
+          border: '1px solid var(--border)',
+        }}>
+          <PDFIngestionUpload
+            onFileSelect={setSelectedFile}
+            onIngestionComplete={handlePDFIngestionComplete}
+            onError={handlePDFIngestionError}
+            onExtractionsUpdate={setLiveExtractions}
+            onProgressUpdate={(progress, stage) => setIngestionProgress({ progress, stage })}
+          />
+        </div>
+
+        {/* Main Content - Side by Side Layout */}
+        <div style={{
+          display: 'flex',
+          gap: '20px',
+          marginBottom: '32px',
+          height: 'calc(100vh - 350px)',
+          minHeight: '500px',
+        }}>
+          {/* Left Side - Live Extraction Updates */}
+          <div style={{
+            flex: '0 0 35%',
+            background: 'var(--panel)',
+            borderRadius: '12px',
+            padding: '20px',
+            boxShadow: 'var(--shadow)',
+            border: '1px solid var(--border)',
+            overflow: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            <h3 style={{
+              fontSize: '18px',
+              fontWeight: '600',
+              marginBottom: '16px',
+              color: 'var(--ink)',
+            }}>
+              Live Extraction Updates
+            </h3>
+
+            {/* Progress Section */}
+            {(ingestionProgress.stage || ingestionProgress.progress > 0) && (
+              <div style={{
+                marginBottom: '20px',
+                padding: '16px',
+                background: 'var(--surface)',
+                borderRadius: '8px',
+                border: '1px solid var(--border)',
+              }}>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  marginBottom: '8px',
+                  color: 'var(--ink)',
+                }}>
+                  {ingestionProgress.stage || 'Processing...'}
+                </div>
+                <div style={{
+                  width: '100%',
+                  height: '8px',
+                  background: '#e5e7eb',
+                  borderRadius: '4px',
+                  overflow: 'hidden',
+                  marginBottom: '8px',
+                }}>
+                  <div style={{
+                    width: `${Math.max(ingestionProgress.progress, 1)}%`,
+                    height: '100%',
+                    background: 'var(--accent)',
+                    transition: 'width 0.3s ease',
+                    borderRadius: '4px',
+                  }} />
+                </div>
+                <div style={{
+                  fontSize: '12px',
+                  color: 'var(--muted)',
+                  textAlign: 'center',
+                }}>
+                  {ingestionProgress.progress}%
+                </div>
+              </div>
+            )}
+
+            {/* Extractions Timeline */}
+            {liveExtractions.length > 0 ? (
+              <div style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}>
+                <div style={{
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  color: 'var(--muted)',
+                  marginBottom: '8px',
+                }}>
+                  Extracted Items ({liveExtractions.length})
+                </div>
+                <div style={{
+                  flex: 1,
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}>
+                  {liveExtractions.map((extraction, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        padding: '12px',
+                        background: 'var(--panel)',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border)',
+                        display: 'flex',
+                        alignItems: 'start',
+                        gap: '12px',
+                      }}
+                    >
+                      {/* Timeline indicator */}
+                      <div style={{
+                        width: '4px',
+                        height: '100%',
+                        background: extraction.type === 'concept' ? 'var(--accent)' : 
+                                   extraction.type === 'name' ? '#22c55e' :
+                                   extraction.type === 'date' ? '#f59e0b' : '#6b7280',
+                        borderRadius: '2px',
+                        flexShrink: 0,
+                      }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          marginBottom: '4px',
+                        }}>
+                          <span style={{
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            color: extraction.type === 'concept' ? 'var(--accent)' : 
+                                   extraction.type === 'name' ? '#22c55e' :
+                                   extraction.type === 'date' ? '#f59e0b' : '#6b7280',
+                            textTransform: 'uppercase',
+                            padding: '2px 8px',
+                            background: extraction.type === 'concept' ? 'rgba(37, 99, 235, 0.1)' : 
+                                       extraction.type === 'name' ? 'rgba(34, 197, 94, 0.1)' :
+                                       extraction.type === 'date' ? 'rgba(251, 191, 36, 0.1)' : 'rgba(107, 114, 128, 0.1)',
+                            borderRadius: '4px',
+                          }}>
+                            {extraction.type}
+                          </span>
+                          {extraction.page && (
+                            <span style={{
+                              fontSize: '11px',
+                              color: 'var(--muted)',
+                            }}>
+                              Page {extraction.page}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          color: 'var(--ink)',
+                        }}>
+                          {extraction.name}
+                        </div>
+                        {extraction.description && (
+                          <div style={{
+                            fontSize: '12px',
+                            color: 'var(--muted)',
+                            marginTop: '4px',
+                          }}>
+                            {extraction.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--muted)',
+                fontSize: '14px',
+                textAlign: 'center',
+              }}>
+                {selectedFile 
+                  ? 'Start ingestion to see live extraction updates'
+                  : 'Select a PDF file to begin'}
+              </div>
+            )}
+          </div>
+
+          {/* Right Side - PDF Viewer (Majority of Screen) */}
+          <div style={{
+            flex: '0 0 65%',
+            background: '#525252',
+            borderRadius: '12px',
+            overflow: 'hidden',
+            boxShadow: 'var(--shadow)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            {pdfUrl ? (
+              <div style={{
+                flex: 1,
+                overflow: 'auto',
+                display: 'flex',
+                justifyContent: 'center',
+                padding: '20px',
+              }}>
+                <object
+                  data={pdfUrl}
+                  type="application/pdf"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 'none',
+                  }}
+                >
+                  <div style={{
+                    padding: '40px',
+                    textAlign: 'center',
+                    color: 'white',
+                  }}>
+                    <p>PDF preview not available in your browser.</p>
+                    <a
+                      href={pdfUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        padding: '10px 20px',
+                        fontSize: '14px',
+                        background: 'var(--accent)',
+                        color: 'white',
+                        textDecoration: 'none',
+                        borderRadius: '6px',
+                        display: 'inline-block',
+                        marginTop: '16px',
+                      }}
+                    >
+                      Open PDF in new tab
+                    </a>
+                  </div>
+                </object>
+              </div>
+            ) : (
+              <div style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                fontSize: '16px',
+              }}>
+                Select a PDF file to preview
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* PDF Ingestion Results */}
+        {pdfIngestionResult && (
+          <PDFIngestionResults
+            result={pdfIngestionResult}
+            onViewInGraph={() => {
+              if (pdfIngestionResult.run_id) {
+                router.push(`/?highlight_run_id=${encodeURIComponent(pdfIngestionResult.run_id)}`);
+              }
+            }}
+          />
+        )}
+
         {error && (
           <div style={{
-            padding: '12px',
+            padding: '16px',
             background: '#fee',
-            border: '1px solid #fcc',
+            border: '2px solid #fcc',
             borderRadius: '8px',
             color: '#c33',
             marginBottom: '24px',
+            fontSize: '14px',
+            fontWeight: '500',
           }}>
+            <div style={{ fontWeight: '600', marginBottom: '4px' }}>Error:</div>
             {error}
           </div>
         )}
 
         {/* Runs List */}
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
+          <div style={{ 
+            textAlign: 'center', 
+            padding: '40px',
+            background: 'var(--panel)',
+            borderRadius: '12px',
+            boxShadow: 'var(--shadow)',
+          }}>
             <div style={{ fontSize: '18px', color: 'var(--muted)' }}>Loading ingestion runs...</div>
           </div>
         ) : runs.length === 0 ? (
@@ -179,13 +505,54 @@ export default function IngestionHubPage() {
             borderRadius: '12px',
             padding: '20px',
             boxShadow: 'var(--shadow)',
+            border: '1px solid var(--border)',
           }}>
-            <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '16px' }}>
-              {runs.length} run{runs.length !== 1 ? 's' : ''}
+            {/* Collapsible Header */}
+            <div
+              onClick={() => setRunsListExpanded(!runsListExpanded)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                cursor: 'pointer',
+                padding: '8px',
+                borderRadius: '8px',
+                transition: 'background 0.2s',
+                marginBottom: runsListExpanded ? '16px' : '0',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--surface)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              <div style={{
+                fontSize: '12px',
+                color: 'var(--muted)',
+                transition: 'transform 0.2s',
+                transform: runsListExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '20px',
+                height: '20px',
+              }}>
+                ▶
+              </div>
+              <div style={{ 
+                fontSize: '16px', 
+                fontWeight: '600',
+                color: 'var(--ink)',
+                flex: 1,
+              }}>
+                Previous Ingestion Runs ({runs.length})
+              </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {runs.map((run) => {
+            {runsListExpanded && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {runs.map((run) => {
                 const summary = run.summary_counts || {};
                 const isSelected = selectedRunId === run.run_id;
 
@@ -196,7 +563,7 @@ export default function IngestionHubPage() {
                         padding: '16px',
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
-                        background: 'white',
+                        background: 'var(--panel)',
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '12px' }}>
@@ -218,7 +585,7 @@ export default function IngestionHubPage() {
                             }}>
                               {run.status}
                             </span>
-                            <span style={{ fontSize: '14px', fontWeight: '600' }}>
+                            <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
                               {run.source_type}
                             </span>
                             {run.source_label && (
@@ -379,7 +746,7 @@ export default function IngestionHubPage() {
                         padding: '16px',
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
-                        background: '#f9fafb',
+                        background: 'var(--surface)',
                       }}>
                         {loadingChanges ? (
                           <div style={{ textAlign: 'center', padding: '20px' }}>
@@ -389,7 +756,7 @@ export default function IngestionHubPage() {
                           <div>
                             {runChanges.concepts_created.length > 0 && (
                               <div style={{ marginBottom: '16px' }}>
-                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>
+                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
                                   Created Concepts ({runChanges.concepts_created.length})
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -399,7 +766,7 @@ export default function IngestionHubPage() {
                                       href={`/concepts/${concept.concept_id}`}
                                       style={{
                                         padding: '6px 12px',
-                                        background: 'white',
+                                        background: 'var(--panel)',
                                         borderRadius: '4px',
                                         border: '1px solid var(--border)',
                                         textDecoration: 'none',
@@ -410,7 +777,7 @@ export default function IngestionHubPage() {
                                         alignItems: 'center',
                                       }}
                                     >
-                                      <span>{concept.name}</span>
+                                      <span style={{ color: 'var(--ink)' }}>{concept.name}</span>
                                       <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
                                         {concept.domain} • {concept.type}
                                       </span>
@@ -431,7 +798,7 @@ export default function IngestionHubPage() {
                                       href={`/concepts/${concept.concept_id}`}
                                       style={{
                                         padding: '6px 12px',
-                                        background: 'white',
+                                        background: 'var(--panel)',
                                         borderRadius: '4px',
                                         border: '1px solid var(--border)',
                                         textDecoration: 'none',
@@ -442,7 +809,7 @@ export default function IngestionHubPage() {
                                         alignItems: 'center',
                                       }}
                                     >
-                                      <span>{concept.name}</span>
+                                      <span style={{ color: 'var(--ink)' }}>{concept.name}</span>
                                       <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
                                         {concept.domain} • {concept.type}
                                       </span>
@@ -453,7 +820,7 @@ export default function IngestionHubPage() {
                             )}
                             {runChanges.resources_created.length > 0 && (
                               <div>
-                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>
+                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
                                   Created Resources ({runChanges.resources_created.length})
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -462,7 +829,7 @@ export default function IngestionHubPage() {
                                       key={resource.resource_id}
                                       style={{
                                         padding: '6px 12px',
-                                        background: 'white',
+                                        background: 'var(--panel)',
                                         borderRadius: '4px',
                                         border: '1px solid var(--border)',
                                         fontSize: '13px',
@@ -471,7 +838,7 @@ export default function IngestionHubPage() {
                                         alignItems: 'center',
                                       }}
                                     >
-                                      <span>{resource.title}</span>
+                                      <span style={{ color: 'var(--ink)' }}>{resource.title}</span>
                                       <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
                                         {resource.source_type}
                                       </span>
@@ -492,17 +859,17 @@ export default function IngestionHubPage() {
                         padding: '16px',
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
-                        background: '#fff',
+                        background: 'var(--panel)',
                         boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
                       }}>
-                        <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px' }}>
+                        <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
                           Undo Ingestion Run
                         </div>
                         <div style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
                           This will hide proposed relationships and archive concepts/resources created by this run when safe.
                         </div>
                         <div style={{ marginBottom: '16px' }}>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '8px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '8px', color: 'var(--ink)' }}>
                             <input
                               type="radio"
                               checked={undoMode === 'SAFE'}
@@ -510,7 +877,7 @@ export default function IngestionHubPage() {
                             />
                             <span>Safe undo (default) - Archive concepts/resources when safe</span>
                           </label>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--ink)' }}>
                             <input
                               type="radio"
                               checked={undoMode === 'RELATIONSHIPS_ONLY'}
@@ -558,7 +925,8 @@ export default function IngestionHubPage() {
                   </div>
                 );
               })}
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -67,6 +67,12 @@ NEO4J_QUERY_TIMEOUT_SECONDS = float(os.getenv("NEO4J_QUERY_TIMEOUT_SECONDS", "60
 DEFAULT_PAGE_SIZE = int(os.getenv("DEFAULT_PAGE_SIZE", "20"))
 MAX_PAGE_SIZE = int(os.getenv("MAX_PAGE_SIZE", "100"))
 
+# PDF ingestion limits
+PDF_MAX_FILE_SIZE_MB = int(os.getenv("PDF_MAX_FILE_SIZE_MB", "50"))  # 50MB default
+PDF_MAX_FILE_SIZE_BYTES = PDF_MAX_FILE_SIZE_MB * 1024 * 1024
+PDF_MAX_PAGES = int(os.getenv("PDF_MAX_PAGES", "1000"))  # Max pages to process
+PDF_RATE_LIMIT_PER_MINUTE = int(os.getenv("PDF_RATE_LIMIT_PER_MINUTE", "10"))  # 10 PDFs per minute per user
+
 # SEC EDGAR API User-Agent (required by SEC)
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "BrainWeb/1.0 contact@example.com")
 

@@ -1,11 +1,13 @@
 """API endpoints for session events and context."""
 from fastapi import APIRouter, Depends, Query, HTTPException
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from datetime import datetime
+from pydantic import BaseModel, Field
 
 from db_neo4j import get_neo4j_session
 from auth import require_auth
-from events.schema import EventEnvelope
+from events.schema import EventEnvelope, EventType
+from events.emitter import emit_event
 from events.store import get_event_store
 from projectors.session_context import SessionContextProjector, SessionContext
 
@@ -35,6 +37,39 @@ def list_session_events(
         raise HTTPException(status_code=500, detail=f"Failed to list events: {str(e)}")
 
 
+class SessionEventCreate(BaseModel):
+    event_type: Literal["ChatMessageCreated"]
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    correlation_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    trace_id: Optional[str] = None
+
+
+@router.post("/{session_id}/events", response_model=EventEnvelope)
+def create_session_event(
+    session_id: str,
+    payload: SessionEventCreate,
+    auth: dict = Depends(require_auth),
+):
+    """
+    Append a session event with explicit payload (used for chat message events with full answers).
+    """
+    try:
+        actor_id = auth.get("user_id")
+        event_type = EventType(payload.event_type)
+        return emit_event(
+            event_type=event_type,
+            session_id=session_id,
+            actor_id=actor_id,
+            payload=payload.payload,
+            correlation_id=payload.correlation_id,
+            idempotency_key=payload.idempotency_key,
+            trace_id=payload.trace_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to append event: {str(e)}")
+
+
 @router.get("/{session_id}/context", response_model=SessionContext)
 def get_session_context(
     session_id: str,
@@ -62,4 +97,3 @@ def get_session_context(
         return context
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get session context: {str(e)}")
-

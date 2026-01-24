@@ -1,14 +1,15 @@
 """
-Intent router for deterministic query classification.
+Intent router for AI-first query classification.
 
-Uses keyword rules first, then LLM fallback if ambiguous.
+Uses LLM classification first, then keyword-based fallback if LLM fails.
+This ensures better intent detection for natural language queries.
 """
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from models import Intent, IntentResult
 import re
 from pydantic import BaseModel
 
-# Intent priority order (higher priority first)
+# Intent priority order (higher priority first) - used for fallback only
 INTENT_PRIORITY = {
     Intent.EVIDENCE_CHECK: 8,
     Intent.WHAT_CHANGED: 7,
@@ -20,7 +21,7 @@ INTENT_PRIORITY = {
     Intent.DEFINITION_OVERVIEW: 1,
 }
 
-# Keyword patterns for each intent
+# Keyword patterns for each intent - used as fallback only
 INTENT_KEYWORDS = {
     Intent.TIMELINE: [
         "timeline", "when", "sequence", "chronology", "chronological",
@@ -60,14 +61,121 @@ INTENT_KEYWORDS = {
     ],
 }
 
+# All available intents for LLM classification
+ALL_INTENTS = [
+    Intent.EVIDENCE_CHECK.value,
+    Intent.WHAT_CHANGED.value,
+    Intent.CAUSAL_CHAIN.value,
+    Intent.TIMELINE.value,
+    Intent.COMPARE.value,
+    Intent.WHO_NETWORK.value,
+    Intent.EXPLORE_NEXT.value,
+    Intent.DEFINITION_OVERVIEW.value,
+]
+
 
 def classify_intent(query: str, use_llm_fallback: bool = True) -> IntentResult:
     """
-    Classify query into an intent using deterministic rules + optional LLM fallback.
+    Classify query into an intent using AI-first approach (LLM first, keywords as fallback).
     
     Args:
         query: User query string
-        use_llm_fallback: Whether to use LLM if rules are ambiguous
+        use_llm_fallback: Whether to use keyword fallback if LLM fails (default: True)
+    
+    Returns:
+        IntentResult with intent, confidence, and reasoning
+    """
+    # AI-FIRST: Try LLM classification first
+    if use_llm_fallback:  # This flag now means "use LLM" (AI-first)
+        llm_result = _llm_classify_intent(query)
+        if llm_result and llm_result.confidence >= 0.7:
+            return llm_result
+    
+    # FALLBACK: Use keyword-based classification if LLM failed or unavailable
+    return _keyword_classify_intent(query)
+
+
+def _llm_classify_intent(query: str) -> Optional[IntentResult]:
+    """
+    Use LLM to classify intent (AI-first approach).
+    
+    Args:
+        query: User query
+    
+    Returns:
+        IntentResult if successful, None if LLM fails
+    """
+    try:
+        from openai import OpenAI
+        from config import OPENAI_API_KEY
+        import json
+        
+        if not OPENAI_API_KEY:
+            return None
+        
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        prompt = f"""Classify this query into exactly one of these intents: {', '.join(ALL_INTENTS)}
+
+Query: "{query}"
+
+Available intents:
+- EVIDENCE_CHECK: Asking for sources, citations, proof, evidence
+- WHAT_CHANGED: Asking about recent changes, updates, new information
+- CAUSAL_CHAIN: Asking about causes, effects, why something happened
+- TIMELINE: Asking about when, sequence, chronological order
+- COMPARE: Asking to compare, contrast, differences, similarities
+- WHO_NETWORK: Asking about people, connections, relationships, networks
+- EXPLORE_NEXT: Asking what to explore next, related topics, rabbit holes
+- DEFINITION_OVERVIEW: General definition, explanation, overview questions
+
+Return ONLY a JSON object:
+{{
+  "intent": "INTENT_NAME",
+  "confidence": 0.0-1.0,
+  "reasoning": "brief explanation"
+}}"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an intent classifier. Return only valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=200,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        result = json.loads(result_text)
+        
+        intent_str = result.get("intent", "").upper()
+        confidence = float(result.get("confidence", 0.7))
+        reasoning = result.get("reasoning", "LLM classification")
+        
+        # Validate intent
+        if intent_str in ALL_INTENTS:
+            return IntentResult(
+                intent=intent_str,
+                confidence=confidence,
+                reasoning=f"AI-first classification: {reasoning}"
+            )
+        else:
+            print(f"[Intent Router] LLM returned invalid intent '{intent_str}'")
+            return None
+    
+    except Exception as e:
+        print(f"[Intent Router] LLM classification failed: {e}")
+        return None
+
+
+def _keyword_classify_intent(query: str) -> IntentResult:
+    """
+    Fallback keyword-based classification (used only if LLM fails).
+    
+    Args:
+        query: User query string
     
     Returns:
         IntentResult with intent, confidence, and reasoning
@@ -89,7 +197,7 @@ def classify_intent(query: str, use_llm_fallback: bool = True) -> IntentResult:
         return IntentResult(
             intent=Intent.DEFINITION_OVERVIEW.value,
             confidence=0.5,
-            reasoning="No keyword matches found, defaulting to DEFINITION_OVERVIEW"
+            reasoning="No keyword matches found, defaulting to DEFINITION_OVERVIEW (keyword fallback)"
         )
     
     # If single match, use it
@@ -97,12 +205,11 @@ def classify_intent(query: str, use_llm_fallback: bool = True) -> IntentResult:
         intent = list(intent_scores.keys())[0]
         return IntentResult(
             intent=intent.value,
-            confidence=0.9,
-            reasoning=f"Single keyword match: {intent.value}"
+            confidence=0.7,
+            reasoning=f"Single keyword match: {intent.value} (keyword fallback)"
         )
     
     # Multiple matches: use priority
-    # Sort by priority (higher first), then by score
     sorted_intents = sorted(
         intent_scores.items(),
         key=lambda x: (INTENT_PRIORITY.get(x[0], 0), x[1]),
@@ -111,91 +218,9 @@ def classify_intent(query: str, use_llm_fallback: bool = True) -> IntentResult:
     
     top_intent = sorted_intents[0][0]
     top_score = sorted_intents[0][1]
-    second_score = sorted_intents[1][1] if len(sorted_intents) > 1 else 0
     
-    # If top intent has significantly higher score, use it
-    if top_score >= second_score * 1.5:
-        return IntentResult(
-            intent=top_intent.value,
-            confidence=0.85,
-            reasoning=f"Highest priority intent with {top_score} keyword matches"
-        )
-    
-    # If scores are close and we have LLM fallback, use it
-    if use_llm_fallback and top_score == second_score:
-        return _llm_classify_intent(query, [intent.value for intent, _ in sorted_intents[:3]])
-    
-    # Otherwise, use priority-based selection
     return IntentResult(
         intent=top_intent.value,
-        confidence=0.75,
-        reasoning=f"Selected by priority: {top_intent.value} (score: {top_score})"
+        confidence=0.65,
+        reasoning=f"Selected by priority: {top_intent.value} (score: {top_score}, keyword fallback)"
     )
-
-
-def _llm_classify_intent(query: str, candidate_intents: List[str]) -> IntentResult:
-    """
-    Use LLM to classify intent when rules are ambiguous.
-    
-    Args:
-        query: User query
-        candidate_intents: List of candidate intent strings
-    
-    Returns:
-        IntentResult
-    """
-    try:
-        from openai import OpenAI
-        from config import OPENAI_API_KEY
-        
-        if not OPENAI_API_KEY:
-            # Fallback to highest priority candidate
-            return IntentResult(
-                intent=candidate_intents[0],
-                confidence=0.6,
-                reasoning="LLM unavailable, using highest priority candidate"
-            )
-        
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
-        prompt = f"""Classify this query into exactly one of these intents: {', '.join(candidate_intents)}
-
-Query: "{query}"
-
-Respond with ONLY the intent name (one word, exactly as shown above)."""
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are an intent classifier. Respond with only the intent name."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.0,
-            max_tokens=20
-        )
-        
-        intent_str = response.choices[0].message.content.strip().upper()
-        
-        # Validate response
-        if intent_str in candidate_intents:
-            return IntentResult(
-                intent=intent_str,
-                confidence=0.8,
-                reasoning=f"LLM classification from candidates: {', '.join(candidate_intents)}"
-            )
-        else:
-            # Fallback to first candidate
-            return IntentResult(
-                intent=candidate_intents[0],
-                confidence=0.65,
-                reasoning=f"LLM returned invalid intent '{intent_str}', using fallback"
-            )
-    
-    except Exception as e:
-        print(f"[Intent Router] LLM fallback failed: {e}")
-        # Fallback to highest priority candidate
-        return IntentResult(
-            intent=candidate_intents[0],
-            confidence=0.6,
-            reasoning=f"LLM fallback error: {str(e)}, using highest priority candidate"
-        )

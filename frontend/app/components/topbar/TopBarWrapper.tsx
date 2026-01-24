@@ -1,8 +1,9 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import TopBar from './TopBar';
+import FloatingActionButton from '../navigation/FloatingActionButton';
 
 // Routes that should NOT show the TopBar
 const HIDE_TOPBAR_ROUTES = [
@@ -13,6 +14,7 @@ const HIDE_TOPBAR_ROUTES = [
 
 export default function TopBarWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [shouldHideTopBar, setShouldHideTopBar] = useState(() => {
     // Check immediately on client side to avoid flash
     if (typeof window !== 'undefined') {
@@ -30,12 +32,22 @@ export default function TopBarWrapper({ children }: { children: React.ReactNode 
     }
   }, [pathname]);
   
+  const activeGraphId = searchParams?.get('graph_id') || undefined;
+  
+  // Hide FAB on certain pages
+  const hideFAB = HIDE_TOPBAR_ROUTES.some(route => pathname?.startsWith(route)) || 
+                  pathname?.startsWith('/debug') || 
+                  pathname?.startsWith('/admin');
+  
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {!shouldHideTopBar && <TopBar />}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {children}
       </div>
+      {!hideFAB && (
+        <FloatingActionButton activeGraphId={activeGraphId} />
+      )}
     </div>
   );
 }

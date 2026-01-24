@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { Concept, Resource, Suggestion, SuggestionType } from '../../api-client';
+import type { Concept, Resource, Suggestion, SuggestionType, ConceptNote } from '../../api-client';
 import { fetchEvidenceForConcept, type FetchEvidenceResult } from '../../lib/evidenceFetch';
-import { uploadResourceForConcept, getResourcesForConcept, getSuggestions, getSuggestedPaths, type SuggestedPath } from '../../api-client';
+import { uploadResourceForConcept, getResourcesForConcept, getSuggestions, getSuggestedPaths, resolveLectureLinks, type SuggestedPath, getConceptNotes } from '../../api-client';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
+import { addConceptToHistory } from '../../lib/conceptNavigationHistory';
+import { getChatSession, getCurrentSessionId } from '../../lib/chatSessions';
 import { toRgba } from '../../utils/colorUtils';
 import {
   filterSuggestions,
@@ -16,6 +18,8 @@ import {
 import { saveItem, removeSavedItem, isItemSaved, getSavedItems } from '../../lib/savedItems';
 import { getConceptQuality, type ConceptQuality, updateConcept, getNeighborsWithRelationships, getClaimsForConcept } from '../../api-client';
 import { generateSuggestionObservation } from '../../lib/observations';
+import { storeLectureLinkReturn } from '../../lib/lectureLinkNavigation';
+import { getAuthHeaders } from '../../lib/authToken';
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
@@ -145,44 +149,41 @@ function SuggestionOverflowMenu({
   );
 }
 
-// Notes storage in localStorage
-const NOTES_STORAGE_KEY = 'brainweb:conceptNotes';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
-interface ConceptNote {
-  conceptId: string;
-  content: string;
-  createdAt: number;
-  updatedAt: number;
+interface NotesEntry {
+  id: string;
+  section_id: string;
+  chat_id: string;
+  source_type: 'main_chat' | 'branch_chat' | 'bridging_hint';
+  source_message_ids: string[];
+  related_branch_id?: string | null;
+  related_anchor_ids?: string[] | null;
+  summary_text: string;
+  confidence_level: number;
+  concept_label?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-function getNotesForConcept(conceptId: string): ConceptNote[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const stored = localStorage.getItem(NOTES_STORAGE_KEY);
-    if (!stored) return [];
-    const allNotes: ConceptNote[] = JSON.parse(stored);
-    return allNotes.filter(n => n.conceptId === conceptId);
-  } catch {
-    return [];
-  }
+interface NotesSection {
+  id: string;
+  digest_id: string;
+  title: string;
+  position: number;
+  entries: NotesEntry[];
+  created_at: string;
+  updated_at: string;
 }
 
-function addNoteToConcept(conceptId: string, content: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const stored = localStorage.getItem(NOTES_STORAGE_KEY);
-    const allNotes: ConceptNote[] = stored ? JSON.parse(stored) : [];
-    const newNote: ConceptNote = {
-      conceptId,
-      content,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    allNotes.push(newNote);
-    localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(allNotes));
-  } catch {
-    // Ignore errors
-  }
+interface NotesDigest {
+  id: string;
+  chat_id: string;
+  sections: NotesSection[];
+  created_at: string;
+  last_updated_at?: string | null;
+  last_processed_message_id?: string | null;
+  last_processed_at?: string | null;
 }
 
 export type ContextPanelTab = 'overview' | 'evidence' | 'notes' | 'connections' | 'activity' | 'data';
@@ -264,9 +265,17 @@ export default function ContextPanel({
     error?: string;
   }>({ conceptId: '', status: 'idle' });
   
-  const [notes, setNotes] = useState<ConceptNote[]>([]);
-  const [newNoteContent, setNewNoteContent] = useState('');
-  const [isAddingNote, setIsAddingNote] = useState(false);
+  const [notesDigest, setNotesDigest] = useState<NotesDigest | null>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesUpdating, setNotesUpdating] = useState(false);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const [notesStatus, setNotesStatus] = useState<string | null>(null);
+  
+  // Concept notes state (linked to selected node)
+  const [conceptNotes, setConceptNotes] = useState<ConceptNote[]>([]);
+  const [conceptNotesLoading, setConceptNotesLoading] = useState(false);
+  const [conceptNotesError, setConceptNotesError] = useState<string | null>(null);
+  const conceptNotesAbortControllerRef = useRef<AbortController | null>(null);
   
   // Next steps suggestions state
   const [nextStepsSuggestions, setNextStepsSuggestions] = useState<Suggestion[]>([]);
@@ -292,6 +301,32 @@ export default function ContextPanel({
   const [generatedDescription, setGeneratedDescription] = useState<string | null>(null);
   const descriptionGenerationAttemptedRef = useRef<Set<string>>(new Set());
   const descriptionGenerationNodeIdRef = useRef<string | null>(null);
+  
+  // Traversal state for connected nodes - include current node in the list
+  const traversalList = useMemo(() => {
+    if (!selectedNode) return [];
+    // Include current node first, then all connections
+    return [
+      {
+        node_id: selectedNode.node_id,
+        name: selectedNode.name,
+        predicate: 'current',
+        isOutgoing: false,
+        url_slug: (selectedNode as any).url_slug || selectedNode.node_id,
+      },
+      ...connections.map(c => ({
+        ...c,
+        url_slug: (c as any).url_slug || c.node_id,
+      })),
+    ];
+  }, [selectedNode, connections]);
+  
+  // Find current node's index in traversal list dynamically
+  const currentTraversalIndex = useMemo(() => {
+    if (!selectedNode || traversalList.length === 0) return 0;
+    const index = traversalList.findIndex(node => node.node_id === selectedNode.node_id);
+    return index >= 0 ? index : 0;
+  }, [selectedNode?.node_id, traversalList]);
 
   // Check if selectedNode is in active path
   const activePathInfo = useMemo(() => {
@@ -353,14 +388,132 @@ export default function ContextPanel({
     }
   }, [learnMenuOpen]);
 
-  // Load notes when concept changes
-  useEffect(() => {
-    if (selectedNode) {
-      setNotes(getNotesForConcept(selectedNode.node_id));
-    } else {
-      setNotes([]);
+  const chatParam = searchParams?.get('chat') || null;
+  const chatSessionId = useMemo(() => {
+    if (chatParam) {
+      const session = getChatSession(chatParam);
+      if (session) return session.id;
     }
-  }, [selectedNode?.node_id]);
+    return getCurrentSessionId();
+  }, [chatParam]);
+
+  const notesEntryCount = useMemo(() => {
+    if (!notesDigest?.sections) return 0;
+    return notesDigest.sections.reduce((total, section) => total + section.entries.length, 0);
+  }, [notesDigest]);
+
+  const fetchNotesDigest = async (sessionId: string) => {
+    setNotesLoading(true);
+    setNotesError(null);
+    try {
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch(`${API_BASE_URL}/chats/${sessionId}/notes`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to load notes');
+      }
+      const data = await response.json();
+      setNotesDigest(data);
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Failed to load notes');
+    } finally {
+      setNotesLoading(false);
+    }
+  };
+
+  const handleFindNotesEntryInLecture = async (entry: NotesEntry) => {
+    if (!chatSessionId) {
+      alert('Start a chat session to link to lectures.');
+      return;
+    }
+
+    try {
+      const result = await resolveLectureLinks({
+        chat_id: chatSessionId,
+        source_type: 'notes_entry',
+        source_id: entry.id,
+      });
+
+      if (!result.links.length) {
+        alert('No lecture matches found.');
+        return;
+      }
+
+      let selected = result.links[0];
+      if (result.weak && result.links.length > 1) {
+        const options = result.links.map((link, idx) =>
+          `${idx + 1}. ${link.lecture_section_id} (${Math.round(link.confidence_score * 100)}%)`
+        ).join('\n');
+        const choice = window.prompt(`Low confidence. Choose a match:\n${options}`, '1');
+        const index = Number(choice) - 1;
+        if (!Number.isNaN(index) && result.links[index]) {
+          selected = result.links[index];
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        storeLectureLinkReturn({
+          path: `${window.location.pathname}${window.location.search}`,
+          windowScrollTop: window.scrollY,
+        });
+      }
+
+      const params = new URLSearchParams({
+        lecture_document_id: selected.lecture_document_id,
+        section_id: selected.lecture_section_id,
+        start_offset: String(selected.start_offset),
+        end_offset: String(selected.end_offset),
+        link_id: selected.id,
+      });
+      router.push(`/lecture-viewer?${params.toString()}`);
+    } catch (err) {
+      console.error('Failed to resolve lecture link:', err);
+      alert('Failed to resolve lecture link.');
+    }
+  };
+
+  const handleNotesUpdate = async () => {
+    if (!chatSessionId || notesUpdating) return;
+    setNotesUpdating(true);
+    setNotesError(null);
+    setNotesStatus(null);
+    try {
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch(`${API_BASE_URL}/chats/${chatSessionId}/notes/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({ trigger_source: 'manual' }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to update notes');
+      }
+      const data = await response.json();
+      setNotesDigest(data.digest || null);
+      setNotesStatus(data.status === 'no_update' ? 'No new notes to add.' : 'Notes updated.');
+    } catch (err) {
+      setNotesError(err instanceof Error ? err.message : 'Failed to update notes');
+    } finally {
+      setNotesUpdating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'notes') return;
+    if (!chatSessionId) {
+      setNotesDigest(null);
+      return;
+    }
+    fetchNotesDigest(chatSessionId);
+  }, [activeTab, chatSessionId]);
   
   // Get graphId from searchParams - extract value to prevent infinite loops
   // searchParams object changes on every render in Next.js, so we extract just the value
@@ -434,6 +587,59 @@ export default function ContextPanel({
       qualityLoadingRef.current.delete(cacheKey);
     };
   }, [selectedNode?.node_id, graphId]);
+
+  // Fetch concept notes when node changes
+  useEffect(() => {
+    // Cancel any in-flight request
+    if (conceptNotesAbortControllerRef.current) {
+      conceptNotesAbortControllerRef.current.abort();
+    }
+
+    if (!selectedNode?.node_id) {
+      setConceptNotes([]);
+      setConceptNotesLoading(false);
+      setConceptNotesError(null);
+      return;
+    }
+
+    const nodeId = selectedNode.node_id;
+    setConceptNotes([]);
+    setConceptNotesLoading(true);
+    setConceptNotesError(null);
+
+    const abortController = new AbortController();
+    conceptNotesAbortControllerRef.current = abortController;
+
+    getConceptNotes(nodeId, 10, 0)
+      .then((notes) => {
+        // Only update if this request wasn't aborted
+        if (!abortController.signal.aborted) {
+          setConceptNotes(notes);
+          setConceptNotesError(null);
+        }
+      })
+      .catch((error) => {
+        // Only update if this request wasn't aborted
+        if (!abortController.signal.aborted) {
+          if (error.name === 'AbortError') {
+            // Request was cancelled, ignore
+            return;
+          }
+          setConceptNotesError(error.message || 'Could not load notes');
+          setConceptNotes([]);
+        }
+      })
+      .finally(() => {
+        // Only update if this request wasn't aborted
+        if (!abortController.signal.aborted) {
+          setConceptNotesLoading(false);
+        }
+      });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [selectedNode?.node_id]);
 
   // Auto-generate description when node is selected and doesn't have one
   // Made non-blocking and cancellable to prevent UI lock
@@ -613,7 +819,7 @@ export default function ContextPanel({
     }
   }, [selectedNode?.node_id, setActiveTab, selectedResources.length]);
 
-  const notesCount = notes.length;
+  const notesCount = notesEntryCount;
   const connectionsCount = connections.length || neighborCount;
 
   const isPinned = selectedNode ? isConceptPinned(selectedNode.node_id) : false;
@@ -881,15 +1087,6 @@ export default function ContextPanel({
     input.click();
   };
 
-  const handleAddNote = async () => {
-    if (!selectedNode || !newNoteContent.trim() || isAddingNote) return;
-    setIsAddingNote(true);
-    addNoteToConcept(selectedNode.node_id, newNoteContent.trim());
-    setNotes(getNotesForConcept(selectedNode.node_id));
-    setNewNoteContent('');
-    setIsAddingNote(false);
-  };
-
   const handlePin = () => {
     if (!selectedNode) return;
     const graphId = searchParams?.get('graph_id') || undefined;
@@ -1056,38 +1253,94 @@ export default function ContextPanel({
             )}
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isItemSaved('CONCEPT', selectedNode.node_id)) {
-                  const saved = getSavedItems().find(item => item.concept_id === selectedNode.node_id);
-                  if (saved) removeSavedItem(saved.id);
-                } else {
-                  const graphId = searchParams?.get('graph_id') || undefined;
-                  saveItem({
-                    kind: 'CONCEPT',
-                    title: selectedNode.name,
-                    graph_id: graphId,
-                    concept_id: selectedNode.node_id,
-                  });
-                }
-                // Force re-render
-                setFetchEvidenceState(prev => ({ ...prev }));
-              }}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: isItemSaved('CONCEPT', selectedNode.node_id) ? 'var(--accent)' : 'var(--muted)',
-                cursor: 'pointer',
-                fontSize: '16px',
-                padding: '4px 8px',
-                display: 'flex',
-                alignItems: 'center',
-              }}
-              title={isItemSaved('CONCEPT', selectedNode.node_id) ? 'Remove from saved' : 'Save concept'}
-            >
-              {isItemSaved('CONCEPT', selectedNode.node_id) ? '🔖' : '🔗'}
-            </button>
+            {/* Traversal navigation */}
+            {traversalList.length > 1 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const prevIndex = currentTraversalIndex > 0 ? currentTraversalIndex - 1 : traversalList.length - 1;
+                    const prevNode = traversalList[prevIndex];
+                    if (prevNode) {
+                      // Track navigation with relationship
+                      const relationship = prevNode.predicate || 'navigated_to';
+                      if (selectedNode) {
+                        addConceptToHistory(prevNode.node_id, prevNode.name, relationship, selectedNode.node_id);
+                      }
+                      
+                      // Use node_id directly for navigation (URL handler will find it)
+                      const nodeId = prevNode.node_id;
+                      const graphId = searchParams?.get('graph_id');
+                      const params = new URLSearchParams();
+                      params.set('select', nodeId);
+                      if (graphId) {
+                        params.set('graph_id', graphId);
+                      }
+                      router.push(`/?${params.toString()}`);
+                    }
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    padding: '6px 10px',
+                    color: 'var(--ink)',
+                    fontSize: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                  title="Previous node"
+                >
+                  ←
+                </button>
+                <div style={{ fontSize: '12px', color: 'var(--muted)', minWidth: '60px', textAlign: 'center' }}>
+                  {currentTraversalIndex + 1} / {traversalList.length}
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const nextIndex = currentTraversalIndex < traversalList.length - 1 ? currentTraversalIndex + 1 : 0;
+                    const nextNode = traversalList[nextIndex];
+                    if (nextNode) {
+                      // Track navigation with relationship
+                      const relationship = nextNode.predicate || 'navigated_to';
+                      if (selectedNode) {
+                        addConceptToHistory(nextNode.node_id, nextNode.name, relationship, selectedNode.node_id);
+                      }
+                      
+                      // Use node_id directly for navigation (URL handler will find it)
+                      const nodeId = nextNode.node_id;
+                      const graphId = searchParams?.get('graph_id');
+                      const params = new URLSearchParams();
+                      params.set('select', nodeId);
+                      if (graphId) {
+                        params.set('graph_id', graphId);
+                      }
+                      router.push(`/?${params.toString()}`);
+                    }
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    padding: '6px 10px',
+                    color: 'var(--ink)',
+                    fontSize: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                  title="Next node"
+                >
+                  →
+                </button>
+              </>
+            )}
             {/* Learn button (only for thin/gap concepts) */}
             {isConceptThin && (
               <div style={{ position: 'relative' }} ref={learnMenuRef}>
@@ -1189,21 +1442,6 @@ export default function ContextPanel({
                 )}
               </div>
             )}
-            <button
-              onClick={handlePin}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '4px',
-                color: isPinned ? 'var(--accent)' : 'var(--muted)',
-                fontSize: '18px',
-              }}
-              aria-label={isPinned ? 'Unpin concept' : 'Pin concept'}
-              title={isPinned ? 'Unpin concept' : 'Pin concept'}
-            >
-              {isPinned ? '📌' : '📍'}
-            </button>
             {onClose && (
               <button
                 onClick={(e) => {
@@ -1294,18 +1532,6 @@ export default function ContextPanel({
           }}
         >
           Attach
-        </button>
-        <button
-          onClick={handleAddNote}
-          disabled={!newNoteContent.trim() || isAddingNote}
-          className="pill pill--ghost"
-          style={{
-            fontSize: '13px',
-            cursor: newNoteContent.trim() && !isAddingNote ? 'pointer' : 'not-allowed',
-            opacity: newNoteContent.trim() && !isAddingNote ? 1 : 0.5,
-          }}
-        >
-          Add Note
         </button>
         <button
           onClick={handlePin}
@@ -1405,6 +1631,114 @@ export default function ContextPanel({
                 </div>
               )
             )}
+
+            {/* Learning Notes section */}
+            <div style={{ marginTop: '24px' }}>
+              <h5 style={{ 
+                fontSize: '13px', 
+                fontWeight: '600', 
+                marginBottom: '12px', 
+                color: 'var(--ink)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                Learning Notes
+              </h5>
+              
+              {conceptNotesLoading ? (
+                <div style={{ 
+                  fontSize: '13px', 
+                  color: 'var(--muted)', 
+                  fontStyle: 'italic',
+                  padding: '8px 0',
+                }}>
+                  Loading...
+                </div>
+              ) : conceptNotesError ? (
+                <div style={{ 
+                  fontSize: '13px', 
+                  color: 'var(--error)', 
+                  padding: '8px 0',
+                }}>
+                  {conceptNotesError}
+                </div>
+              ) : conceptNotes.length === 0 ? (
+                <div style={{ 
+                  fontSize: '13px', 
+                  color: 'var(--muted)', 
+                  fontStyle: 'italic',
+                  padding: '8px 0',
+                }}>
+                  No notes linked to this concept yet.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {conceptNotes.map((note) => (
+                    <div
+                      key={note.id}
+                      onClick={() => {
+                        // Navigate to chat session
+                        if (note.chat_id) {
+                          router.push(`/?chat=${encodeURIComponent(note.chat_id)}`);
+                        }
+                      }}
+                      style={{
+                        padding: '10px 12px',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        cursor: note.chat_id ? 'pointer' : 'default',
+                        transition: 'all 0.2s',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (note.chat_id) {
+                          e.currentTarget.style.background = 'var(--background)';
+                          e.currentTarget.style.borderColor = 'var(--accent)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (note.chat_id) {
+                          e.currentTarget.style.background = 'var(--surface)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
+                        }
+                      }}
+                    >
+                      <div style={{ 
+                        fontSize: '11px', 
+                        color: 'var(--muted)', 
+                        marginBottom: '4px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.3px',
+                      }}>
+                        {note.section_title}
+                      </div>
+                      <div style={{ 
+                        fontSize: '13px', 
+                        color: 'var(--ink)',
+                        lineHeight: '1.5',
+                        marginBottom: '6px',
+                      }}>
+                        {note.summary_text}
+                      </div>
+                      <div style={{ 
+                        fontSize: '11px', 
+                        color: 'var(--muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}>
+                        <span>{new Date(note.created_at).toLocaleDateString()} {new Date(note.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        {note.source_type && (
+                          <span className="badge badge--soft" style={{ fontSize: '10px' }}>
+                            {note.source_type}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Observations module - hidden, only show if user explicitly wants to see all */}
             {false && nextStepsSuggestions.length > 0 && (
@@ -2089,64 +2423,68 @@ export default function ContextPanel({
         {activeTab === 'notes' && (
           <div className="fade-in">
             <div style={{ marginBottom: '16px' }}>
-              <h4 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
-                Notes
-              </h4>
-              <div style={{ 
-                padding: '12px', 
-                background: 'var(--panel)', 
-                borderRadius: '8px',
-                border: '1px dashed var(--border)',
-                marginBottom: '12px',
-              }}>
-                <textarea
-                  value={newNoteContent}
-                  onChange={(e) => setNewNoteContent(e.target.value)}
-                  placeholder="Add a note about this concept..."
-                  style={{
-                    width: '100%',
-                    minHeight: '80px',
-                    padding: '8px',
-                    fontSize: '13px',
-                    border: '1px solid var(--border)',
-                    borderRadius: '6px',
-                    background: 'var(--background)',
-                    color: 'var(--ink)',
-                    fontFamily: 'inherit',
-                    resize: 'vertical',
-                  }}
-                />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <h4 style={{ fontSize: '16px', fontWeight: '600', margin: 0, color: 'var(--ink)' }}>
+                  Learning Notes
+                </h4>
                 <button
-                  onClick={handleAddNote}
-                  disabled={!newNoteContent.trim() || isAddingNote}
+                  onClick={handleNotesUpdate}
+                  disabled={!chatSessionId || notesUpdating}
                   style={{
-                    marginTop: '8px',
                     padding: '6px 12px',
-                    background: newNoteContent.trim() && !isAddingNote ? 'var(--accent)' : 'var(--muted)',
+                    background: chatSessionId && !notesUpdating ? 'var(--accent)' : 'var(--muted)',
                     color: 'white',
                     border: 'none',
                     borderRadius: '6px',
                     fontSize: '12px',
                     fontWeight: '600',
-                    cursor: newNoteContent.trim() && !isAddingNote ? 'pointer' : 'not-allowed',
+                    cursor: chatSessionId && !notesUpdating ? 'pointer' : 'not-allowed',
                   }}
                 >
-                  {isAddingNote ? 'Adding...' : 'Add Note'}
+                  {notesUpdating ? 'Updating...' : 'Update Notes'}
                 </button>
               </div>
+              <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '6px' }}>
+                {chatSessionId ? (
+                  <>Session: {chatSessionId}</>
+                ) : (
+                  <>Start a chat session to generate notes.</>
+                )}
+              </div>
+              {notesDigest?.last_updated_at && (
+                <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>
+                  Last updated: {new Date(notesDigest.last_updated_at).toLocaleString()}
+                </div>
+              )}
+              {notesStatus && (
+                <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '6px' }}>
+                  {notesStatus}
+                </div>
+              )}
+              {notesError && (
+                <div style={{ fontSize: '12px', color: '#b91c1c', marginTop: '6px' }}>
+                  {notesError}
+                </div>
+              )}
             </div>
 
-            {notes.length === 0 ? (
-              <div style={{ padding: '24px', textAlign: 'center' }}>
-                <p style={{ fontSize: '14px', margin: 0, color: 'var(--muted)' }}>
-                  No notes yet. Add your first note above.
-                </p>
+            {notesLoading ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
+                Loading notes...
+              </div>
+            ) : !chatSessionId ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
+                Notes appear after you start a chat session.
+              </div>
+            ) : !notesDigest || notesEntryCount === 0 ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
+                No digest entries yet. Run an update after you ask a few questions.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {notes.map((note, idx) => (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {notesDigest.sections.map((section) => (
                   <div
-                    key={idx}
+                    key={section.id}
                     style={{
                       padding: '12px',
                       background: 'var(--panel)',
@@ -2154,12 +2492,40 @@ export default function ContextPanel({
                       border: '1px solid var(--border)',
                     }}
                   >
-                    <p style={{ fontSize: '13px', lineHeight: '1.5', color: 'var(--ink)', margin: 0 }}>
-                      {note.content}
-                    </p>
-                    <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '8px' }}>
-                      {new Date(note.createdAt).toLocaleDateString()}
+                    <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--ink)', marginBottom: '8px' }}>
+                      {section.title}
                     </div>
+                    {section.entries.length === 0 ? (
+                      <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                        No entries yet.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {section.entries.map((entry) => (
+                          <div key={entry.id} style={{ fontSize: '12px', color: 'var(--ink)' }}>
+                            <div style={{ lineHeight: '1.5' }}>{entry.summary_text}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}>
+                              {entry.source_type.replace('_', ' ')} • {Math.round(entry.confidence_level * 100)}%
+                            </div>
+                            <button
+                              onClick={() => handleFindNotesEntryInLecture(entry)}
+                              style={{
+                                marginTop: '6px',
+                                padding: '4px 8px',
+                                fontSize: '11px',
+                                borderRadius: '6px',
+                                border: '1px solid var(--border)',
+                                background: 'var(--surface)',
+                                color: 'var(--ink)',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Find in lecture
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

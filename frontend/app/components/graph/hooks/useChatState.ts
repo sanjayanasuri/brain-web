@@ -42,6 +42,7 @@ export interface ChatMessage {
   question: string;
   answer: string;
   answerId: string | null;
+  eventId?: string | null;
   answerSections: AnswerSection[] | null;
   timestamp: number;
   suggestedQuestions: string[];
@@ -334,4 +335,3 @@ export function useChatState() {
   
   return { state, actions };
 }
-

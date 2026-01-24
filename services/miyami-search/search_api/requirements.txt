@@ -1,0 +1,24 @@
+fastapi==0.121.1
+uvicorn==0.38.0
+httpx==0.28.1
+beautifulsoup4==4.14.2
+readability-lxml==0.8.4.1
+lxml
+html2text
+trafilatura
+python-dateutil
+flashrank
+diskcache
+
+# Advanced fetch capabilities (stealth mode & JS rendering)
+curl_cffi>=0.7.0  # TLS fingerprint matching for high stealth mode
+brotli>=1.1.0  # Brotli decompression for compressed responses
+# Note: ScrapingBee and Browserless are external services, no pip packages needed
+
+# Scrapy for site-wide crawling
+scrapy>=2.11.0  # Web crawling framework
+itemadapter>=0.8.0  # For Scrapy item handling
+
+# YouTube transcript extraction
+youtube-transcript-api>=1.0  # Fetch YouTube video transcripts
+yt-dlp>=2024.1.0  # Fallback for transcript extraction (better anti-bot)

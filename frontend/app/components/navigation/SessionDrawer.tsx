@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { fetchRecentSessions, type SessionSummary } from '../../lib/eventsClient';
@@ -8,6 +8,9 @@ import { getLastSession } from '../../lib/sessionState';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { getChatSessions, getChatSession, setCurrentSessionId, type ChatSession } from '../../lib/chatSessions';
 import { listGraphs, type GraphSummary } from '../../api-client';
+import { useOptimizedNavigation, routePrefetchers, quickNav, useNavigationShortcuts, optimizedStorage } from '../../lib/navigationUtils';
+import { useEnhancedNavigation } from '../../lib/navigationHelpers';
+import { clearChatStateIfAvailable, closeMobileSidebarIfAvailable, registerMobileSidebarCloseFunction } from '../../lib/globalNavigationState';
 
 // Todo List Component
 function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
@@ -40,25 +43,8 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
   useEffect(() => {
     if (typeof window === 'undefined' || !isMounted) return;
     
-    try {
-      const todosToSave = JSON.stringify(todos);
-      localStorage.setItem('brain-web-todos', todosToSave);
-      console.log('[TodoList] Saved todos to localStorage:', todos.length, 'items');
-    } catch (e) {
-      console.error('Failed to save todos:', e);
-      // If storage is full, try to clear old data
-      if (e instanceof DOMException && e.code === 22) {
-        console.warn('[TodoList] Storage quota exceeded, clearing old todos');
-        try {
-          // Keep only last 50 todos
-          const trimmed = todos.slice(-50);
-          localStorage.setItem('brain-web-todos', JSON.stringify(trimmed));
-          setTodos(trimmed);
-        } catch (clearErr) {
-          console.error('[TodoList] Failed to clear old todos:', clearErr);
-        }
-      }
-    }
+    // Use optimized storage with debouncing
+    optimizedStorage.setItem('brain-web-todos', todos, 300);
   }, [todos, isMounted]);
 
   const addTodo = () => {
@@ -71,15 +57,8 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
       const newTodos = [...todos, todo];
       setTodos(newTodos);
       setNewTodo('');
-      // Force immediate save
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
-          console.log('[TodoList] Immediately saved new todo');
-        } catch (e) {
-          console.error('[TodoList] Failed to immediately save todo:', e);
-        }
-      }
+      // Immediate save for user feedback
+      optimizedStorage.setItem('brain-web-todos', newTodos, 0);
     }
   };
 
@@ -88,27 +67,13 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
       todo.id === id ? { ...todo, completed: !todo.completed } : todo
     );
     setTodos(newTodos);
-    // Force immediate save
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
-      } catch (e) {
-        console.error('[TodoList] Failed to save toggle:', e);
-      }
-    }
+    optimizedStorage.setItem('brain-web-todos', newTodos, 0);
   };
 
   const deleteTodo = (id: string) => {
     const newTodos = todos.filter(todo => todo.id !== id);
     setTodos(newTodos);
-    // Force immediate save
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
-      } catch (e) {
-        console.error('[TodoList] Failed to save delete:', e);
-      }
-    }
+    optimizedStorage.setItem('brain-web-todos', newTodos, 0);
   };
 
   const startEdit = (id: string, text: string) => {
@@ -122,14 +87,7 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
         todo.id === id ? { ...todo, text: editText.trim() } : todo
       );
       setTodos(newTodos);
-      // Force immediate save
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.setItem('brain-web-todos', JSON.stringify(newTodos));
-        } catch (e) {
-          console.error('[TodoList] Failed to save edit:', e);
-        }
-      }
+      optimizedStorage.setItem('brain-web-todos', newTodos, 0);
     }
     setEditingId(null);
     setEditText('');
@@ -141,7 +99,7 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
       {/* Header */}
       <div style={{
         padding: '16px',
@@ -149,8 +107,9 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        flexShrink: 0,
       }}>
-        <h2 style={{ fontSize: '16px', fontWeight: '600', margin: 0 }}>Todo</h2>
+        <h2 style={{ fontSize: 'clamp(15px, 2vw, 17px)', fontWeight: '600', margin: 0 }}>Todo</h2>
         {onToggleCollapse && (
           <button
             onClick={onToggleCollapse}
@@ -190,7 +149,7 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
               padding: '8px 12px',
               border: '1px solid var(--border)',
               borderRadius: '6px',
-              fontSize: '13px',
+              fontSize: 'clamp(13px, 1.8vw, 14px)',
               background: 'var(--surface)',
               color: 'var(--ink)',
               outline: 'none',
@@ -215,7 +174,16 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
 
         {/* Todo Items */}
         {todos.length === 0 ? (
-          <div style={{ color: 'var(--muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>
+          <div style={{ 
+            color: 'var(--muted)', 
+            fontSize: 'clamp(13px, 1.8vw, 14px)', 
+            textAlign: 'center', 
+            padding: '20px',
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
             No tasks yet. Add one above!
           </div>
         ) : (
@@ -304,10 +272,10 @@ function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
                       onClick={() => startEdit(todo.id, todo.text)}
                       style={{
                         flex: 1,
-                        fontSize: '13px',
-                        color: 'var(--ink)',
-                        textDecoration: todo.completed ? 'line-through' : 'none',
-                        cursor: 'pointer',
+                      fontSize: 'clamp(13px, 1.8vw, 14px)',
+                      color: 'var(--ink)',
+                      textDecoration: todo.completed ? 'line-through' : 'none',
+                      cursor: 'pointer',
                       }}
                     >
                       {todo.text}
@@ -354,6 +322,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const router = useRouter();
   const pathname = usePathname();
   const { isMobileSidebarOpen, setIsMobileSidebarOpen } = useSidebar();
+  const { navigateWithOptimization } = useOptimizedNavigation();
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -361,6 +330,21 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const [isMobile, setIsMobile] = useState(false);
   const [activeGraphId, setActiveGraphId] = useState<string>('');
   const [graphs, setGraphs] = useState<GraphSummary[]>([]);
+  
+  // Add navigation shortcuts
+  useNavigationShortcuts(activeGraphId);
+  
+  // Enhanced navigation with chat state management
+  const enhancedNav = useEnhancedNavigation({
+    resetChatState: clearChatStateIfAvailable,
+    closeMobileSidebar: () => setIsMobileSidebarOpen(false),
+    activeGraphId
+  });
+  
+  // Register mobile sidebar close function for global access
+  useEffect(() => {
+    registerMobileSidebarCloseFunction(() => setIsMobileSidebarOpen(false));
+  }, [setIsMobileSidebarOpen]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -409,20 +393,24 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     return () => clearInterval(interval);
   }, []);
 
-  const navigateToExplorer = (params?: { conceptId?: string; graphId?: string; chat?: string }) => {
-    const queryParams = new URLSearchParams();
-    if (params?.conceptId) {
-      queryParams.set('select', params.conceptId);
-    }
-    if (params?.graphId) {
-      queryParams.set('graph_id', params.graphId);
-    }
-    if (params?.chat) {
-      queryParams.set('chat', params.chat);
-    }
-    const queryString = queryParams.toString();
-    router.push(`/${queryString ? `?${queryString}` : ''}`);
-  };
+  const navigateToExplorer = useCallback(async (params?: { conceptId?: string; graphId?: string; chat?: string }) => {
+    const url = quickNav.toExplorer(params?.graphId, params?.conceptId, params?.chat);
+    
+    await navigateWithOptimization(url, {
+      prefetch: async () => {
+        // Prefetch relevant data based on parameters
+        if (params?.graphId) {
+          await routePrefetchers.explorer(params.graphId);
+        }
+        if (params?.chat) {
+          await routePrefetchers.chat(params.chat);
+        }
+        if (params?.conceptId && params?.graphId) {
+          await routePrefetchers.concept(params.conceptId, params.graphId);
+        }
+      }
+    });
+  }, [navigateWithOptimization]);
 
   const handleMostRecentGraph = () => {
     const mostRecentSession = recentSessions[0];
@@ -445,14 +433,14 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     });
   };
 
-  const handleLoadChatSession = (chatSession: ChatSession) => {
+  const handleLoadChatSession = useCallback(async (chatSession: ChatSession) => {
     // Set as current session and navigate to explorer with chat
     setCurrentSessionId(chatSession.id);
-    navigateToExplorer({
+    await navigateToExplorer({
       graphId: chatSession.graphId,
       chat: chatSession.id, // Pass session ID to load it
     });
-  };
+  }, [navigateToExplorer]);
 
   const formatChatSessionTime = (timestamp: number): string => {
     const date = new Date(timestamp);
@@ -608,115 +596,59 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
               Quick Links
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <Link
-                href="/home"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/home' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/home' ? 'var(--surface)' : 'transparent',
-                }}
+              <div
+                onClick={enhancedNav.navigateToHome}
+                className={`nav-link ${pathname === '/home' ? 'active' : ''}`}
+                style={{ cursor: 'pointer' }}
               >
                 Home
-              </Link>
+              </div>
               <Link
                 href={`/?graph_id=${activeGraphId || 'default'}`}
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/' ? 'active' : ''}`}
               >
                 Explorer
               </Link>
               <Link
                 href="/gaps"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/gaps' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/gaps' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/gaps' ? 'active' : ''}`}
               >
                 Gaps
               </Link>
               <Link
                 href="/review"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/review' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/review' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/review' ? 'active' : ''}`}
               >
                 Review
               </Link>
               <Link
                 href="/digest"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/digest' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/digest' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/digest' ? 'active' : ''}`}
               >
                 Digest
               </Link>
               <Link
                 href="/saved"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/saved' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/saved' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/saved' ? 'active' : ''}`}
               >
                 Saved
               </Link>
               <Link
                 href="/source-management"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/source-management' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/source-management' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/source-management' ? 'active' : ''}`}
               >
                 Source Management
               </Link>
               <Link
                 href="/profile-customization"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  color: pathname === '/profile-customization' ? 'var(--accent)' : 'var(--ink)',
-                  fontSize: '14px',
-                  textDecoration: 'none',
-                  background: pathname === '/profile-customization' ? 'var(--surface)' : 'transparent',
-                }}
+                className={`nav-link ${pathname === '/profile-customization' ? 'active' : ''}`}
               >
                 Profile Customization
               </Link>
@@ -833,7 +765,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       borderRight: '1px solid var(--border)',
       display: 'flex',
       flexDirection: 'column',
-      height: '100%',
+      height: '100vh',
       overflowY: 'auto',
       flexShrink: 0,
     }}>
@@ -841,99 +773,68 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       <TodoList onToggleCollapse={onToggleCollapse} />
 
       {/* Quick Links Section */}
-      <div style={{ padding: '16px', borderTop: '1px solid var(--border)' }}>
-        <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+      <div style={{ 
+        padding: '16px', 
+        borderTop: '1px solid var(--border)',
+        flexShrink: 0,
+      }}>
+        <div style={{ 
+          fontSize: 'clamp(12px, 1.6vw, 13px)', 
+          fontWeight: '600', 
+          color: 'var(--muted)', 
+          marginBottom: '8px', 
+          textTransform: 'uppercase', 
+          letterSpacing: '0.5px' 
+        }}>
           Quick Links
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <Link
-            href="/home"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/home' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/home' ? 'var(--surface)' : 'transparent',
-            }}
+        <div className="nav-section-content">
+          <div
+            onClick={enhancedNav.navigateToHome}
+            className={`nav-link ${pathname === '/home' ? 'active' : ''}`}
+            style={{ cursor: 'pointer' }}
           >
             Home
-          </Link>
+          </div>
           <Link
             href="/"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/' ? 'var(--surface)' : 'transparent',
-            }}
+            className={`nav-link ${pathname === '/' ? 'active' : ''}`}
           >
             Explorer
           </Link>
           <Link
             href="/gaps"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/gaps' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/gaps' ? 'var(--surface)' : 'transparent',
-            }}
+            className={`nav-link ${pathname === '/gaps' ? 'active' : ''}`}
           >
             Gaps
           </Link>
           <Link
             href="/review"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/review' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/review' ? 'var(--surface)' : 'transparent',
-            }}
+            className={`nav-link ${pathname === '/review' ? 'active' : ''}`}
           >
             Review
           </Link>
           <Link
+            href="/ingest"
+            className={`nav-link ${pathname === '/ingest' ? 'active' : ''}`}
+          >
+            Upload PDF
+          </Link>
+          <Link
             href="/source-management"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/source-management' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/source-management' ? 'var(--surface)' : 'transparent',
-            }}
+            className={`nav-link ${pathname === '/source-management' ? 'active' : ''}`}
           >
             Source Management
           </Link>
           <Link
             href="/profile-customization"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/profile-customization' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/profile-customization' ? 'var(--surface)' : 'transparent',
-            }}
+            className={`nav-link ${pathname === '/profile-customization' ? 'active' : ''}`}
           >
             Profile Customization
           </Link>
           <Link
             href="/control-panel"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              color: pathname === '/control-panel' ? 'var(--accent)' : 'var(--ink)',
-              fontSize: '14px',
-              textDecoration: 'none',
-              background: pathname === '/control-panel' ? 'var(--surface)' : 'transparent',
-            }}
+            className={`nav-link ${pathname === '/control-panel' ? 'active' : ''}`}
           >
             Workspace Library
           </Link>

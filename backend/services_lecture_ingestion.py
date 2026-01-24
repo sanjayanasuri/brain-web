@@ -5,7 +5,7 @@ Do not call backend endpoints from backend services. Use ingestion kernel/intern
 """
 import json
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from uuid import uuid4
 from neo4j import Session
 from openai import OpenAI
@@ -72,6 +72,47 @@ else:
 def normalize_name(name: str) -> str:
     """Normalize concept name for comparison (lowercase, strip whitespace)"""
     return name.strip().lower()
+
+
+def _determine_extraction_type(node_type: str, name: str) -> str:
+    """
+    Determine extraction type (concept, name, date) based on node type and name.
+    
+    Args:
+        node_type: The type field from the extracted node
+        name: The name of the extracted node
+        
+    Returns:
+        'concept', 'name', or 'date'
+    """
+    node_type_lower = node_type.lower() if node_type else ""
+    name_lower = name.lower() if name else ""
+    
+    # Check for date patterns
+    date_patterns = [
+        r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b',  # MM/DD/YYYY or MM-DD-YYYY
+        r'\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b',    # YYYY/MM/DD or YYYY-MM-DD
+        r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b',
+        r'\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december),?\s+\d{4}\b',
+    ]
+    
+    for pattern in date_patterns:
+        if re.search(pattern, name_lower):
+            return "date"
+    
+    # Check node type for person/name indicators
+    if node_type_lower in ["person", "name", "people", "individual", "author", "researcher"]:
+        return "name"
+    
+    # Check if name looks like a person name (two capitalized words)
+    if re.match(r'^[A-Z][a-z]+\s+[A-Z][a-z]+', name):
+        # Could be a person name, but also could be a concept
+        # Only classify as name if node type suggests it
+        if node_type_lower in ["person", "name", "people"]:
+            return "name"
+    
+    # Default to concept
+    return "concept"
 
 
 def chunk_text(text: str, max_chars: int = 1200, overlap: int = 150) -> List[Dict[str, Any]]:
@@ -577,6 +618,7 @@ def run_lecture_extraction_engine(
     domain: Optional[str],
     run_id: str,
     lecture_id: str,
+    event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """
     Extract concepts and relationships from lecture text using LLM.
@@ -588,6 +630,7 @@ def run_lecture_extraction_engine(
         domain: Optional domain hint
         run_id: Ingestion run ID
         lecture_id: Lecture ID
+        event_callback: Optional callback function(event_type, event_data) for real-time events
     
     Returns:
         Dict with nodes_created, nodes_updated, links_created, node_name_to_id,
@@ -694,6 +737,19 @@ def run_lecture_extraction_engine(
             nodes_updated.append(updated)
             concepts_updated += 1
             node_name_to_id[normalized_name] = updated.node_id
+            
+            # Emit extraction event
+            if event_callback:
+                node_type = extracted_node.type or "concept"
+                # Determine extraction type based on node type
+                extraction_type = _determine_extraction_type(node_type, extracted_node.name)
+                event_callback("extraction", {
+                    "type": extraction_type,
+                    "name": extracted_node.name,
+                    "node_type": node_type,
+                    "action": "updated",
+                    "description": extracted_node.description,
+                })
         else:
             # Create new node
             print(f"[Lecture Ingestion] Creating new node: {extracted_node.name}")
@@ -715,6 +771,19 @@ def run_lecture_extraction_engine(
             nodes_created.append(new_concept)
             concepts_created += 1
             node_name_to_id[normalized_name] = new_concept.node_id
+            
+            # Emit extraction event
+            if event_callback:
+                node_type = extracted_node.type or "concept"
+                # Determine extraction type based on node type
+                extraction_type = _determine_extraction_type(node_type, extracted_node.name)
+                event_callback("extraction", {
+                    "type": extraction_type,
+                    "name": extracted_node.name,
+                    "node_type": node_type,
+                    "action": "created",
+                    "description": extracted_node.description,
+                })
     
     # Step 3: Create relationships
     links_created = []
@@ -799,6 +868,7 @@ def run_chunk_and_claims_engine(
     run_id: str,
     known_concepts: List[Concept],
     include_existing_concepts: bool = True,
+    pdf_chunks: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Chunk text and extract claims from chunks.
@@ -812,6 +882,7 @@ def run_chunk_and_claims_engine(
         run_id: Ingestion run ID
         known_concepts: List of Concept objects from current ingestion
         include_existing_concepts: Whether to include existing concepts in mention resolution
+        pdf_chunks: Optional pre-chunked PDF data with page references
     
     Returns:
         Dict with chunks_created, claims_created, chunk_ids, claim_ids, errors
@@ -826,9 +897,23 @@ def run_chunk_and_claims_engine(
     ensure_graph_scoping_initialized(session)
     graph_id, branch_id = get_active_graph_context(session)
     
-    # Chunk the text
-    chunks = chunk_text(text, max_chars=1200, overlap=150)
-    print(f"[Lecture Ingestion] Created {len(chunks)} chunks")
+    # Use PDF chunks if provided, otherwise chunk the text normally
+    if pdf_chunks:
+        # Convert PDF chunks to standard format
+        chunks = [
+            {
+                "text": chunk["text"],
+                "index": chunk["chunk_index"],
+                "page_numbers": chunk.get("page_numbers", []),
+                "page_range": chunk.get("page_range"),
+            }
+            for chunk in pdf_chunks
+        ]
+        print(f"[Lecture Ingestion] Using PDF chunks with page references: {len(chunks)} chunks")
+    else:
+        # Standard chunking
+        chunks = chunk_text(text, max_chars=1200, overlap=150)
+        print(f"[Lecture Ingestion] Created {len(chunks)} chunks")
     
     # Build concept lookup map for claim extraction
     known_concepts_dict = [
@@ -846,12 +931,18 @@ def run_chunk_and_claims_engine(
     for chunk in chunks:
         chunk_id = f"CHUNK_{uuid4().hex[:8].upper()}"
         
-        # Create SourceChunk
+        # Create SourceChunk with PDF page references if available
         metadata = {
             "lecture_id": source_id,
             "lecture_title": source_label,
             "domain": domain,
         }
+        # Add PDF page references if available
+        if "page_numbers" in chunk:
+            metadata["page_numbers"] = chunk["page_numbers"]
+        if "page_range" in chunk:
+            metadata["page_range"] = chunk["page_range"]
+        
         try:
             upsert_source_chunk(
                 session=session,
@@ -1223,6 +1314,22 @@ def ingest_lecture(
         nodes_created=nodes_created,
         nodes_updated=nodes_updated,
     )
+
+    # Mirror lecture sections into Postgres for lecture linking.
+    try:
+        from services_lecture_links import upsert_lecture_document, upsert_lecture_sections
+        upsert_lecture_document(lecture_id, lecture_title, None)
+        sections_payload = []
+        for seg in segments_models:
+            sections_payload.append({
+                "id": seg.segment_id,
+                "section_index": seg.segment_index,
+                "title": seg.summary,
+                "raw_text": seg.text,
+            })
+        upsert_lecture_sections(lecture_id, sections_payload)
+    except Exception as e:
+        print(f"[Lecture Ingestion] Lecture sections sync skipped: {e}")
     
     # Step 5: Update ingestion run status
     extraction = extraction_result["extraction"]

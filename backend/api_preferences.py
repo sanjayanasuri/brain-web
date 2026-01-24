@@ -14,7 +14,9 @@ from models import (
     ResponseStyleProfileWrapper,
     FocusArea,
     UserProfile,
-    UIPreferences
+    UIPreferences,
+    ConversationSummary,
+    LearningTopic
 )
 from db_neo4j import get_neo4j_session
 from services_graph import (
@@ -26,7 +28,11 @@ from services_graph import (
     get_user_profile,
     update_user_profile,
     get_ui_preferences,
-    update_ui_preferences
+    update_ui_preferences,
+    store_conversation_summary,
+    get_recent_conversation_summaries,
+    upsert_learning_topic,
+    get_active_learning_topics
 )
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
@@ -106,3 +112,35 @@ def set_ui_prefs(prefs: UIPreferences, session=Depends(get_neo4j_session)):
     Update UI preferences (lens system, etc.).
     """
     return update_ui_preferences(session, prefs)
+
+
+@router.post("/conversation-summaries", response_model=ConversationSummary)
+def store_summary(summary: ConversationSummary, session=Depends(get_neo4j_session)):
+    """
+    Store a conversation summary for long-term memory.
+    """
+    return store_conversation_summary(session, summary)
+
+
+@router.get("/conversation-summaries", response_model=List[ConversationSummary])
+def get_summaries(limit: int = 10, session=Depends(get_neo4j_session)):
+    """
+    Get recent conversation summaries for context.
+    """
+    return get_recent_conversation_summaries(session, limit)
+
+
+@router.post("/learning-topics", response_model=LearningTopic)
+def upsert_topic(topic: LearningTopic, session=Depends(get_neo4j_session)):
+    """
+    Create or update a learning topic.
+    """
+    return upsert_learning_topic(session, topic)
+
+
+@router.get("/learning-topics", response_model=List[LearningTopic])
+def get_topics(limit: int = 20, session=Depends(get_neo4j_session)):
+    """
+    Get active learning topics (recently mentioned).
+    """
+    return get_active_learning_topics(session, limit)

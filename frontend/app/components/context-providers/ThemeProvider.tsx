@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 
 type Theme = 'light' | 'dark';
 
@@ -12,25 +12,40 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
+  // Always start with 'light' to match server-side rendering
+  // This prevents hydration mismatches
   const [theme, setTheme] = useState<Theme>('light');
   const [mounted, setMounted] = useState(false);
+  const hasInitialized = useRef(false);
 
+  // After hydration, read from localStorage and apply
   useEffect(() => {
     setMounted(true);
-    // Check localStorage for saved theme preference
     const savedTheme = localStorage.getItem('brain-web-theme') as Theme | null;
     if (savedTheme === 'dark' || savedTheme === 'light') {
       setTheme(savedTheme);
-      document.documentElement.classList.toggle('dark', savedTheme === 'dark');
+      // Apply immediately
+      if (savedTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      hasInitialized.current = true;
     } else {
-      // Default to light mode
+      // No saved theme, use default 'light'
       document.documentElement.classList.remove('dark');
+      hasInitialized.current = true;
     }
   }, []);
 
+  // Apply theme to document when theme changes (after initial mount)
   useEffect(() => {
-    if (mounted) {
-      document.documentElement.classList.toggle('dark', theme === 'dark');
+    if (hasInitialized.current && mounted) {
+      if (theme === 'dark') {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
       localStorage.setItem('brain-web-theme', theme);
     }
   }, [theme, mounted]);

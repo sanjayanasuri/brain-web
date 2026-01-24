@@ -22,6 +22,136 @@ describe('/api/brain-web/chat route', () => {
     }]
   };
 
+  const styleFeedbackData: Array<Record<string, unknown>> = [];
+  const mockUserProfileData = {
+    name: 'Test user',
+    background: ['Computer Science'],
+    interests: ['AI'],
+    weak_spots: ['GraphRAG'],
+    learning_preferences: {},
+  };
+  const summariesData: Array<Record<string, unknown>> = [];
+  const topicsData: Array<{ name: string }> = [];
+
+  const createOpenAIChoicesResponse = (content: string) => ({
+    ok: true,
+    json: async () => ({
+      choices: [{
+        message: {
+          content,
+        },
+      }],
+    }),
+  });
+
+  const mockGraphRagFetchSequence = (mockRetrievalResponse: unknown) => {
+    const fetchMock = global.fetch as jest.MockedFunction<typeof fetch>;
+    fetchMock.mockImplementation(async (input: RequestInfo, init?: RequestInit) => {
+      const requestUrl = typeof input === 'string' ? input : input.url;
+      const requestBody = typeof init?.body === 'string' ? init.body : '';
+
+      if (requestUrl.includes('https://api.openai.com/v1/chat/completions')) {
+        if (requestBody.includes('You are a query router')) {
+          return createOpenAIChoicesResponse(JSON.stringify({
+            complexity: 'medium',
+            needsRetrieval: true,
+            intent: 'question',
+            estimatedProcessingTime: 1000,
+          }));
+        }
+
+        if (requestBody.includes('You are a question analyzer')) {
+          return createOpenAIChoicesResponse(JSON.stringify({
+            needs_web_search: false,
+            reason: 'not needed',
+          }));
+        }
+
+        if (requestBody.includes('You are a context importance scorer')) {
+          return createOpenAIChoicesResponse(JSON.stringify({
+            scores: [{
+              index: 0,
+              score: 0.5,
+              reasoning: 'default score',
+            }],
+          }));
+        }
+
+        if (requestBody.includes('You are Brain Web, a teaching assistant')) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => mockOpenAIResponse,
+            text: async () => JSON.stringify(mockOpenAIResponse),
+          };
+        }
+
+        return createOpenAIChoicesResponse(JSON.stringify({
+          scores: [],
+        }));
+      }
+
+      if (requestUrl.includes('/ai/retrieve')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => mockRetrievalResponse,
+          text: async () => JSON.stringify(mockRetrievalResponse),
+        };
+      }
+
+      if (requestUrl.includes('/feedback/style/examples')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => styleFeedbackData,
+          text: async () => JSON.stringify(styleFeedbackData),
+        };
+      }
+
+      if (requestUrl.includes('/preferences/user-profile')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => mockUserProfileData,
+          text: async () => JSON.stringify(mockUserProfileData),
+        };
+      }
+
+      if (requestUrl.includes('/preferences/conversation-summaries')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => summariesData,
+          text: async () => JSON.stringify(summariesData),
+        };
+      }
+
+      if (requestUrl.includes('/preferences/learning-topics')) {
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => topicsData,
+          text: async () => JSON.stringify(topicsData),
+        };
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({}),
+        text: async () => '{}',
+      };
+    });
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
     // Mock OpenAI API key
@@ -64,15 +194,7 @@ describe('/api/brain-web/chat route', () => {
         plan_version: 'intent_plans_v1'
       };
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockRetrievalResponse
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockOpenAIResponse
-        });
+      mockGraphRagFetchSequence(mockRetrievalResponse);
 
       const request = new NextRequest('http://localhost/api/brain-web/chat', {
         method: 'POST',
@@ -123,15 +245,7 @@ describe('/api/brain-web/chat route', () => {
         plan_version: 'intent_plans_v1'
       };
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockRetrievalResponse
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockOpenAIResponse
-        });
+      mockGraphRagFetchSequence(mockRetrievalResponse);
 
       const request = new NextRequest('http://localhost/api/brain-web/chat', {
         method: 'POST',
@@ -188,15 +302,7 @@ describe('/api/brain-web/chat route', () => {
         plan_version: 'intent_plans_v1'
       };
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockRetrievalResponse
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockOpenAIResponse
-        });
+      mockGraphRagFetchSequence(mockRetrievalResponse);
 
       const request = new NextRequest('http://localhost/api/brain-web/chat', {
         method: 'POST',
@@ -241,15 +347,7 @@ describe('/api/brain-web/chat route', () => {
         plan_version: 'intent_plans_v1'
       };
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockRetrievalResponse
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockOpenAIResponse
-        });
+      mockGraphRagFetchSequence(mockRetrievalResponse);
 
       const request = new NextRequest('http://localhost/api/brain-web/chat', {
         method: 'POST',
@@ -293,15 +391,7 @@ describe('/api/brain-web/chat route', () => {
         plan_version: 'intent_plans_v1'
       };
 
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockRetrievalResponse
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => mockOpenAIResponse
-        });
+      mockGraphRagFetchSequence(mockRetrievalResponse);
 
       const request = new NextRequest('http://localhost/api/brain-web/chat', {
         method: 'POST',
@@ -321,4 +411,3 @@ describe('/api/brain-web/chat route', () => {
     });
   });
 });
-

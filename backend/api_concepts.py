@@ -19,7 +19,9 @@ It allows graph queries to be made. Finding Neighbors, searching for nodes, dete
 
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any
+from datetime import datetime
+from pydantic import BaseModel
 
 # Every time a client hits an API endpoint, FastAPI opens a fresh connection to Neo4j. It runs the query. Then, closes the connection.
 # This avoids sharing one long-lived session across requests. Futhermore, it prevents race conditions. 
@@ -73,9 +75,23 @@ from services_graph import (
 )
 from services_lecture_mentions import list_concept_mentions
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
+from auth import require_auth
 
 # Create FastAPI router - all endpoints will be under /concepts
 router = APIRouter(prefix="/concepts", tags=["concepts"])
+
+
+class ConceptNoteEntry(BaseModel):
+    """Response model for notes entries linked to a concept."""
+    id: str
+    chat_id: str
+    section_id: str
+    section_title: str
+    summary_text: str
+    source_type: str
+    confidence_level: float
+    created_at: datetime
+    related_node_ids: List[str]
 
 
 # ============================================================================
@@ -330,6 +346,84 @@ def list_concept_mentions_endpoint(node_id: str, session=Depends(get_neo4j_sessi
     List all lecture mentions that link to this concept.
     """
     return list_concept_mentions(session, node_id)
+
+
+@router.get("/{node_id}/notes", response_model=List[ConceptNoteEntry])
+def get_concept_notes(
+    node_id: str,
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of notes to return"),
+    offset: int = Query(0, ge=0, description="Number of notes to skip"),
+    session=Depends(get_neo4j_session),
+    auth: Dict[str, Any] = Depends(require_auth),
+):
+    """
+    Get notes entries linked to a concept node.
+    
+    PURPOSE:
+    Returns all notes entries that have been linked to this concept via the
+    related_node_ids array field. This shows learning notes that mention or
+    relate to the concept.
+    
+    HOW IT WORKS:
+    - Validates the concept exists in Neo4j (404 if not found)
+    - Queries Postgres notes_entries table using GIN index on related_node_ids
+    - Joins with notes_sections to get section titles
+    - Returns most recent entries first
+    
+    HOW IT'S USED:
+    - Concept detail pages can show related learning notes
+    - Users can see what they've learned about a concept
+    - Context panel can display notes alongside concept info
+    
+    EXAMPLE:
+    GET /concepts/N00123456/notes?limit=10&offset=0
+    Returns: List of notes entries linked to concept N00123456
+    
+    PERFORMANCE:
+    Uses GIN index on related_node_ids for efficient array membership queries.
+    """
+    from services_notes_digest import _get_pool
+    from psycopg2.extras import RealDictCursor
+    
+    # Validate concept exists
+    concept = get_concept_by_id(session, node_id)
+    if not concept:
+        raise HTTPException(status_code=404, detail="Concept not found")
+    
+    # Query Postgres for linked notes entries
+    try:
+        pool = _get_pool()
+        conn = pool.getconn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT
+                        e.id,
+                        e.chat_id,
+                        e.section_id,
+                        s.title AS section_title,
+                        e.summary_text,
+                        e.source_type,
+                        e.confidence_level,
+                        e.created_at,
+                        e.related_node_ids
+                    FROM notes_entries e
+                    JOIN notes_sections s ON s.id = e.section_id
+                    WHERE %(node_id)s = ANY(e.related_node_ids)
+                    ORDER BY e.created_at DESC
+                    LIMIT %(limit)s OFFSET %(offset)s
+                """, {
+                    "node_id": node_id,
+                    "limit": limit,
+                    "offset": offset
+                })
+                
+                rows = cur.fetchall()
+                return [ConceptNoteEntry(**dict(row)) for row in rows]
+        finally:
+            pool.putconn(conn)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch notes: {str(e)}")
 
 
 @router.get("/{node_id}", response_model=Concept)

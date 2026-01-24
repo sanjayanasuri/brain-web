@@ -85,6 +85,8 @@ class SQLiteEventStore(EventStore):
                     return
             
             # Insert event
+            # Handle both enum and string event_type (due to use_enum_values=True in Pydantic config)
+            event_type_str = event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type)
             conn.execute("""
                 INSERT OR IGNORE INTO events (
                     event_id, event_type, session_id, actor_id, occurred_at,
@@ -93,7 +95,7 @@ class SQLiteEventStore(EventStore):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 event.event_id,
-                event.event_type.value,
+                event_type_str,
                 event.session_id,
                 event.actor_id,
                 event.occurred_at.isoformat(),

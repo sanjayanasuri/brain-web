@@ -26,12 +26,31 @@ export async function GET(request: NextRequest) {
     backendUrl.searchParams.set('limit_concepts', limit_concepts);
     backendUrl.searchParams.set('limit_trails', limit_trails);
 
-    const response = await fetch(backendUrl.toString(), {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    // Add timeout to prevent hanging requests (increased for bootstrap which loads large datasets)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout for bootstrap
+
+    let response;
+    try {
+      response = await fetch(backendUrl.toString(), {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError' || fetchError.code === 'UND_ERR_HEADERS_TIMEOUT') {
+        console.error('[Offline Bootstrap API] Request timeout:', backendUrl.toString());
+        return NextResponse.json(
+          { error: 'Backend request timed out. Please check if the backend is running.' },
+          { status: 504 }
+        );
+      }
+      throw fetchError;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from neo4j import Session
+
+logger = logging.getLogger("brain_web")
 
 
 DEFAULT_GRAPH_ID = "default"
@@ -127,6 +130,44 @@ def ensure_schema_constraints(session: Session) -> None:
                 "CREATE CONSTRAINT chunk_graph_chunk_id_node_key IF NOT EXISTS "
                 "FOR (s:SourceChunk) REQUIRE (s.graph_id, s.chunk_id) IS NODE KEY"
             ).consume()
+
+        # Create indexes for performance (bootstrap queries)
+        # Check existing indexes first
+        try:
+            existing_indexes = session.run("SHOW INDEXES").data()
+            index_names = [idx.get("name", "") for idx in existing_indexes]
+            
+            # Index on Artifact.captured_at for sorting (composite with graph_id)
+            if "artifact_captured_at_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX artifact_captured_at_index IF NOT EXISTS "
+                        "FOR (a:Artifact) ON (a.graph_id, a.captured_at)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create artifact_captured_at_index: {e}")
+
+            # Index on Concept.updated_at for sorting
+            if "concept_updated_at_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX concept_updated_at_index IF NOT EXISTS "
+                        "FOR (c:Concept) ON (c.graph_id, c.updated_at)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create concept_updated_at_index: {e}")
+
+            # Index on Concept.created_at for sorting
+            if "concept_created_at_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX concept_created_at_index IF NOT EXISTS "
+                        "FOR (c:Concept) ON (c.graph_id, c.created_at)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create concept_created_at_index: {e}")
+        except Exception as e:
+            logger.warning(f"Could not check/create indexes: {e}")
 
         if not _has("SourceDocument", ["graph_id", "doc_id"], "NODE_KEY"):
             session.run(

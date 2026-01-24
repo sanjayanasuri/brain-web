@@ -14,7 +14,9 @@ import {
   type Analogy,
   getTeachingStyle,
   type TeachingStyleProfile,
+  type PDFIngestResponse,
 } from '../api-client';
+import PDFViewer from '../components/pdf/PDFViewer';
 
 export default function LectureStudioPage() {
   return (
@@ -104,6 +106,9 @@ function LectureStudioPageInner() {
   const [ingestText, setIngestText] = useState('');
   const [ingestDomain, setIngestDomain] = useState('');
   const [ingesting, setIngesting] = useState(false);
+  const [ingestMode, setIngestMode] = useState<'text' | 'pdf'>('text');
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [showPdfViewer, setShowPdfViewer] = useState(false);
   
   // Landing page state (when no lectureId)
   const [allLectures, setAllLectures] = useState<Lecture[]>([]);
@@ -211,6 +216,48 @@ function LectureStudioPageInner() {
       alert('Failed to ingest lecture. Please try again.');
     } finally {
       setIngesting(false);
+    }
+  };
+
+  const handlePdfFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type === 'application/pdf') {
+      setPdfFile(file);
+      setShowPdfViewer(true);
+      setShowIngestModal(false);
+    } else {
+      alert('Please select a PDF file');
+    }
+  };
+
+  const handlePdfIngestionComplete = (result: PDFIngestResponse) => {
+    setShowPdfViewer(false);
+    setPdfFile(null);
+    // Reload lectures if on landing page, or reload current lecture if viewing one
+    if (lectureId) {
+      const loadData = async () => {
+        try {
+          const [lectureData, segmentsData] = await Promise.all([
+            getLecture(lectureId),
+            getLectureSegments(lectureId),
+          ]);
+          setLecture(lectureData);
+          setSegments(segmentsData);
+        } catch (err) {
+          console.error('Failed to reload lecture:', err);
+        }
+      };
+      loadData();
+    } else {
+      const loadAllLectures = async () => {
+        try {
+          const lectures = await listLectures();
+          setAllLectures(lectures);
+        } catch (err) {
+          console.error('Failed to reload lectures:', err);
+        }
+      };
+      loadAllLectures();
     }
   };
 
@@ -328,6 +375,51 @@ function LectureStudioPageInner() {
         <Link href="/lecture-studio" style={{ marginTop: '20px', display: 'inline-block', color: 'var(--accent)' }}>
           ← Back to Lectures
         </Link>
+      </div>
+    );
+  }
+
+  // Show PDF Viewer if PDF is selected
+  if (showPdfViewer && pdfFile) {
+    return (
+      <div style={{ 
+        minHeight: '100vh', 
+        background: 'var(--page-bg)',
+        padding: '20px',
+      }}>
+        <div style={{ marginBottom: '16px' }}>
+          <button
+            onClick={() => {
+              setShowPdfViewer(false);
+              setPdfFile(null);
+            }}
+            style={{
+              padding: '8px 16px',
+              background: 'transparent',
+              color: 'var(--accent)',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              fontSize: '14px',
+              cursor: 'pointer',
+            }}
+          >
+            ← Back to Lecture Studio
+          </button>
+        </div>
+        <PDFViewer
+          file={pdfFile}
+          domain={ingestDomain || undefined}
+          useOcr={false}
+          extractTables={true}
+          extractConcepts={true}
+          extractClaims={true}
+          onComplete={handlePdfIngestionComplete}
+          onError={(err) => {
+            alert(`PDF ingestion error: ${err.message}`);
+            setShowPdfViewer(false);
+            setPdfFile(null);
+          }}
+        />
       </div>
     );
   }
@@ -790,6 +882,117 @@ function LectureStudioPageInner() {
             <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 20px 0' }}>
               Add Lecture Content
             </h2>
+            
+            {/* Mode Tabs */}
+            <div style={{ 
+              display: 'flex', 
+              gap: '8px', 
+              marginBottom: '20px',
+              borderBottom: '1px solid var(--border)',
+            }}>
+              <button
+                onClick={() => setIngestMode('text')}
+                style={{
+                  padding: '8px 16px',
+                  background: ingestMode === 'text' ? 'var(--accent)' : 'transparent',
+                  color: ingestMode === 'text' ? 'white' : 'var(--muted)',
+                  border: 'none',
+                  borderBottom: ingestMode === 'text' ? '2px solid var(--accent)' : '2px solid transparent',
+                  borderRadius: '0',
+                  fontSize: '14px',
+                  fontWeight: ingestMode === 'text' ? '600' : '400',
+                  cursor: 'pointer',
+                }}
+              >
+                Text Input
+              </button>
+              <button
+                onClick={() => setIngestMode('pdf')}
+                style={{
+                  padding: '8px 16px',
+                  background: ingestMode === 'pdf' ? 'var(--accent)' : 'transparent',
+                  color: ingestMode === 'pdf' ? 'white' : 'var(--muted)',
+                  border: 'none',
+                  borderBottom: ingestMode === 'pdf' ? '2px solid var(--accent)' : '2px solid transparent',
+                  borderRadius: '0',
+                  fontSize: '14px',
+                  fontWeight: ingestMode === 'pdf' ? '600' : '400',
+                  cursor: 'pointer',
+                }}
+              >
+                PDF Upload
+              </button>
+            </div>
+
+            {ingestMode === 'pdf' ? (
+              <div>
+                <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
+                  Upload a PDF file to extract concepts, relationships, and create a knowledge graph. You'll be able to review extractions before confirming.
+                </p>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                    Domain/Topic (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={ingestDomain}
+                    onChange={(e) => setIngestDomain(e.target.value)}
+                    placeholder="e.g., Software Engineering, Finance, etc."
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      background: 'var(--surface)',
+                      color: 'var(--ink)',
+                      fontSize: '14px',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                    PDF File *
+                  </label>
+                  <input
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    onChange={handlePdfFileSelect}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      background: 'var(--surface)',
+                      color: 'var(--ink)',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                    }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
+                  <button
+                    onClick={() => {
+                      setShowIngestModal(false);
+                      setIngestText('');
+                      setIngestDomain('');
+                      setIngestMode('text');
+                    }}
+                    style={{
+                      padding: '10px 20px',
+                      background: 'transparent',
+                      color: 'var(--muted)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
             <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
               Paste or type your lecture content below. The system will automatically extract concepts, create segments, and link them to your knowledge graph.
             </p>
@@ -906,6 +1109,8 @@ function LectureStudioPageInner() {
                 {ingesting ? 'Processing...' : 'Add Content'}
               </button>
             </div>
+            </>
+            )}
           </div>
         </div>
       )}

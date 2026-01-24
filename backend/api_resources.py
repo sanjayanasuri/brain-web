@@ -13,7 +13,7 @@ from typing import List, Optional, Dict, Any, Tuple
 import mimetypes
 import os
 
-from models import Resource
+from models import Resource, PDFExtractionResult
 from db_neo4j import get_neo4j_session
 from auth import require_auth
 from storage import save_file, read_file, get_file_url
@@ -29,9 +29,11 @@ from services_resource_ai import (
     extract_pdf_text,
     summarize_pdf_text,
 )
+from services_pdf_enhanced import extract_pdf_enhanced
 from services_browser_use import execute_skill, BrowserUseAPIError
 from config import BROWSER_USE_CONFUSION_SKILL_ID
 from pydantic import BaseModel
+from fastapi import Query
 
 router = APIRouter(prefix="/resources", tags=["resources"])
 
@@ -98,12 +100,49 @@ def search_resources_endpoint(
     return resources
 
 
+@router.post("/pdf/extract", response_model=PDFExtractionResult)
+async def extract_pdf_enhanced_endpoint(
+    file: UploadFile = File(...),
+    use_ocr: bool = Query(False, description="Enable OCR for scanned PDFs"),
+    extract_tables: bool = Query(True, description="Extract tables as structured text"),
+    request: Request = None,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Enhanced PDF extraction endpoint with metadata, page-level tracking, and OCR support.
+    
+    Returns structured extraction result with pages and metadata.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+    
+    tenant_id = getattr(request.state, "tenant_id", None) if request else None
+    url, storage_path = _save_upload(file, tenant_id=tenant_id)
+    
+    file_content = read_file(storage_path)
+    
+    result = extract_pdf_enhanced(
+        pdf_path=storage_path,
+        pdf_bytes=file_content,
+        use_ocr=use_ocr,
+        extract_tables=extract_tables,
+    )
+    
+    return result
+
+
 @router.post("/upload", response_model=Resource)
 async def upload_resource(
     file: UploadFile = File(...),
     concept_id: Optional[str] = Form(None),
     title: Optional[str] = Form(None),
     source: Optional[str] = Form("upload"),
+    enhanced_pdf: bool = Form(False, description="Use enhanced PDF extraction with metadata and page tracking"),
+    use_ocr: bool = Form(False, description="Enable OCR for scanned PDFs (only if enhanced_pdf=True)"),
     request: Request = None,
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
@@ -123,6 +162,8 @@ async def upload_resource(
     )
 
     caption = None
+    metadata = {}
+    
     try:
         # Read file for AI processing (works with both local and S3)
         file_content = read_file(storage_path)
@@ -131,10 +172,30 @@ async def upload_resource(
         if kind == "image":
             caption = generate_image_caption(storage_path, image_bytes=file_content)
         elif kind == "pdf":
-            # PDF processing can work with bytes
-            pdf_text = extract_pdf_text(storage_path, pdf_bytes=file_content)
-            if pdf_text:
-                caption = summarize_pdf_text(pdf_text)
+            if enhanced_pdf:
+                # Enhanced PDF extraction with metadata and page tracking
+                pdf_result = extract_pdf_enhanced(
+                    pdf_path=storage_path,
+                    pdf_bytes=file_content,
+                    use_ocr=use_ocr,
+                    extract_tables=True,
+                )
+                # Use PDF title if available, otherwise summarize
+                caption = pdf_result.metadata.title or summarize_pdf_text(pdf_result.full_text)
+                # Store PDF metadata in resource metadata
+                metadata = {
+                    "pdf_metadata": pdf_result.metadata.dict(),
+                    "extraction_method": pdf_result.extraction_method,
+                    "page_count": pdf_result.metadata.page_count,
+                    "is_scanned": pdf_result.metadata.is_scanned,
+                    "has_tables": pdf_result.metadata.has_tables,
+                    "has_images": pdf_result.metadata.has_images,
+                }
+            else:
+                # Basic PDF extraction (existing behavior)
+                pdf_text = extract_pdf_text(storage_path, pdf_bytes=file_content)
+                if pdf_text:
+                    caption = summarize_pdf_text(pdf_text)
     except Exception as e:
         import logging
         logging.getLogger("brain_web").warning(f"Failed to generate caption: {e}")
@@ -148,6 +209,7 @@ async def upload_resource(
         mime_type=mime_type,
         caption=caption,
         source=source,
+        metadata=metadata if metadata else None,
     )
 
     if concept_id:

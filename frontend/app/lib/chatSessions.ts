@@ -13,6 +13,7 @@ export interface ChatSession {
     question: string;
     answer: string;
     answerId: string | null;
+    eventId?: string | null;
     timestamp: number;
     suggestedQuestions?: string[];
     evidenceUsed?: any[];
@@ -81,6 +82,7 @@ export async function createChatSession(
   firstQuestion: string,
   firstAnswer: string,
   answerId: string | null = null,
+  eventId: string | null = null,
   graphId?: string,
   branchId?: string
 ): Promise<ChatSession> {
@@ -97,6 +99,7 @@ export async function createChatSession(
       question: firstQuestion,
       answer: firstAnswer,
       answerId,
+      eventId,
       timestamp: now,
     }],
     graphId,
@@ -116,7 +119,8 @@ export function addMessageToSession(
   answer: string,
   answerId: string | null = null,
   suggestedQuestions?: string[],
-  evidenceUsed?: any[]
+  evidenceUsed?: any[],
+  eventId: string | null = null
 ): void {
   const sessions = getChatSessions();
   const session = sessions.find(s => s.id === sessionId);
@@ -132,6 +136,7 @@ export function addMessageToSession(
     question,
     answer,
     answerId,
+    eventId,
     timestamp: now,
     suggestedQuestions,
     evidenceUsed,
@@ -231,4 +236,3 @@ function saveChatSessions(sessions: ChatSession[]): void {
     // Ignore storage errors
   }
 }
-

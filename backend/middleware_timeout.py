@@ -23,6 +23,12 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
     """
     
     async def dispatch(self, request: Request, call_next):
+        # Skip timeout for streaming endpoints and bootstrap endpoint (they send data incrementally or load large datasets)
+        if (request.url.path.endswith('-stream') or 
+            '/stream' in request.url.path or 
+            request.url.path.endswith('/bootstrap')):
+            return await call_next(request)
+        
         try:
             # Wrap the request in a timeout
             response = await asyncio.wait_for(

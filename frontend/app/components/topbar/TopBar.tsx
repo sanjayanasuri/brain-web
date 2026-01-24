@@ -2057,6 +2057,22 @@ export default function TopBar() {
             >
               Studio
             </Link>
+            <Link href="/ingest" style={{
+              fontSize: '14px',
+              color: pathname === '/ingest' ? 'var(--ink)' : 'var(--muted)',
+              textDecoration: 'none',
+              transition: 'color 0.2s',
+              fontWeight: pathname === '/ingest' ? 500 : 400,
+            }}
+            onMouseEnter={(e) => {
+              if (pathname !== '/ingest') e.currentTarget.style.color = 'var(--ink)';
+            }}
+            onMouseLeave={(e) => {
+              if (pathname !== '/ingest') e.currentTarget.style.color = 'var(--muted)';
+            }}
+            >
+              Upload
+            </Link>
           </>
         )}
       </div>
@@ -2549,6 +2565,7 @@ export default function TopBar() {
             e.currentTarget.style.borderColor = 'var(--border)';
           }}
           title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          suppressHydrationWarning
         >
           {theme === 'light' ? (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -9,10 +9,11 @@ This module provides:
 """
 import pytest
 import os
+import uuid
 from datetime import datetime
 from unittest.mock import Mock, MagicMock, patch
 from fastapi.testclient import TestClient
-from typing import Generator
+from typing import Generator, List, Dict, Any, Optional, Callable
 
 # Import mock classes from mock_helpers
 from tests.mock_helpers import MockNeo4jRecord, MockNeo4jResult
@@ -409,3 +410,201 @@ def caplog(caplog):
     import logging
     caplog.set_level(logging.DEBUG)
     return caplog
+
+
+@pytest.fixture
+def auth_headers():
+    """Create valid auth headers for authenticated requests."""
+    from auth import create_token
+    token = create_token("test-user", "test-tenant")
+    return {
+        "Authorization": f"Bearer {token}",
+        "x-tenant-id": "test-tenant",
+    }
+
+
+@pytest.fixture
+def events_sqlite_path(tmp_path, monkeypatch):
+    """Configure a temporary SQLite event store for deterministic tests."""
+    db_path = tmp_path / "events.db"
+    monkeypatch.setenv("EVENTS_SQLITE_PATH", str(db_path))
+    monkeypatch.delenv("EVENTS_DDB_TABLE", raising=False)
+    monkeypatch.setenv("EVENTS_POSTGRES", "false")
+    return db_path
+
+
+@pytest.fixture
+def notes_digest_db(monkeypatch):
+    """Configure PostgreSQL-backed services to use the test database."""
+    test_db = os.getenv("TEST_POSTGRES_CONNECTION_STRING")
+    if not test_db:
+        pytest.skip("TEST_POSTGRES_CONNECTION_STRING not set - skipping notes digest tests")
+
+    monkeypatch.setenv("POSTGRES_CONNECTION_STRING", test_db)
+
+    import config
+    monkeypatch.setattr(config, "POSTGRES_CONNECTION_STRING", test_db, raising=False)
+
+    import services_notes_digest as notes_service
+    monkeypatch.setattr(notes_service, "POSTGRES_CONNECTION_STRING", test_db, raising=False)
+    notes_service._pool = None
+    notes_service._init_db()
+
+    import services_contextual_branches as branches_service
+    monkeypatch.setattr(branches_service, "POSTGRES_CONNECTION_STRING", test_db, raising=False)
+    branches_service._pool = None
+    branches_service._init_db()
+
+    import services_lecture_links as lecture_links
+    monkeypatch.setattr(lecture_links, "POSTGRES_CONNECTION_STRING", test_db, raising=False)
+    lecture_links._pool = None
+    try:
+        lecture_links._init_db()
+    except Exception:
+        pass
+
+    return test_db
+
+
+@pytest.fixture
+def disable_lecture_links(monkeypatch):
+    """Disable lecture link resolution to keep tests focused and fast."""
+    import services_lecture_links as lecture_links
+    monkeypatch.setattr(lecture_links, "resolve_links_for_notes_entries", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lecture_links, "resolve_links_for_bridging_hints", lambda *args, **kwargs: None)
+
+
+@pytest.fixture
+def notes_digest_event_log(monkeypatch):
+    """Capture notes digest service log events."""
+    events: List[Dict[str, Any]] = []
+
+    def _log(event_type: str, data: dict):
+        events.append({"event_type": event_type, "data": data})
+
+    import services_notes_digest as notes_service
+    monkeypatch.setattr(notes_service, "log_event", _log)
+    return events
+
+
+class NotesLLMStub:
+    """Deterministic stub for notes digest LLM calls."""
+
+    def __init__(self):
+        self.calls: List[Dict[str, Any]] = []
+        self.responses: List[Any] = []
+
+    def set_responses(self, responses: List[Any]) -> None:
+        self.responses = list(responses)
+
+    def __call__(self, prompt: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.calls.append({"prompt": prompt, "payload": payload})
+        if not self.responses:
+            return {"add_entries": [], "refine_entries": [], "new_sections": []}
+        next_response = self.responses.pop(0)
+        if isinstance(next_response, Exception):
+            raise next_response
+        return next_response
+
+
+@pytest.fixture
+def notes_llm_stub(monkeypatch):
+    """Patch notes digest LLM call with a deterministic stub."""
+    stub = NotesLLMStub()
+    import services_notes_digest as notes_service
+    monkeypatch.setattr(notes_service, "_call_llm", stub)
+    return stub
+
+
+@pytest.fixture
+def chat_session_ids():
+    """Generate a unique chat/session id pair."""
+    chat_id = f"chat-{uuid.uuid4().hex[:12]}"
+    return chat_id, chat_id
+
+
+@pytest.fixture
+def post_session_event(client, auth_headers, events_sqlite_path):
+    """Helper to post ChatMessageCreated events to the session events API."""
+    def _post(
+        session_id: str,
+        message: str,
+        answer: str,
+        answer_summary: Optional[str] = None,
+        mentioned_concepts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "message": message,
+            "answer": answer,
+        }
+        if answer_summary is not None:
+            payload["answer_summary"] = answer_summary
+        if mentioned_concepts is not None:
+            payload["mentioned_concepts"] = mentioned_concepts
+
+        response = client.post(
+            f"/api/sessions/{session_id}/events",
+            json={
+                "event_type": "ChatMessageCreated",
+                "payload": payload,
+            },
+            headers=auth_headers,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    return _post
+
+
+@pytest.fixture
+def create_branch_with_messages(notes_digest_db, disable_lecture_links):
+    """Helper to create a branch with optional messages and hints."""
+    def _create(
+        chat_id: str,
+        selected_text: str,
+        messages: Optional[List[tuple]] = None,
+        hints: Optional[List[Dict[str, Any]]] = None,
+        parent_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from models_contextual_branches import BranchCreateRequest
+        from services_contextual_branches import create_branch, add_branch_message, save_bridging_hints
+
+        parent_id = parent_message_id or f"parent-{uuid.uuid4().hex[:10]}"
+        request = BranchCreateRequest(
+            parent_message_id=parent_id,
+            parent_message_content=f"Parent message for {selected_text}",
+            start_offset=0,
+            end_offset=len(selected_text),
+            selected_text=selected_text,
+            chat_id=chat_id,
+        )
+        branch = create_branch(request, "test-user")
+
+        message_objs = []
+        for role, content in messages or []:
+            message_objs.append(add_branch_message(branch.id, role, content, "test-user"))
+
+        hint_objs = []
+        if hints:
+            hint_set = save_bridging_hints(branch.id, hints, "test-user")
+            hint_objs = hint_set.hints
+
+        return {
+            "branch": branch,
+            "messages": message_objs,
+            "hints": hint_objs,
+            "anchor_hash": branch.anchor.selected_text_hash,
+        }
+
+    return _create
+
+
+@pytest.fixture
+def db_conn(notes_digest_db):
+    """Provide a raw psycopg2 connection to the test database."""
+    import psycopg2
+    conn = psycopg2.connect(notes_digest_db)
+    try:
+        yield conn
+    finally:
+        conn.close()

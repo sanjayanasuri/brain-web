@@ -526,6 +526,27 @@ class ReminderPreferences(BaseModel):
     }
 
 
+class ConversationSummary(BaseModel):
+    """Summary of a conversation exchange for long-term memory."""
+    id: str
+    timestamp: int  # Unix timestamp
+    question: str
+    answer: str
+    topics: List[str] = []  # Key topics discussed
+    summary: str = ""  # Brief summary of the exchange
+
+
+class LearningTopic(BaseModel):
+    """A topic the user is learning about, tracked over time."""
+    id: str
+    name: str
+    first_mentioned: int  # Unix timestamp
+    last_mentioned: int  # Unix timestamp
+    mention_count: int = 1
+    related_topics: List[str] = []  # IDs of related topics
+    notes: str = ""  # Additional context about this learning topic
+
+
 class UIPreferences(BaseModel):
     """
     UI preferences for lens system and other UI customizations.
@@ -632,6 +653,44 @@ class ResourceCreate(BaseModel):
     source: Optional[str] = "upload"
     metadata: Optional[Dict[str, Any]] = None  # NEW
     ingestion_run_id: Optional[str] = None  # ingestion_run_id for resources created during ingestion
+
+
+# ---------- PDF Processing Models ----------
+
+class PDFMetadata(BaseModel):
+    """Extracted PDF metadata."""
+    title: Optional[str] = None
+    author: Optional[str] = None
+    subject: Optional[str] = None
+    creator: Optional[str] = None  # Software that created PDF
+    producer: Optional[str] = None  # PDF producer
+    creation_date: Optional[datetime] = None
+    modification_date: Optional[datetime] = None
+    page_count: int = 0
+    is_scanned: bool = False  # Detected if text extraction yields little content
+    has_tables: bool = False  # Detected tables in PDF
+    has_images: bool = False  # Detected images in PDF
+
+
+class PDFPage(BaseModel):
+    """Represents a single page from a PDF."""
+    page_number: int  # 1-indexed
+    text: str
+    has_table: bool = False
+    has_image: bool = False
+    table_count: int = 0
+    image_count: int = 0
+    metadata: Dict[str, Any] = Field(default_factory=dict)  # Page-specific metadata
+
+
+class PDFExtractionResult(BaseModel):
+    """Complete result from PDF extraction."""
+    full_text: str
+    pages: List[PDFPage]
+    metadata: PDFMetadata
+    extraction_method: str  # "pdfplumber", "pymupdf", "pypdf2", "ocr"
+    warnings: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
 
 
 # ---------- Artifact Models ----------

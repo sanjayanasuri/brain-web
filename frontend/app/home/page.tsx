@@ -1,11 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { getFocusAreas, listGraphs, type FocusArea, type GraphSummary, listCalendarEvents, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, getLocationSuggestions, type CalendarEvent, type LocationSuggestion } from '../api-client';
 import SessionDrawer from '../components/navigation/SessionDrawer';
 import { fetchRecentSessions, type SessionSummary } from '../lib/eventsClient';
 import { getChatSessions, setCurrentSessionId, createChatSession, addMessageToSession, type ChatSession } from '../lib/chatSessions';
+import { BranchProvider, useBranchContext } from '../components/chat/BranchContext';
+import ChatMessageWithBranches from '../components/chat/ChatMessageWithBranches';
+import { emitChatMessageCreated } from '../lib/sessionEvents';
+import { consumeLectureLinkReturn } from '../lib/lectureLinkNavigation';
+import { createBranch } from '../lib/branchUtils';
+import { getAuthHeaders } from '../lib/authToken';
+import ContextPanel from '../components/context/ContextPanel';
 
 interface ChatMessage {
   id: string;
@@ -1383,7 +1390,125 @@ function DayEventsList({ selectedDate }: { selectedDate: Date | null }) {
   );
 }
 
-export default function HomePage() {
+function ChatMessagesList({
+  messages,
+  chatSessionId,
+  loading,
+}: {
+  messages: ChatMessage[];
+  chatSessionId: string | null;
+  loading: boolean;
+}) {
+  const branchContext = useBranchContext();
+
+  const handleExplain = useCallback(async (
+    messageId: string,
+    startOffset: number,
+    endOffset: number,
+    selectedText: string,
+    parentContent: string
+  ) => {
+    try {
+      const branchResponse = await createBranch({
+        parent_message_id: messageId,
+        parent_message_content: parentContent,
+        start_offset: startOffset,
+        end_offset: endOffset,
+        selected_text: selectedText,
+        chat_id: chatSessionId || localStorage.getItem('brainweb:currentChatSession'),
+      });
+
+      branchContext.openBranch(
+        branchResponse.branch.id,
+        messageId,
+        startOffset,
+        endOffset
+      );
+      // Note: openBranch already sets the highlight span via BranchContext
+    } catch (err) {
+      console.error('[handleExplain] Failed to create branch:', err);
+      console.error('[handleExplain] Error details:', {
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        messageId,
+        startOffset,
+        endOffset,
+      });
+      alert(`Failed to create branch: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [branchContext, chatSessionId]);
+
+  const handleOpenBranch = useCallback((branchId: string, messageId: string) => {
+    // Get branch to find span offsets
+    branchContext.openBranch(branchId, messageId, 0, 0);
+  }, [branchContext]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-lg)', flex: 1 }}>
+      {messages.map((msg) => (
+        <div
+          key={msg.id}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--spacing-sm)',
+            alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+          }}
+        >
+          {msg.role === 'assistant' ? (
+            <ChatMessageWithBranches
+              messageId={msg.id}
+              content={msg.content}
+              role={msg.role}
+              timestamp={msg.timestamp}
+              onExplain={handleExplain}
+              onOpenBranch={handleOpenBranch}
+              highlightStart={branchContext.getHighlightSpan(msg.id)?.start}
+              highlightEnd={branchContext.getHighlightSpan(msg.id)?.end}
+            />
+          ) : (
+            <>
+              <div style={{
+                maxWidth: 'min(80%, 600px)',
+                padding: 'var(--spacing-md) var(--spacing-md)',
+                borderRadius: '16px',
+                background: 'var(--accent)',
+                color: 'white',
+                fontSize: 'clamp(15px, 2.1vw, 17px)',
+                lineHeight: '1.6',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}>
+                {msg.content}
+              </div>
+              <div style={{
+                fontSize: 'clamp(11px, 1.6vw, 12px)',
+                color: 'var(--muted)',
+                padding: '0 var(--spacing-xs)',
+              }}>
+                {new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+              </div>
+            </>
+          )}
+        </div>
+      ))}
+      {loading && (
+        <div style={{
+          padding: '16px 20px',
+          borderRadius: '16px',
+          background: 'var(--panel)',
+          border: '1px solid var(--border)',
+          color: 'var(--muted)',
+          fontSize: 'clamp(15px, 2.1vw, 17px)',
+        }}>
+          Thinking...
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomePageInner() {
   const router = useRouter();
   const [query, setQuery] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1398,8 +1523,26 @@ export default function HomePage() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+  const [notesModalSessionId, setNotesModalSessionId] = useState<string | null>(null);
+  const [notesDigest, setNotesDigest] = useState<any>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [showContextPanel, setShowContextPanel] = useState(false);
+  const [domainConcepts, setDomainConcepts] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previousSessionIdRef = useRef<string | null>(null);
+
+  // Handle responsive design
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 1024);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Load focus areas and active graph
   useEffect(() => {
@@ -1471,8 +1614,29 @@ export default function HomePage() {
     inputRef.current?.focus();
   }, []);
 
+  // Auto-trigger notes when component unmounts or session changes
+  useEffect(() => {
+    return () => {
+      // On unmount, trigger notes for current session if it has messages
+      if (currentSessionId) {
+        const session = getChatSessions().find(s => s.id === currentSessionId);
+        if (session && session.messages.length > 0) {
+          triggerNotesForSession(currentSessionId);
+        }
+      }
+    };
+  }, [currentSessionId]);
+
   // Scroll to bottom when messages change
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const currentPath = `${window.location.pathname}${window.location.search}`;
+      const returnState = consumeLectureLinkReturn(currentPath);
+      if (returnState?.windowScrollTop !== undefined) {
+        window.scrollTo({ top: returnState.windowScrollTop, behavior: 'auto' });
+        return;
+      }
+    }
     if (messagesEndRef.current) {
       // Small delay to ensure DOM is updated
       setTimeout(() => {
@@ -1530,14 +1694,26 @@ export default function HomePage() {
       
       // Save chat session
       try {
+        let sessionIdForEvent = currentSessionId;
         if (!currentSessionId) {
+          // Auto-trigger notes for previous session if it exists
+          if (previousSessionIdRef.current) {
+            const previousSession = getChatSessions().find(s => s.id === previousSessionIdRef.current);
+            if (previousSession && previousSession.messages.length > 0) {
+              triggerNotesForSession(previousSessionIdRef.current);
+            }
+          }
+          
           // Create new session for first message
           const newSession = await createChatSession(
             userMessage.content,
             answer,
             data.answerId || null,
+            null,
             activeGraphId
           );
+          sessionIdForEvent = newSession.id;
+          previousSessionIdRef.current = newSession.id;
           setCurrentSessionIdState(newSession.id);
           setCurrentSessionId(newSession.id);
         } else {
@@ -1550,6 +1726,16 @@ export default function HomePage() {
             data.suggestedQuestions || [],
             data.evidenceUsed || []
           );
+        }
+        if (sessionIdForEvent) {
+          emitChatMessageCreated(sessionIdForEvent, {
+            message: userMessage.content,
+            answer,
+            answer_summary: answer.slice(0, 500),
+            message_id: assistantMessage.id,
+          }).catch((err) => {
+            console.warn('Failed to emit chat message event:', err);
+          });
         }
         // Refresh chat sessions list
         const chats = getChatSessions();
@@ -1599,7 +1785,39 @@ export default function HomePage() {
     router.push(`/${queryString ? `?${queryString}` : ''}`);
   };
 
+  // Auto-trigger notes when switching away from a session
+  const triggerNotesForSession = async (sessionId: string) => {
+    if (!sessionId || sessionId === previousSessionIdRef.current) return;
+    
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+      const authHeaders = await getAuthHeaders();
+      await fetch(`${API_BASE_URL}/chats/${sessionId}/notes/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({ trigger_source: 'session_closed' }),
+      });
+    } catch (err) {
+      console.warn('Failed to auto-trigger notes for session:', err);
+    }
+  };
+
   const handleLoadChatSession = (chatSession: ChatSession) => {
+    // Auto-trigger notes for the previous session if it exists and has messages
+    const previousSessionId = previousSessionIdRef.current;
+    if (previousSessionId && previousSessionId !== chatSession.id) {
+      const previousSession = getChatSessions().find(s => s.id === previousSessionId);
+      if (previousSession && previousSession.messages.length > 0) {
+        triggerNotesForSession(previousSessionId);
+      }
+    }
+    
+    // Update previous session ref
+    previousSessionIdRef.current = chatSession.id;
+    
     // Set the current session ID
     setCurrentSessionIdState(chatSession.id);
     setCurrentSessionId(chatSession.id);
@@ -1641,6 +1859,258 @@ export default function HomePage() {
       conceptId: session.last_concept_id,
       graphId: session.graph_id,
     });
+  };
+
+  const handleOpenNotesModal = async (sessionId: string) => {
+    setNotesModalSessionId(sessionId);
+    setNotesLoading(true);
+    setNotesDigest(null);
+    
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+      const authHeaders = await getAuthHeaders();
+      
+      // Fetch both notes and chat session messages
+      const [notesResponse, chatSession] = await Promise.all([
+        fetch(`${API_BASE_URL}/chats/${sessionId}/notes`, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders,
+          },
+        }),
+        Promise.resolve(getChatSessions().find(s => s.id === sessionId)),
+      ]);
+      
+      if (notesResponse.ok) {
+        const data = await notesResponse.json();
+        // Enhance notes with chat session data
+        if (chatSession) {
+          data.chatSession = chatSession;
+        }
+        setNotesDigest(data);
+      } else {
+        console.warn('Failed to load notes, they may not exist yet');
+      }
+    } catch (err) {
+      console.error('Failed to load notes:', err);
+    } finally {
+      setNotesLoading(false);
+    }
+  };
+
+  // Deduplicate similar entries
+  const deduplicateEntries = (entries: any[]): any[] => {
+    const seen = new Set<string>();
+    const result: any[] = [];
+    
+    for (const entry of entries) {
+      // Create a normalized key from the summary text
+      const normalized = entry.summary_text
+        .toLowerCase()
+        .replace(/[^\w\s]/g, '')
+        .split(/\s+/)
+        .slice(0, 10)
+        .join(' ');
+      
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        result.push(entry);
+      }
+    }
+    
+    return result;
+  };
+
+  // Extract domain-specific concepts using LLM
+  const findDomainConcepts = async (entries: any[]): Promise<Set<string>> => {
+    if (entries.length === 0) return new Set();
+    
+    try {
+      const textsToAnalyze = entries.slice(0, 5).map(entry => entry.summary_text); // Limit to first 5 for performance
+      const combinedText = textsToAnalyze.join('\n\n');
+      
+      const response = await fetch('/api/brain-web/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `Extract the most important domain-specific concepts and technical terms from this text. Focus on:
+- Technical terms, algorithms, methods, processes
+- Domain-specific vocabulary (not common words like "it involves", "based on", "in")
+- Concepts that would exist as nodes in a knowledge graph
+- Terms that are clickable and would lead someone to explore more
+
+Text to analyze:
+${combinedText}
+
+Return only a comma-separated list of the most important concepts (maximum 8), no explanations:`,
+          sessionId: 'concept-extraction',
+          graphId: currentGraphId || 'default',
+        }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const conceptsText = data.answer || '';
+        const concepts = conceptsText
+          .split(',')
+          .map((c: string) => c.trim())
+          .filter((c: string) => c && c.length > 2 && c.length < 30)
+          .slice(0, 8); // Limit to 8 concepts
+        
+        return new Set(concepts);
+      }
+    } catch (error) {
+      console.error('Failed to extract concepts with LLM:', error);
+    }
+    
+    // Fallback: return empty set if LLM fails
+    return new Set();
+  };
+
+  // Highlight shared phrases in text
+  const highlightSharedPhrases = (text: string, sharedPhrases: Set<string>): React.ReactNode => {
+    if (sharedPhrases.size === 0) return text;
+    
+    // Simple approach: highlight phrases that appear in the text
+    let highlightedText = text;
+    const sortedPhrases = Array.from(sharedPhrases).sort((a, b) => b.length - a.length);
+    
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    const matches: Array<{ start: number; end: number; phrase: string }> = [];
+    
+    // Find all matches
+    sortedPhrases.forEach(phrase => {
+      const regex = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        matches.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          phrase: match[0],
+        });
+      }
+    });
+    
+    // Sort matches by start position
+    matches.sort((a, b) => a.start - b.start);
+    
+    // Remove overlapping matches (keep longer ones)
+    const nonOverlapping: typeof matches = [];
+    for (const match of matches) {
+      const overlaps = nonOverlapping.some(m => 
+        (match.start >= m.start && match.start < m.end) ||
+        (match.end > m.start && match.end <= m.end) ||
+        (match.start <= m.start && match.end >= m.end)
+      );
+      if (!overlaps) {
+        nonOverlapping.push(match);
+      }
+    }
+    
+    // Build highlighted text
+    nonOverlapping.forEach((match, idx) => {
+      // Add text before match
+      if (match.start > lastIndex) {
+        parts.push(text.substring(lastIndex, match.start));
+      }
+      // Add highlighted match
+      parts.push(
+        <span
+          key={`highlight-${idx}`}
+          style={{
+            background: 'var(--accent)',
+            color: 'white',
+            padding: '2px 4px',
+            borderRadius: '3px',
+            fontWeight: '500',
+          }}
+        >
+          {match.phrase}
+        </span>
+      );
+      lastIndex = match.end;
+    });
+    
+    // Add remaining text
+    if (lastIndex < text.length) {
+      parts.push(text.substring(lastIndex));
+    }
+    
+    return parts.length > 0 ? <>{parts}</> : text;
+  };
+
+  // Find the actual question for an entry from the chat session
+  const findQuestionForEntry = (entry: any, chatSession: ChatSession | undefined): string | null => {
+    if (!chatSession || !entry.source_message_ids || entry.source_message_ids.length === 0) {
+      return null;
+    }
+    
+    // Find user messages that correspond to this entry
+    for (const msg of chatSession.messages) {
+      if (msg.role === 'user' && msg.eventId && entry.source_message_ids.includes(msg.eventId)) {
+        return msg.content;
+      }
+    }
+    
+    // Alternative: look for assistant messages with matching event IDs and find preceding user question
+    for (const msg of chatSession.messages) {
+      if (msg.role === 'assistant' && msg.eventId && entry.source_message_ids.includes(msg.eventId)) {
+        // Find the preceding user question
+        const msgIndex = chatSession.messages.indexOf(msg);
+        for (let i = msgIndex - 1; i >= 0; i--) {
+          if (chatSession.messages[i].role === 'user') {
+            return chatSession.messages[i].content;
+          }
+        }
+      }
+    }
+    
+    return null;
+  };
+
+  const handleCloseNotesModal = () => {
+    setNotesModalSessionId(null);
+    setNotesDigest(null);
+  };
+
+  const handleConceptClick = async (concept: string) => {
+    try {
+      // Search for this concept in the current graph
+      const response = await fetch('/api/brain-web/search-nodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: concept,
+          graphId: activeGraphId || 'default',
+        }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.nodes && data.nodes.length > 0) {
+          // Find the best match for the concept
+          const bestMatch = data.nodes.find((node: any) => 
+            node.name.toLowerCase() === concept.toLowerCase()
+          ) || data.nodes[0];
+          
+          setSelectedNode(bestMatch);
+          setShowContextPanel(true);
+        } else {
+          // If no exact match, create a search query for the concept
+          setQuery(`Tell me about ${concept}`);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to search for concept:', error);
+      // Fallback: set the concept as a search query
+      setQuery(`Tell me about ${concept}`);
+    }
+  };
+
+  const handleCloseContextPanel = () => {
+    setSelectedNode(null);
+    setShowContextPanel(false);
   };
 
   const formatChatSessionTime = (timestamp: number): string => {
@@ -1711,9 +2181,10 @@ export default function HomePage() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      height: '100vh',
       background: 'var(--page-bg)',
       display: 'flex',
+      overflow: 'hidden',
     }}>
       {/* Left Sidebar - Session Drawer */}
       <SessionDrawer 
@@ -1722,62 +2193,78 @@ export default function HomePage() {
       />
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}>
         {/* Main content area with right sidebar */}
-        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+        <div style={{ 
+          flex: 1, 
+          display: 'flex', 
+          overflow: 'hidden',
+          flexDirection: isMobile ? 'column' : 'row',
+        }}>
           {/* Conversation area - center */}
           <div style={{
             flex: 1,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            minWidth: 0, // Allow flex item to shrink below content size
           }}>
             {/* Scrollable messages area */}
             <div style={{
               flex: 1,
               overflowY: 'auto',
-              padding: '54px 20px 0px 20px',
+              padding: '54px clamp(16px, 4vw, 24px) 0 clamp(16px, 4vw, 24px)',
               display: 'flex',
               flexDirection: 'column',
             }}>
-              <div style={{ maxWidth: '900px', margin: '0 auto', width: '100%', flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: messages.length > 0 ? '20px' : '40px' }}>
+              <div style={{ 
+                maxWidth: '900px', 
+                margin: '0 auto', 
+                width: '100%', 
+                flex: 1, 
+                display: 'flex', 
+                flexDirection: 'column', 
+                paddingBottom: messages.length > 0 ? 'var(--spacing-md)' : 'var(--spacing-xl)',
+                gap: 'var(--spacing-lg)',
+              }}>
                 {messages.length === 0 ? (
                 <div style={{
                   flex: 1,
                   display: 'flex',
                   flexDirection: 'column',
-                  alignItems: 'flex-start',
+                  alignItems: 'center',
                   justifyContent: 'flex-start',
-                  paddingTop: '0px',
-                  gap: '32px',
+                  paddingTop: 'clamp(20px, 5vh, 60px)',
+                  gap: 'var(--spacing-xl)',
+                  width: '100%',
                 }}>
                   <div style={{
-                    maxWidth: '600px',
+                    maxWidth: '700px',
                     width: '100%',
                     background: 'var(--panel)',
                     borderRadius: '16px',
-                    padding: '48px',
+                    padding: 'clamp(32px, 6vw, 56px)',
                     boxShadow: 'var(--shadow)',
                     border: '1px solid var(--border)',
                   }}>
                     {/* Welcome Section */}
                     <div style={{
-                      marginBottom: '24px',
+                      marginBottom: 'var(--spacing-lg)',
                       textAlign: 'center',
                     }}>
                       <div style={{
-                        fontSize: '32px',
+                        fontSize: 'clamp(32px, 5vw, 48px)',
                         fontWeight: '600',
                         color: 'var(--ink)',
-                        marginBottom: '12px',
+                        marginBottom: 'var(--spacing-md)',
                         lineHeight: '1.2',
                       }}>
                         Welcome User
                       </div>
                       <div style={{
-                        fontSize: '18px',
+                        fontSize: 'clamp(18px, 3vw, 22px)',
                         color: 'var(--muted)',
-                        marginBottom: '24px',
+                        marginBottom: 'var(--spacing-lg)',
                       }}>
                         What would you like to focus on today?
                       </div>
@@ -1788,8 +2275,8 @@ export default function HomePage() {
                       <div style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '12px',
-                        padding: '14px 20px',
+                        gap: 'var(--spacing-sm)',
+                        padding: 'var(--spacing-sm) var(--spacing-md)',
                         background: 'var(--surface)',
                         border: '1px solid var(--border)',
                         borderRadius: '12px',
@@ -1811,7 +2298,7 @@ export default function HomePage() {
                             border: 'none',
                             background: 'transparent',
                             color: 'var(--ink)',
-                            fontSize: '16px',
+                            fontSize: 'clamp(16px, 2.2vw, 18px)',
                             outline: 'none',
                             fontFamily: 'inherit',
                             padding: '0',
@@ -1839,12 +2326,12 @@ export default function HomePage() {
                     {/* Focus areas indicator - below input */}
                     {focusAreas.filter(a => a.active).length > 0 && (
                       <div style={{
-                        marginTop: '12px',
-                        fontSize: '11px',
+                        marginTop: 'var(--spacing-sm)',
+                        fontSize: 'clamp(12px, 1.7vw, 13px)',
                         color: 'var(--muted)',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '6px',
+                        gap: 'var(--spacing-xs)',
                         flexWrap: 'wrap',
                         justifyContent: 'center',
                       }}>
@@ -1867,25 +2354,24 @@ export default function HomePage() {
                   </div>
 
                   {/* Sessions List */}
-                  {!sessionsLoading && (() => {
-                    const sessionGroups = groupSessionsByDate(recentSessions);
-                    return chatSessions.length > 0 || sessionGroups.length > 0;
-                  })() && (
+                  {!sessionsLoading && (
                     <div style={{
-                      maxWidth: '600px',
+                      maxWidth: '700px',
                       width: '100%',
                     }}>
                       {(() => {
                         const sessionGroups = groupSessionsByDate(recentSessions);
+                        const hasSessions = chatSessions.length > 0 || sessionGroups.length > 0;
+                        
                         return (
                           <>
                             {/* Chat Sessions */}
                             {chatSessions.length > 0 && (
-                              <div style={{ marginBottom: '24px' }}>
-                                <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                              <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+                                <div style={{ fontSize: 'clamp(13px, 2vw, 15px)', fontWeight: '600', color: 'var(--muted)', marginBottom: 'var(--spacing-sm)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                                   Chat Sessions
                                 </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-sm)' }}>
                                   {chatSessions.map((chatSession) => (
                                     <div
                                       key={chatSession.id}
@@ -1897,6 +2383,7 @@ export default function HomePage() {
                                         cursor: 'pointer',
                                         transition: 'background 0.2s',
                                         background: 'var(--background)',
+                                        position: 'relative',
                                       }}
                                       onMouseEnter={(e) => {
                                         e.currentTarget.style.background = 'var(--surface)';
@@ -1905,17 +2392,44 @@ export default function HomePage() {
                                         e.currentTarget.style.background = 'var(--background)';
                                       }}
                                     >
-                                      <div style={{ fontSize: '13px', fontWeight: '500', color: 'var(--ink)', marginBottom: '4px' }}>
-                                        {chatSession.title}
-                                      </div>
-                                      <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
-                                        {formatChatSessionTime(chatSession.updatedAt)} • {chatSession.messages.length} message{chatSession.messages.length !== 1 ? 's' : ''}
-                                      </div>
-                                      {chatSession.messages.length > 0 && (
-                                        <div style={{ fontSize: '12px', color: 'var(--muted)', fontStyle: 'italic' }}>
-                                          &quot;{chatSession.messages[0].question.substring(0, 60)}{chatSession.messages[0].question.length > 60 ? '...' : ''}&quot;
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                                        <div style={{ flex: 1 }}>
+                                          <div style={{ fontSize: 'clamp(14px, 2vw, 16px)', fontWeight: '500', color: 'var(--ink)', marginBottom: '6px' }}>
+                                            {chatSession.title}
+                                          </div>
+                                          <div style={{ fontSize: 'clamp(12px, 1.8vw, 13px)', color: 'var(--muted)', marginBottom: '6px' }}>
+                                            {formatChatSessionTime(chatSession.updatedAt)} • {chatSession.messages.length} message{chatSession.messages.length !== 1 ? 's' : ''}
+                                          </div>
+                                          {chatSession.messages.length > 0 && (
+                                            <div style={{ fontSize: 'clamp(13px, 1.9vw, 14px)', color: 'var(--muted)', fontStyle: 'italic' }}>
+                                              &quot;{chatSession.messages[0].question.substring(0, 60)}{chatSession.messages[0].question.length > 60 ? '...' : ''}&quot;
+                                            </div>
+                                          )}
                                         </div>
-                                      )}
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleOpenNotesModal(chatSession.id);
+                                          }}
+                                          style={{
+                                            padding: '6px 10px',
+                                            background: 'var(--accent)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '6px',
+                                            fontSize: '11px',
+                                            fontWeight: '600',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            flexShrink: 0,
+                                          }}
+                                          title="View notes"
+                                        >
+                                          📝 Notes
+                                        </button>
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -1925,16 +2439,16 @@ export default function HomePage() {
                             {/* Graph Sessions */}
                             {sessionGroups.length > 0 && (
                         <div>
-                          <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                          <div style={{ fontSize: 'clamp(13px, 2vw, 15px)', fontWeight: '600', color: 'var(--muted)', marginBottom: 'var(--spacing-sm)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                             Graph Sessions
                           </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
                             {sessionGroups.map((group) => (
                               <div key={group.label}>
-                                <div style={{ fontSize: '11px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                <div style={{ fontSize: 'clamp(12px, 1.7vw, 13px)', fontWeight: '600', color: 'var(--muted)', marginBottom: 'var(--spacing-sm)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                                   {group.label}
                                 </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-sm)' }}>
                                   {group.sessions.map((session) => (
                                     <div
                                       key={session.session_id}
@@ -1954,13 +2468,13 @@ export default function HomePage() {
                                         e.currentTarget.style.background = 'var(--background)';
                                       }}
                                     >
-                                      <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>
+                                      <div style={{ fontSize: 'clamp(12px, 1.7vw, 13px)', color: 'var(--muted)', marginBottom: '6px' }}>
                                         {formatGraphSessionTime(session.end_at)}
                                         {session.top_concepts.length > 0 && (
                                           <> • {session.top_concepts.length} concept{session.top_concepts.length !== 1 ? 's' : ''}</>
                                         )}
                                       </div>
-                                      <div style={{ fontSize: '12px', color: 'var(--ink)', marginBottom: '6px' }}>
+                                      <div style={{ fontSize: 'clamp(13px, 1.9vw, 14px)', color: 'var(--ink)', marginBottom: '6px' }}>
                                         {session.summary || 'Session'}
                                       </div>
                                       {session.top_concepts.length > 0 && (
@@ -1969,16 +2483,16 @@ export default function HomePage() {
                                             <span
                                               key={concept.concept_id}
                                               style={{
-                                                fontSize: '10px',
-                                                padding: '2px 6px',
-                                                background: 'var(--surface)',
-                                                borderRadius: '4px',
-                                                color: 'var(--ink)',
-                                                border: '1px solid var(--border)',
-                                              }}
-                                            >
-                                              {concept.concept_name || concept.concept_id}
-                                            </span>
+                                              fontSize: 'clamp(11px, 1.6vw, 12px)',
+                                              padding: '2px 6px',
+                                              background: 'var(--surface)',
+                                              borderRadius: '4px',
+                                              color: 'var(--ink)',
+                                              border: '1px solid var(--border)',
+                                            }}
+                                          >
+                                            {concept.concept_name || concept.concept_id}
+                                          </span>
                                           ))}
                                         </div>
                                       )}
@@ -1995,44 +2509,38 @@ export default function HomePage() {
                       })()}
                     </div>
                   )}
+                  {sessionsLoading && (
+                    <div style={{
+                      maxWidth: '600px',
+                      width: '100%',
+                      padding: 'var(--spacing-md)',
+                      textAlign: 'center',
+                      color: 'var(--muted)',
+                      fontSize: 'clamp(14px, 2vw, 16px)',
+                    }}>
+                      Loading sessions...
+                    </div>
+                  )}
+                  {!sessionsLoading && chatSessions.length === 0 && (() => {
+                    const sessionGroups = groupSessionsByDate(recentSessions);
+                    return sessionGroups.length === 0;
+                  })() && (
+                    <div style={{
+                      maxWidth: '700px',
+                      width: '100%',
+                      padding: 'var(--spacing-md)',
+                      textAlign: 'center',
+                      color: 'var(--muted)',
+                      fontSize: 'clamp(14px, 2vw, 16px)',
+                      fontStyle: 'italic',
+                    }}>
+                      No previous chats or sessions yet. Start a conversation to see it here!
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', flex: 1 }}>
-                  {messages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '8px',
-                        alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                      }}
-                    >
-                      <div style={{
-                        maxWidth: '80%',
-                        padding: '16px 20px',
-                        borderRadius: '16px',
-                        background: msg.role === 'user' 
-                          ? 'var(--accent)' 
-                          : 'var(--panel)',
-                        color: msg.role === 'user' ? 'white' : 'var(--ink)',
-                        border: msg.role === 'assistant' ? '1px solid var(--border)' : 'none',
-                        fontSize: '15px',
-                        lineHeight: '1.6',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}>
-                        {msg.content}
-                      </div>
-                      <div style={{
-                        fontSize: '11px',
-                        color: 'var(--muted)',
-                        padding: '0 4px',
-                      }}>
-                        {new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
-                      </div>
-                    </div>
-                  ))}
+                <>
+                  <ChatMessagesList messages={messages} chatSessionId={currentSessionId} loading={loading} />
                   {loading && (
                     <div style={{
                       padding: '16px 20px',
@@ -2040,7 +2548,7 @@ export default function HomePage() {
                       background: 'var(--panel)',
                       border: '1px solid var(--border)',
                       color: 'var(--muted)',
-                      fontSize: '15px',
+                      fontSize: 'clamp(15px, 2.1vw, 17px)',
                     }}>
                       Thinking...
                     </div>
@@ -2050,8 +2558,8 @@ export default function HomePage() {
                   {/* Chat Input Bar - positioned right after messages */}
                   {messages.length > 0 && (
                     <div style={{
-                      marginTop: '24px',
-                      paddingTop: '20px',
+                      marginTop: 'var(--spacing-lg)',
+                      paddingTop: 'var(--spacing-md)',
                       borderTop: '1px solid var(--border)',
                       display: 'flex',
                       justifyContent: 'center',
@@ -2061,8 +2569,8 @@ export default function HomePage() {
                           <div style={{
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '12px',
-                            padding: '20px 28px',
+                            gap: 'var(--spacing-sm)',
+                            padding: 'var(--spacing-md) clamp(16px, 3vw, 28px)',
                             background: 'var(--surface)',
                             border: '1px solid var(--border)',
                             borderRadius: '12px',
@@ -2080,7 +2588,7 @@ export default function HomePage() {
                                 border: 'none',
                                 background: 'transparent',
                                 color: 'var(--ink)',
-                                fontSize: '16px',
+                                fontSize: 'clamp(16px, 2.2vw, 18px)',
                                 outline: 'none',
                                 fontFamily: 'inherit',
                                 padding: '0',
@@ -2107,7 +2615,7 @@ export default function HomePage() {
                       </div>
                     </div>
                   )}
-                </div>
+                </>
               )}
               </div>
             </div>
@@ -2115,15 +2623,17 @@ export default function HomePage() {
 
           {/* Right Sidebar */}
           <div style={{
-            width: '280px',
-            borderLeft: '1px solid var(--border)',
+            width: isMobile ? '100%' : '280px',
+            borderLeft: !isMobile ? '1px solid var(--border)' : 'none',
+            borderTop: isMobile ? '1px solid var(--border)' : 'none',
             background: 'var(--panel)',
             display: 'flex',
             flexDirection: 'column',
             overflowY: 'auto',
-            padding: '20px',
-            gap: '20px',
+            padding: 'var(--spacing-md)',
+            gap: 'var(--spacing-md)',
             flexShrink: 0,
+            maxHeight: isMobile ? '400px' : 'none',
           }}>
             {/* Calendar Widget - Top */}
             <CalendarWidget selectedDate={selectedDate} onDateSelect={setSelectedDate} />
@@ -2134,11 +2644,323 @@ export default function HomePage() {
         </div>
       </div>
 
+      {/* Notes Modal */}
+      {notesModalSessionId && (
+        <div
+          onClick={handleCloseNotesModal}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--background)',
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              border: '1px solid var(--border)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: '600', color: 'var(--ink)', margin: 0 }}>
+                Session Notes
+              </h2>
+              <button
+                onClick={handleCloseNotesModal}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: 'var(--muted)',
+                  padding: '0',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {notesLoading ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted)' }}>
+                Loading notes...
+              </div>
+            ) : !notesDigest || !notesDigest.sections || notesDigest.sections.length === 0 || notesDigest.sections.every((s: any) => !s.entries || s.entries.length === 0) ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted)' }}>
+                <p>No notes available yet.</p>
+                <p style={{ fontSize: '13px', marginTop: '8px' }}>
+                  Notes are automatically created when you switch sessions or close a chat.
+                </p>
+              </div>
+            ) : (() => {
+              // Collect all entries and find shared phrases
+              const allEntries: any[] = [];
+              notesDigest.sections.forEach((section: any) => {
+                if (section.entries && section.entries.length > 0) {
+                  allEntries.push(...section.entries);
+                }
+              });
+              
+              // Deduplicate entries
+              const uniqueEntries = deduplicateEntries(allEntries);
+              
+              // Extract domain concepts using LLM (async operation)
+              React.useEffect(() => {
+                findDomainConcepts(uniqueEntries).then(concepts => {
+                  setDomainConcepts(concepts);
+                });
+              }, [uniqueEntries.length]); // Re-run when entries change
+              
+              // Group entries back by section
+              const sectionsWithDedupedEntries = notesDigest.sections.map((section: any) => {
+                if (!section.entries || section.entries.length === 0) return null;
+                const sectionEntries = section.entries.filter((entry: any) => 
+                  uniqueEntries.some(ue => ue.id === entry.id)
+                );
+                if (sectionEntries.length === 0) return null;
+                return { ...section, entries: sectionEntries };
+              }).filter(Boolean);
+              
+              const chatSession = notesDigest.chatSession;
+              
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  {domainConcepts.size > 0 && (
+                    <div style={{
+                      padding: '12px',
+                      background: 'var(--accent)',
+                      color: 'white',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                    }}>
+                      <strong>Connected concepts:</strong>{' '}
+                      {Array.from(domainConcepts).slice(0, 5).map((concept, idx) => (
+                        <React.Fragment key={concept}>
+                          {idx > 0 && ', '}
+                          <span
+                            onClick={() => handleConceptClick(concept)}
+                            style={{
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                              fontWeight: '600',
+                              padding: '2px 4px',
+                              borderRadius: '3px',
+                              transition: 'background 0.2s',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = 'transparent';
+                            }}
+                          >
+                            {concept}
+                          </span>
+                        </React.Fragment>
+                      ))}
+                      {domainConcepts.size > 5 && ` +${domainConcepts.size - 5} more`}
+                    </div>
+                  )}
+                  
+                  {sectionsWithDedupedEntries.map((section: any) => (
+                    <div
+                      key={section.id}
+                      style={{
+                        padding: '16px',
+                        background: 'var(--panel)',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      <div style={{ fontSize: '16px', fontWeight: '600', color: 'var(--ink)', marginBottom: '12px' }}>
+                        {section.title}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {section.entries.map((entry: any) => {
+                          const question = findQuestionForEntry(entry, chatSession);
+                          return (
+                            <div
+                              key={entry.id}
+                              style={{
+                                fontSize: '14px',
+                                color: 'var(--ink)',
+                                lineHeight: '1.6',
+                                padding: '12px',
+                                background: 'var(--background)',
+                                borderRadius: '6px',
+                                border: '1px solid var(--border)',
+                              }}
+                            >
+                              {question && (
+                                <div style={{
+                                  marginBottom: '8px',
+                                  paddingBottom: '8px',
+                                  borderBottom: '1px solid var(--border)',
+                                }}>
+                                  <div style={{
+                                    fontSize: '12px',
+                                    color: 'var(--muted)',
+                                    fontWeight: '500',
+                                    marginBottom: '4px',
+                                  }}>
+                                    Question:
+                                  </div>
+                                  <div style={{
+                                    fontSize: '13px',
+                                    color: 'var(--ink)',
+                                    fontStyle: 'italic',
+                                  }}>
+                                    "{question}"
+                                  </div>
+                                </div>
+                              )}
+                              <div style={{
+                                fontSize: '12px',
+                                color: 'var(--muted)',
+                                fontWeight: '500',
+                                marginBottom: '6px',
+                              }}>
+                                Explanation:
+                              </div>
+                              <div style={{ lineHeight: '1.7' }}>
+                                {highlightSharedPhrases(entry.summary_text, domainConcepts)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Context Panel Overlay */}
+      {showContextPanel && selectedNode && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          justifyContent: 'flex-end',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            width: '400px',
+            height: '100%',
+            background: 'var(--background)',
+            borderLeft: '1px solid var(--border)',
+            boxShadow: '-2px 0 8px rgba(0, 0, 0, 0.1)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+            {/* Header with close button and chat button */}
+            <div style={{
+              padding: '16px',
+              borderBottom: '1px solid var(--border)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: 'var(--panel)',
+            }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600' }}>
+                {selectedNode.name}
+              </h3>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => {
+                    setQuery(`Tell me more about ${selectedNode.name}`);
+                    handleCloseContextPanel();
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                  }}
+                >
+                  Chat
+                </button>
+                <button
+                  onClick={handleCloseContextPanel}
+                  style={{
+                    padding: '6px 8px',
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            
+            {/* Context Panel Content */}
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              <ContextPanel
+                selectedNode={selectedNode}
+                selectedResources={[]}
+                isResourceLoading={false}
+                resourceError={null}
+                expandedResources={new Set()}
+                setExpandedResources={() => {}}
+                evidenceFilter="all"
+                setEvidenceFilter={() => {}}
+                evidenceSearch=""
+                setEvidenceSearch={() => {}}
+                activeTab="overview"
+                setActiveTab={() => {}}
+                onClose={handleCloseContextPanel}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       <style jsx>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
       `}</style>
     </div>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <BranchProvider>
+      <HomePageInner />
+    </BranchProvider>
   );
 }

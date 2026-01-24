@@ -7,7 +7,7 @@ consistent interface.
 
 Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
 """
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 from uuid import uuid4
 from urllib.parse import urlparse
 from neo4j import Session
@@ -30,10 +30,15 @@ from services_lecture_ingestion import (
     run_chunk_and_claims_engine,
     run_segments_and_analogies_engine,
 )
-from models import Concept, LectureSegment
+from services_pdf_enhanced import chunk_pdf_with_page_references
+from models import Concept, LectureSegment, PDFExtractionResult
 
 
-def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult:
+def ingest_artifact(
+    session: Session, 
+    payload: ArtifactInput,
+    event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+) -> IngestionResult:
     """
     Unified ingestion function for all artifact types.
     
@@ -50,6 +55,7 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
     Args:
         session: Neo4j session
         payload: ArtifactInput with artifact details and actions
+        event_callback: Optional callback function(event_type, event_data) for real-time events
         
     Returns:
         IngestionResult with run_id, artifact_id, status, and summary
@@ -122,6 +128,7 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
         "finance_doc": "FINANCE_DOC",
         "lecture": "LECTURE",
         "manual": "MANUAL",
+        "pdf": "PDF",
     }
     source_type = source_type_map.get(payload.artifact_type, "UNKNOWN")
     
@@ -174,7 +181,7 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
         
         if payload.actions.run_lecture_extraction:
             # Generate lecture_id based on artifact_type
-            if payload.artifact_type in ["lecture", "notion_page", "webpage", "manual"]:
+            if payload.artifact_type in ["lecture", "notion_page", "webpage", "manual", "pdf"]:
                 lecture_id = f"LECTURE_{uuid4().hex[:8].upper()}"
                 
                 # Determine lecture title and text
@@ -189,6 +196,7 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
                         domain=payload.domain,
                         run_id=run_id,
                         lecture_id=lecture_id,
+                        event_callback=event_callback,
                     )
                     
                     nodes_created = extraction_result.get("nodes_created", [])
@@ -284,17 +292,51 @@ def ingest_artifact(session: Session, payload: ArtifactInput) -> IngestionResult
             # Collect all known concepts from lecture extraction
             known_concepts = nodes_created + nodes_updated
             
+            # Check if this is a PDF with page metadata
+            pdf_result = None
+            if payload.metadata and "pdf_result" in payload.metadata:
+                try:
+                    pdf_result = PDFExtractionResult(**payload.metadata["pdf_result"])
+                    print(f"[Ingestion Kernel] Detected PDF with {len(pdf_result.pages)} pages, using page-aware chunking")
+                except Exception as e:
+                    print(f"[Ingestion Kernel] Warning: Failed to parse PDF result from metadata: {e}")
+                    pdf_result = None
+            
             try:
-                chunk_claims_result = run_chunk_and_claims_engine(
-                    session=session,
-                    source_id=chunk_source_id,
-                    source_label=chunk_source_label,
-                    domain=payload.domain,
-                    text=text,
-                    run_id=run_id,
-                    known_concepts=known_concepts,
-                    include_existing_concepts=True,
-                )
+                # Use PDF-specific chunking if PDF metadata is available
+                if pdf_result:
+                    # Use PDF chunking with page references
+                    pdf_chunks = chunk_pdf_with_page_references(
+                        pdf_result,
+                        max_chars=1200,
+                        overlap=150,
+                    )
+                    # Convert PDF chunks to format expected by chunk_and_claims_engine
+                    # We'll need to modify run_chunk_and_claims_engine to accept pre-chunked data
+                    # For now, pass the full text but store PDF metadata for later use
+                    chunk_claims_result = run_chunk_and_claims_engine(
+                        session=session,
+                        source_id=chunk_source_id,
+                        source_label=chunk_source_label,
+                        domain=payload.domain,
+                        text=text,
+                        run_id=run_id,
+                        known_concepts=known_concepts,
+                        include_existing_concepts=True,
+                        pdf_chunks=pdf_chunks,  # Pass PDF chunks for page reference storage
+                    )
+                else:
+                    # Standard chunking
+                    chunk_claims_result = run_chunk_and_claims_engine(
+                        session=session,
+                        source_id=chunk_source_id,
+                        source_label=chunk_source_label,
+                        domain=payload.domain,
+                        text=text,
+                        run_id=run_id,
+                        known_concepts=known_concepts,
+                        include_existing_concepts=True,
+                    )
                 
                 summary_counts["chunks_created"] = chunk_claims_result.get("chunks_created", 0)
                 summary_counts["claims_created"] = chunk_claims_result.get("claims_created", 0)

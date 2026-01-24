@@ -2,12 +2,216 @@ import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
 import fs from 'fs';
 import path from 'path';
+import { 
+  queryRouterAgent, 
+  runQualityAgentsInParallel,
+  refinementAgent,
+  type FactCheckResult,
+  type CoherenceResult,
+  type ValidationResult,
+} from '../agents';
+import {
+  buildOptimizedContext,
+  truncateContextIntelligently,
+  extractKeyContext,
+  type ContextChunk,
+} from '../context-manager';
+import {
+  recordFailure,
+  getFailureStats,
+  learnFromFailures,
+  type FailureRecord,
+} from '../failure-learning';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 // In Next.js, environment variables without NEXT_PUBLIC_ prefix are only available server-side
 // OPENAI_API_KEY should be in .env.local (not .env.local.public)
 // Note: Next.js caches env vars at build time, so restart dev server after changing .env.local
+
+/**
+ * Detect if a question needs current/real-time information
+ */
+async function needsWebSearch(question: string, apiKey: string): Promise<boolean> {
+  const detectionPrompt = `Determine if this question requires current/real-time information from the internet.
+
+Questions that NEED web search:
+- Current events, recent news, latest updates
+- Current CEO/leadership of companies
+- Recent stock prices, market data
+- Current weather, today's events
+- Recent product releases, announcements
+- Questions with words like "current", "latest", "now", "today", "recent"
+
+Questions that DON'T need web search:
+- Historical facts, definitions, concepts
+- General knowledge that doesn't change
+- Questions about established facts
+
+Question: "${question}"
+
+Return ONLY a JSON object:
+{
+  "needs_web_search": true/false,
+  "reason": "brief explanation"
+}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are a question analyzer. Return only valid JSON.' },
+          { role: 'user', content: detectionPrompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 100,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const result = JSON.parse(data.choices[0].message.content);
+      return result.needs_web_search === true;
+    }
+  } catch (err) {
+    console.warn('[Chat API] Web search detection failed:', err);
+  }
+  
+  // Fallback: simple heuristic
+  const currentInfoKeywords = /\b(current|latest|now|today|recent|ceo|president|stock|price|weather)\b/i;
+  return currentInfoKeywords.test(question);
+}
+
+
+/**
+ * Perform web search and fetch full content using Brain Web's native web search API
+ * 
+ * Uses SearXNG to search, then fetches full content from links.
+ * This provides comprehensive information by actually scraping the pages, not just snippets.
+ * 
+ * Flow:
+ * 1. Calls backend /web-search/search-and-fetch endpoint (searches via SearXNG and fetches full content)
+ * 2. Falls back to /web-search/search if search-and-fetch fails (returns links only)
+ * 
+ * Benefits:
+ * - Native Brain Web integration (no external dependencies)
+ * - SearXNG aggregates multiple search engines (Google, Bing, DuckDuckGo, Brave, etc.)
+ * - Full content extraction (Trafilatura - Firecrawl-quality)
+ * - Privacy-respecting (no tracking)
+ * - Self-hostable (full control)
+ */
+async function performWebSearch(query: string): Promise<{ 
+  results: Array<{ 
+    title: string; 
+    snippet: string; 
+    link: string; 
+    fullContent?: string;  // Full scraped content when available
+  }>; 
+  error?: string; 
+}> {
+  // Use Brain Web's native web search API (backend)
+  const backendUrl = API_BASE_URL;
+  const numResults = 3; // Fetch full content from top 3 results
+  
+  // Use /web-search/search-and-fetch endpoint (native Brain Web)
+  const searchAndFetchController = new AbortController();
+  const searchAndFetchTimeout = setTimeout(() => searchAndFetchController.abort(), 30000); // 30s timeout
+  
+  try {
+    const searchAndFetchResponse = await fetch(
+      `${backendUrl}/web-search/search-and-fetch?query=${encodeURIComponent(query)}&num_results=${numResults}&max_content_length=10000`,
+      { 
+        signal: searchAndFetchController.signal,
+        headers: getBackendHeaders(),
+      }
+    );
+    clearTimeout(searchAndFetchTimeout);
+    
+    if (searchAndFetchResponse.ok) {
+      const data = await searchAndFetchResponse.json();
+      const results: Array<{ title: string; snippet: string; link: string; fullContent?: string }> = [];
+      
+      if (data.results && Array.isArray(data.results)) {
+        for (const item of data.results) {
+          if (item.search_result && item.fetched_content) {
+            // We have full fetched content
+            results.push({
+              title: item.search_result.title || item.fetched_content.title || '',
+              snippet: item.search_result.snippet || item.fetched_content.content?.substring(0, 200) || '',
+              link: item.search_result.url || '',
+              fullContent: item.fetched_content.content || '',
+            });
+          } else if (item.search_result) {
+            // Search result but no fetched content
+            results.push({
+              title: item.search_result.title || '',
+              snippet: item.search_result.snippet || '',
+              link: item.search_result.url || '',
+            });
+          }
+        }
+      }
+      
+      if (results.length > 0) {
+        const withContent = results.filter(r => r.fullContent).length;
+        console.log(`[Chat API] Brain Web Web Search: Found ${results.length} results, ${withContent} with full content`);
+        return { results };
+      }
+    }
+  } catch (err: any) {
+    clearTimeout(searchAndFetchTimeout);
+    if (err.name !== 'AbortError') {
+      console.warn('[Chat API] Web search-and-fetch failed, trying search-only:', err);
+    }
+  }
+  
+  // Fallback to search-only endpoint
+  const searchController = new AbortController();
+  const searchTimeout = setTimeout(() => searchController.abort(), 15000);
+  
+  try {
+    const searchResponse = await fetch(
+      `${backendUrl}/web-search/search?query=${encodeURIComponent(query)}`,
+      { 
+        signal: searchController.signal,
+        headers: getBackendHeaders(),
+      }
+    );
+    clearTimeout(searchTimeout);
+    
+    if (searchResponse.ok) {
+      const data = await searchResponse.json();
+      const results = (data.results || []).slice(0, 5).map((item: any) => ({
+        title: item.title || '',
+        snippet: item.snippet || '',
+        link: item.url || '',
+      }));
+      
+      if (results.length > 0) {
+        console.log(`[Chat API] Brain Web Web Search (search-only): Found ${results.length} results`);
+        return { results };
+      }
+    }
+  } catch (err: any) {
+    clearTimeout(searchTimeout);
+    if (err.name !== 'AbortError') {
+      console.error('[Chat API] Web search failed:', err);
+    }
+  }
+
+  // If all fail, return error
+  return { 
+    results: [], 
+    error: 'Web search failed. Make sure SearXNG is running on localhost:8888 and the backend is running.' 
+  };
+}
 
 function getOpenAIApiKey(): string | undefined {
   // Try to read directly from .env.local file as a fallback
@@ -152,6 +356,12 @@ interface ChatRequest {
   focus_concept_id?: string;
   focus_quote_id?: string;
   focus_page_url?: string;
+  ui_context?: {
+    dom_path?: string;
+    position?: { top: number; left: number; width: number; height: number };
+    react_component?: string;
+    html_element?: string;
+  };
 }
 
 interface SuggestedAction {
@@ -387,9 +597,9 @@ export async function POST(request: NextRequest) {
     const apiKey = getOpenAIApiKey();
     
     const body: ChatRequest = await request.json();
-    // Default to GraphRAG for better evidence and structured context
-    // Frontend can override with 'classic' for simple queries
-    const { message: initialMessage, mode = 'graphrag', graph_id, branch_id, lecture_id, vertical: initialVertical, lens: initialLens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url } = body;
+    // Always use GraphRAG - it's superior to classic mode in all cases
+    // Mode parameter is deprecated but kept for backward compatibility
+    const { message: initialMessage, mode = 'graphrag', graph_id, branch_id, lecture_id, vertical: initialVertical, lens: initialLens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url, ui_context } = body;
     let message = initialMessage;
     let vertical = initialVertical;
     let lens = initialLens;
@@ -442,55 +652,440 @@ export async function POST(request: NextRequest) {
     const OPENAI_API_KEY = apiKey;
 
     const startTime = Date.now();
-    console.log(`[Chat API] Processing question: "${message.substring(0, 50)}..." (mode: ${mode})`);
+    console.log(`[Chat API] Processing question: "${message.substring(0, 50)}..." (always using GraphRAG)`);
 
-    // Handle GraphRAG mode
-    if (mode === 'graphrag') {
-      const result = await handleGraphRAGMode(message, graph_id, branch_id, lecture_id, apiKey, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, finalResponsePrefs, finalVoiceId, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url);
-      const totalDuration = Date.now() - startTime;
-      console.log(`[Chat API] GraphRAG mode completed in ${totalDuration}ms`);
-      return result; // handleGraphRAGMode already includes metrics
-    }
-
-    // Classic mode (existing flow)
-    // Step 1: Call semantic search
-    console.log(`[Chat API] Step 1: Calling semantic search at ${API_BASE_URL}/ai/semantic-search`);
-    const searchResponse = await fetch(`${API_BASE_URL}/ai/semantic-search`, {
-      method: 'POST',
-      headers: getBackendHeaders(),
-      body: JSON.stringify({ message, limit: 5 }),
-    });
-
-    if (!searchResponse.ok) {
-      const errorText = await searchResponse.text();
-      console.error(`[Chat API] Semantic search failed: ${searchResponse.status} ${errorText}`);
-      throw new Error(`Semantic search failed: ${searchResponse.statusText}`);
-    }
-
-    const searchData: SemanticSearchResponse = await searchResponse.json();
-    console.log(`[Chat API] Found ${searchData.nodes.length} relevant nodes`);
-    const usedNodes = searchData.nodes;
-
-    if (usedNodes.length === 0) {
-      console.log('[Chat API] No nodes found, returning early');
-      return NextResponse.json({
-        answer: "I couldn't find any relevant nodes in your knowledge graph for that question. Try asking about a specific concept or topic.",
+    // Always use GraphRAG mode - it's superior in all cases
+    // Classic mode has been removed as GraphRAG provides better context and evidence
+    const result = await handleGraphRAGMode(message, graph_id, branch_id, lecture_id, apiKey, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, finalResponsePrefs, finalVoiceId, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url, ui_context);
+    const totalDuration = Date.now() - startTime;
+    console.log(`[Chat API] GraphRAG mode completed in ${totalDuration}ms`);
+    return result; // handleGraphRAGMode already includes metrics
+  } catch (error) {
+    console.error('Chat API error:', error);
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : 'Internal server error',
+        answer: "I encountered an error while processing your question. Please try again.",
         usedNodes: [],
         suggestedQuestions: [],
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Extract key topics from conversation history for context summary
+ */
+function extractConversationTopics(chatHistory: ChatHistoryMessage[]): string[] {
+  if (!chatHistory || chatHistory.length === 0) return [];
+  
+  const topics = new Set<string>();
+  const recentHistory = chatHistory.slice(-5); // Last 5 exchanges for topic extraction
+  
+  for (const hist of recentHistory) {
+    // Extract potential topics from questions (simple keyword extraction)
+    const questionWords = hist.question.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 4 && !['what', 'how', 'when', 'where', 'which', 'about', 'does', 'would', 'could'].includes(w));
+    
+    // Take first 2-3 significant words as potential topics
+    if (questionWords.length > 0) {
+      const topic = questionWords.slice(0, 2).join(' ');
+      if (topic.length > 3) topics.add(topic);
+    }
+  }
+  
+  return Array.from(topics).slice(0, 5); // Max 5 topics
+}
+
+/**
+ * Build conversation summary from recent history
+ */
+function buildConversationSummary(chatHistory: ChatHistoryMessage[]): string {
+  if (!chatHistory || chatHistory.length === 0) return '';
+  
+  const recentHistory = chatHistory.slice(-3); // Last 3 exchanges
+  const topics = extractConversationTopics(recentHistory);
+  
+  if (topics.length === 0) return '';
+  
+  return `Recent conversation topics: ${topics.join(', ')}`;
+}
+
+/**
+ * Build messages array with conversation history for OpenAI API
+ */
+function buildMessagesWithHistory(
+  systemPrompt: string,
+  currentMessage: string,
+  contextString: string,
+  chatHistory?: ChatHistoryMessage[],
+  conversationSummary?: string,
+  userProfile?: any,
+  uiContext?: ChatRequest['ui_context']
+): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: systemPrompt },
+  ];
+
+  // Add conversation history (limit to last 10 exchanges to avoid token limits)
+  if (chatHistory && chatHistory.length > 0) {
+    const recentHistory = chatHistory.slice(-10); // Last 10 Q&A pairs
+    for (const hist of recentHistory) {
+      messages.push({ role: 'user', content: hist.question });
+      messages.push({ role: 'assistant', content: hist.answer });
+    }
+  }
+
+  // Build enhanced current message with context
+  let messageContent = `Question: ${currentMessage}`;
+  
+  // Add UI context if available (what the user is currently looking at)
+  if (uiContext) {
+    const uiContextParts: string[] = [];
+    if (uiContext.react_component) {
+      uiContextParts.push(`React Component: ${uiContext.react_component}`);
+    }
+    if (uiContext.dom_path) {
+      uiContextParts.push(`DOM Path: ${uiContext.dom_path}`);
+    }
+    if (uiContext.position) {
+      uiContextParts.push(`Position: top=${uiContext.position.top}px, left=${uiContext.position.left}px, width=${uiContext.position.width}px, height=${uiContext.position.height}px`);
+    }
+    if (uiContextParts.length > 0) {
+      messageContent += `\n\nUSER INTERFACE CONTEXT: The user is currently viewing/interacting with: ${uiContextParts.join(' | ')}. Consider this when providing your response.`;
+    }
+  }
+  
+  // Add conversation summary if available
+  if (conversationSummary) {
+    messageContent += `\n\nCONVERSATION CONTEXT: ${conversationSummary}`;
+  }
+  
+  // Add user profile context if available
+  if (userProfile) {
+    const profileContext: string[] = [];
+    if (userProfile.name) profileContext.push(`Name: ${userProfile.name}`);
+    if (userProfile.background && userProfile.background.length > 0) {
+      profileContext.push(`Background: ${userProfile.background.join(', ')}`);
+    }
+    if (userProfile.interests && userProfile.interests.length > 0) {
+      profileContext.push(`Interests: ${userProfile.interests.join(', ')}`);
+    }
+    if (userProfile.weak_spots && userProfile.weak_spots.length > 0) {
+      profileContext.push(`Learning focus areas: ${userProfile.weak_spots.join(', ')}`);
+    }
+    if (profileContext.length > 0) {
+      messageContent += `\n\nUSER PROFILE: ${profileContext.join(' | ')}`;
+    }
+  }
+  
+  messageContent += `\n\nGRAPH CONTEXT:\n${contextString}`;
+
+  messages.push({
+    role: 'user',
+    content: messageContent,
+  });
+
+  return messages;
+}
+
+// REMOVED: All classic mode code - unreachable dead code
+// Classic mode has been completely removed as GraphRAG is always superior.
+// All functionality is now handled by GraphRAG mode with AI-first architecture.
+
+async function handleGraphRAGMode(
+  message: string,
+  graph_id: string | undefined,
+  branch_id: string | undefined,
+  lecture_id: string | null | undefined,
+  apiKey: string,
+  vertical?: 'general' | 'finance',
+  lens?: string,
+  recency_days?: number,
+  evidence_strictness?: 'high' | 'medium' | 'low',
+  include_proposed_edges?: boolean,
+  responsePrefs?: ResponsePreferences,
+  voiceId?: string,
+  chatHistory?: ChatHistoryMessage[],
+  trail_id?: string,
+  focus_concept_id?: string,
+  focus_quote_id?: string,
+  focus_page_url?: string,
+  ui_context?: ChatRequest['ui_context']
+): Promise<NextResponse> {
+  const startTime = Date.now();
+  
+  // Map parameters to local variables for consistency
+  const defaultResponsePrefs: ResponsePreferences = {
+    mode: 'compact',
+    ask_question_policy: 'at_most_one',
+    end_with_next_step: true,
+  };
+  const finalResponsePrefs = responsePrefs || defaultResponsePrefs;
+  const finalVoiceId = voiceId || 'neutral';
+  
+  // Declare variables used throughout the function
+  let isGapQuestion = false;
+  let styleFeedbackExamples: string = '';
+  const teachingStyleProfile: any = null;
+  const styleProfile: any = null;
+  const feedbackSummary: any = null;
+  const focusAreas: any[] = [];
+  let userProfile: any = null;
+  let webSearchResults: Array<{ title: string; snippet: string; link: string; fullContent?: string }> = [];
+  let webSearchContext = '';
+  try {
+    // Default graph_id and branch_id if not provided
+    const defaultGraphId = graph_id || 'default';
+    const defaultBranchId = branch_id || 'main';
+
+    console.log(`[Chat API] GraphRAG mode: fetching context for graph_id=${defaultGraphId}, branch_id=${defaultBranchId}, vertical=${vertical || 'general'}`);
+
+    // Step 1: AI-Based Query Routing (replaces all rule-based pattern matching)
+    console.log('[Chat API] Using AI query router to determine complexity and intent...');
+    const chatHistoryForRouter = chatHistory?.map(h => ({
+      role: 'user' as const,
+      content: h.question,
+    })).slice(-3) || [];
+    
+    let routingResult;
+    try {
+      routingResult = await queryRouterAgent(message, chatHistoryForRouter, apiKey);
+      console.log(`[Chat API] Query router result:`, routingResult);
+    } catch (error) {
+      console.error('[Chat API] Query router failed, using fallback:', error);
+      // Fallback: assume medium complexity
+      routingResult = {
+        complexity: 'medium' as const,
+        needsRetrieval: true,
+        intent: 'question',
+        estimatedProcessingTime: 1000,
+      };
+    }
+    
+    // Step 1.5: Check if question needs web search for current information
+    try {
+      const needsSearch = await needsWebSearch(message, apiKey);
+      if (needsSearch) {
+        console.log('[Chat API] Question needs current information, performing web search...');
+        const searchQuery = message; // Use the question as search query
+        const searchResult = await performWebSearch(searchQuery);
+        if (searchResult.results && searchResult.results.length > 0) {
+          webSearchResults = searchResult.results;
+          webSearchContext = `## Current Information from Web Search\n\n`;
+          webSearchResults.forEach((result, idx) => {
+            webSearchContext += `${idx + 1}. **${result.title}**\n`;
+            if (result.fullContent) {
+              // Include full scraped content (truncated if too long)
+              const content = result.fullContent.length > 2000 
+                ? result.fullContent.substring(0, 2000) + '...' 
+                : result.fullContent;
+              webSearchContext += `   Full Content: ${content}\n`;
+            } else {
+              // Fallback to snippet if full content not available
+              webSearchContext += `   ${result.snippet}\n`;
+            }
+            webSearchContext += `   Source: ${result.link}\n\n`;
+          });
+          const withFullContent = webSearchResults.filter(r => r.fullContent).length;
+          console.log(`[Chat API] ✓ Found ${webSearchResults.length} web search results (${withFullContent} with full content)`);
+        } else if (searchResult.error) {
+          console.warn(`[Chat API] Web search failed: ${searchResult.error}`);
+          // Continue without web search - don't fail the request
+        }
+      }
+    } catch (err) {
+      console.warn('[Chat API] Web search error:', err);
+      // Continue without web search - don't fail the request
+    }
+    
+    // For simple queries, skip all the heavy processing and respond quickly
+    if (routingResult.complexity === 'simple' && !routingResult.needsRetrieval) {
+      console.log('[Chat API] Simple conversational query detected, using fast path (skipping retrieval, task detection, itinerary detection)');
+      
+      // Build a simple prompt for conversational queries
+      const systemPrompt = `You are a helpful AI assistant. Respond naturally and conversationally to the user's question. Keep responses brief and friendly.
+      
+CONVERSATIONAL CONTEXT:
+- Maintain context from conversation history when relevant
+- When the user asks "How does this relate to...", "What about...", or uses pronouns like "this", "that", "it" - identify what they're referring to from previous messages
+- Connect follow-up questions to topics discussed earlier ONLY when the connection is clear and relevant
+- Don't force connections to previous topics if the current question is unrelated
+
+ANSWER GENERAL KNOWLEDGE QUESTIONS DIRECTLY:
+- When asked about general knowledge (companies, people, historical events, etc.), answer directly using your training data
+- Be SPECIFIC and FACTUAL: mention actual names, dates, events, and concrete details
+- DO NOT say "I don't have information" just to be cautious - use your general knowledge
+- Only admit uncertainty if you genuinely don't know the answer`;
+      
+      // Build conversation summary for context
+      const conversationSummary = chatHistory ? buildConversationSummary(chatHistory) : '';
+      
+      const messages = buildMessagesWithHistory(systemPrompt, message, '', chatHistory, conversationSummary, userProfile, ui_context);
+      
+      // Call OpenAI directly without retrieval
+      const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages,
+          temperature: 0.7,
+          max_tokens: 300, // Shorter responses for simple queries
+        }),
+      });
+
+      if (!openaiResponse.ok) {
+        const errorText = await openaiResponse.text();
+        throw new Error(`OpenAI API error: ${openaiResponse.status} ${errorText}`);
+      }
+
+      const openaiData = await openaiResponse.json();
+      const answer = openaiData.choices[0]?.message?.content || "I'm here to help!";
+      
+      const totalDuration = Date.now() - startTime;
+      console.log(`[Chat API] Simple query completed in ${totalDuration}ms (fast path via AI router)`);
+      
+      return NextResponse.json({
+        answer,
+        usedNodes: [],
+        suggestedQuestions: [],
+        answerId: null,
+        answer_sections: [],
+        ...(process.env.NODE_ENV === 'development' && {
+          meta: {
+            mode: 'graphrag-fast',
+            duration_ms: totalDuration,
+            skipped_retrieval: true,
+            router_intent: routingResult.intent,
+            router_complexity: routingResult.complexity,
+          }
+        }),
       });
     }
+    
+    // Step 2: Handle special intents detected by router (task creation, itinerary)
+    // Extract intent-specific data if needed
+    const routerIntent = routingResult.intent;
+    let isTaskCreationQuery = false;
+    let taskExtractionResult: any = null;
+    let isItineraryQuery = false;
+    let itineraryDateInfo: { target_date: string | null; is_tomorrow: boolean; is_today: boolean } | null = null;
+    
+    // If router detected task_creation or itinerary intent, extract details
+    if (routerIntent === 'task_creation') {
+      console.log('[Chat API] Task creation intent detected by router, extracting task details...');
+      try {
+        const taskExtractionPrompt = `Extract task details from this message.
 
-    // Use LLM to detect "gaps" questions intelligently (what don't I know, what should I learn, etc.)
-    let isGapQuestion = false;
-    try {
-      const hasGapKeywords = /(?:gap|missing|don.*know|need.*learn|should.*study|what.*missing|knowledge.*gap)/i.test(message);
-      if (hasGapKeywords) {
-        const gapIntentPrompt = `Determine if this user message is asking about knowledge gaps, missing information, or what they should learn next.
+User message: "${message}"
 
-Return ONLY a JSON object: {"is_gap_question": true/false, "confidence": 0.0-1.0}
+Return ONLY a JSON object:
+{
+  "task_data": {
+    "title": "short descriptive title" or null,
+    "estimated_minutes": number or null,
+    "priority": "high|medium|low" or null,
+    "energy": "high|med|low" or null,
+    "due_date": "YYYY-MM-DD" or null,
+    "preferred_time_windows": ["morning"|"afternoon"|"evening"] or null,
+    "notes": "additional context" or null
+  }
+}`;
 
-Examples of gap questions:
-- "what don't I know about X"
+        const taskResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a task extraction expert. Return only valid JSON.' },
+              { role: 'user', content: taskExtractionPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 300,
+            response_format: { type: 'json_object' },
+          }),
+        });
+
+        if (taskResponse.ok) {
+          const taskData = await taskResponse.json();
+          const parsed = JSON.parse(taskData.choices[0].message.content);
+          taskExtractionResult = parsed.task_data;
+          isTaskCreationQuery = true;
+          console.log('[Chat API] Task extraction successful:', taskExtractionResult);
+        }
+      } catch (err) {
+        console.error('[Chat API] Task extraction failed:', err);
+      }
+    }
+    
+    if (routerIntent === 'itinerary') {
+      console.log('[Chat API] Itinerary intent detected by router, extracting date info...');
+      try {
+        const dateExtractionPrompt = `Extract date information from this itinerary query.
+
+User message: "${message}"
+
+Return ONLY a JSON object:
+{
+  "date_info": {
+    "target_date": "YYYY-MM-DD" or null,
+    "is_tomorrow": true/false,
+    "is_today": true/false,
+    "is_specific_date": true/false
+  }
+}`;
+
+        const dateResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a date extraction expert. Return only valid JSON.' },
+              { role: 'user', content: dateExtractionPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 200,
+            response_format: { type: 'json_object' },
+          }),
+        });
+
+        if (dateResponse.ok) {
+          const dateData = await dateResponse.json();
+          const parsed = JSON.parse(dateData.choices[0].message.content);
+          itineraryDateInfo = parsed.date_info || null;
+          isItineraryQuery = true;
+          console.log('[Chat API] Date extraction successful:', itineraryDateInfo);
+        }
+      } catch (err) {
+        console.error('[Chat API] Date extraction failed:', err);
+      }
+    }
+    
+    console.log(`[Chat API] Router intent: ${routerIntent}, Task creation: ${isTaskCreationQuery}, Itinerary: ${isItineraryQuery}`);
+    
+    // Handle task creation queries first
+    if (isTaskCreationQuery && !isItineraryQuery && taskExtractionResult) {
+      try {
+        console.log('[Chat API] ✓ Detected task creation query via LLM, creating task...');
+        let isGapQuestion = false;
+        const gapIntentPrompt = `Determine if this user message is asking about knowledge gaps or what they should study next.
+
+Examples that ARE gap questions:
 - "what gaps are there in my knowledge"
 - "what should I study next"
 - "what am I missing"
@@ -531,381 +1126,406 @@ Return ONLY the JSON object:`;
             console.log(`[Chat API] LLM gap question analysis: is_gap_question=${isGapQuestion}, confidence=${parsed.confidence}`);
           }
         }
-      }
-    } catch (err) {
-      console.error('[Chat API] Error in LLM gap question detection:', err);
-      // Fallback to pattern matching
-      isGapQuestion = /gap|missing|what.*don.*know|what.*need.*learn|what.*should.*study/i.test(message);
-    }
-    let allDomainNodes: Concept[] = [];
-    
-    if (isGapQuestion && usedNodes.length > 0) {
-      // Get the primary domain from search results
-      const primaryDomain = usedNodes[0].domain;
-      console.log(`[Chat API] Gap question detected, fetching all nodes in domain: ${primaryDomain}`);
-      
-      try {
-        // Get all graph data and filter by domain
-        const allGraphResponse = await fetch(`${API_BASE_URL}/concepts/all/graph`);
-        if (allGraphResponse.ok) {
-          const allGraph = await allGraphResponse.json();
-          allDomainNodes = allGraph.nodes.filter((n: Concept) => 
-            n.domain === primaryDomain || n.domain.toLowerCase().includes(primaryDomain.toLowerCase())
-          );
-          console.log(`[Chat API] Found ${allDomainNodes.length} total nodes in ${primaryDomain} domain`);
-        }
       } catch (err) {
-        console.warn(`[Chat API] Failed to fetch all domain nodes:`, err);
+        console.error('[Chat API] Error in LLM gap question detection:', err);
+        // AI-first: No pattern matching fallback - if AI fails, assume not a gap question
+        // This ensures we maintain AI-first principle
+        isGapQuestion = false;
       }
     }
 
-    // Use LLM to detect if user is asking about previous definitions/explanations
-    let isPreviousDefinitionQuestion = false;
-    try {
-      const hasPreviousKeywords = /(?:previously|before|earlier|in the past|have.*you|did.*you)/i.test(message);
-      if (hasPreviousKeywords) {
-        const previousIntentPrompt = `Determine if this user message is asking about what was said/explained/defined PREVIOUSLY in the conversation.
+    // REMOVED: ~900 lines of unreachable classic mode code
+    // This was dead code after the return statement on line 472.
+    // All classic mode functionality has been removed as GraphRAG is always superior.
 
-Return ONLY a JSON object: {"is_previous_definition_question": true/false, "confidence": 0.0-1.0}
-
-Examples of previous definition questions:
-- "how did you previously define X"
-- "what did you say about Y earlier"
-- "how have you explained Z before"
-
-Examples that are NOT:
-- "what is X" (asking for current definition)
-- "explain Y" (asking for explanation now)
-- General questions without "previously/before/earlier"
-
-User message: "${message}"
-
-Return ONLY the JSON object:`;
-
-        const previousResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
-              { role: 'user', content: previousIntentPrompt }
-            ],
-            temperature: 0.2,
-            max_tokens: 100,
-          }),
-        });
-
-        if (previousResponse.ok) {
-          const previousData = await previousResponse.json();
-          const previousText = previousData.choices[0]?.message?.content?.trim() || '';
-          const jsonMatch = previousText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
-            isPreviousDefinitionQuestion = parsed.is_previous_definition_question === true && parsed.confidence > 0.5;
-            console.log(`[Chat API] LLM previous definition analysis: is_previous=${isPreviousDefinitionQuestion}, confidence=${parsed.confidence}`);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[Chat API] Error in LLM previous definition detection:', err);
-      // Fallback to pattern matching
-      isPreviousDefinitionQuestion = /how.*(have|did).*you.*(previously|before|earlier|in the past).*(define|explain|describe|say about)|what.*(have|did).*you.*(previously|before|earlier).*(say|explain|define|describe).*about/i.test(message);
-    }
+    let retrievalData: any = null;
+    let retrievalIntent = 'DEFINITION_OVERVIEW';
+    let trace: any[] = [];
+    let context: any = {};
+    let styleFeedbackResponse: PromiseSettledResult<Response | null>;
     
-    // Step 2.5: Fetch segments for concepts if asking about previous definitions
-    const segmentsByConcept: Record<string, any[]> = {};
-    if (isPreviousDefinitionQuestion && usedNodes.length > 0) {
-      console.log(`[Chat API] Step 2.5: Fetching segments for ${usedNodes.length} concepts`);
-      for (const node of usedNodes) {
+  // Declare variables that may be used in multiple code paths
+  let answer: string = '';
+  let wasTruncated: boolean = false;
+  let suggestedQuestions: string[] = [];
+  let suggestedActions: SuggestedAction[] = [];
+  let actionsMatch: RegExpMatchArray | null = null;
+  let followUpMatch: RegExpMatchArray | null = null;
+  let answerId: string = '';
+  const usedNodes: Concept[] = [];
+  let duration: number = 0;
+  let sections: Array<{ id: string; heading?: string; text: string }> = [];
+  let answer_sections: AnswerSection[] = [];
+  let recentSummaries: any[] = [];
+  let activeTopics: any[] = [];
+    
+    // Only fetch retrieval if router says we need it
+    const retrievalStartTime = Date.now();
+    let retrievalLatency = 0;
+    if (routingResult.needsRetrieval) {
+      // Build request body for intent-based retrieval
+      const requestBody: any = {
+        message,
+        mode: 'graphrag',
+        limit: 5,
+        graph_id: defaultGraphId,
+        branch_id: defaultBranchId,
+        detail_level: 'summary', // Request summary mode for progressive disclosure
+        trail_id,
+        focus_concept_id,
+        focus_quote_id,
+        focus_page_url,
+      };
+      
+      // PARALLEL: Fetch retrieval, style feedback, AND lecture mentions at the same time
+      // Add 3-second timeout to retrieval to prevent hanging (reduced from 5s for faster UX)
+      console.log('[Chat API] Fetching retrieval context, style feedback, and lecture mentions in parallel (3s timeout)...');
+      const retrievalController = new AbortController();
+      const retrievalTimeout = setTimeout(() => {
+        retrievalController.abort();
+      }, 3000); // 3 second timeout - fail fast if retrieval is slow
+      
+      // Build parallel fetch array
+      const parallelFetches: Promise<any>[] = [
+        fetch(`${API_BASE_URL}/ai/retrieve`, {
+          method: 'POST',
+          headers: getBackendHeaders(),
+          body: JSON.stringify(requestBody),
+          signal: retrievalController.signal,
+        }).finally(() => clearTimeout(retrievalTimeout)),
+        fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null), // Don't fail if this fails
+        fetch(`${API_BASE_URL}/preferences/user-profile`).catch(() => null), // Fetch user profile for context
+        fetch(`${API_BASE_URL}/preferences/conversation-summaries?limit=5`).catch(() => null), // Fetch recent summaries
+        fetch(`${API_BASE_URL}/preferences/learning-topics?limit=10`).catch(() => null), // Fetch active learning topics
+      ];
+      
+      const [retrievalResponse, styleFeedbackResponseResult, userProfileResponse, summariesResponse, topicsResponse] = await Promise.allSettled(parallelFetches);
+      
+      // Store style feedback response for later processing
+      styleFeedbackResponse = styleFeedbackResponseResult;
+      
+      // Process user profile response
+      if (userProfileResponse.status === 'fulfilled' && userProfileResponse.value) {
         try {
-          const segmentsResponse = await fetch(
-            `${API_BASE_URL}/lectures/segments/by-concept/${encodeURIComponent(node.name)}`
-          );
-          if (segmentsResponse.ok) {
-            const segments = await segmentsResponse.json();
-            if (segments.length > 0) {
-              segmentsByConcept[node.name] = segments;
-              console.log(`[Chat API] Found ${segments.length} segment(s) for "${node.name}"`);
-            }
+          const profileResult = userProfileResponse.value;
+          if (profileResult.ok) {
+            userProfile = await profileResult.json();
+            console.log('[Chat API] ✓ Loaded user profile for context');
           }
         } catch (err) {
-          console.warn(`[Chat API] Failed to fetch segments for "${node.name}":`, err);
+          console.warn('[Chat API] Failed to load user profile:', err);
+        }
+      }
+      
+      // Process conversation summaries for long-term context
+      if (summariesResponse.status === 'fulfilled' && summariesResponse.value) {
+        try {
+          const summariesResult = summariesResponse.value;
+          if (summariesResult.ok) {
+            recentSummaries = await summariesResult.json();
+            console.log(`[Chat API] ✓ Loaded ${recentSummaries.length} recent conversation summaries`);
+          }
+        } catch (err) {
+          console.warn('[Chat API] Failed to load conversation summaries:', err);
+        }
+      }
+      
+      // Process learning topics for long-term context
+      if (topicsResponse.status === 'fulfilled' && topicsResponse.value) {
+        try {
+          const topicsResult = topicsResponse.value;
+          if (topicsResult.ok) {
+            activeTopics = await topicsResult.json();
+            console.log(`[Chat API] ✓ Loaded ${activeTopics.length} active learning topics`);
+          }
+        } catch (err) {
+          console.warn('[Chat API] Failed to load learning topics:', err);
+        }
+      }
+      
+      // Store style feedback response for later processing (already stored above)
+
+      // Process retrieval response
+      if (retrievalResponse.status === 'fulfilled' && retrievalResponse.value) {
+        const retrievalResult = retrievalResponse.value;
+        if (retrievalResult.ok) {
+          try {
+            retrievalData = await retrievalResult.json();
+            retrievalIntent = retrievalData.intent || 'DEFINITION_OVERVIEW';
+            trace = retrievalData.trace || [];
+            context = retrievalData.context || {};
+            console.log(`[Chat API] Intent: ${retrievalIntent}, Trace steps: ${trace.length}`);
+          } catch (err) {
+            console.warn('[Chat API] Failed to parse retrieval response:', err);
+          }
+        } else {
+          const errorText = await retrievalResult.text().catch(() => 'Unknown error');
+          console.warn(`[Chat API] Retrieval failed: ${retrievalResult.status} ${errorText}`);
+        }
+      } else if (retrievalResponse.status === 'rejected') {
+        const reason = retrievalResponse.reason;
+        if (reason?.name === 'AbortError') {
+          console.warn('[Chat API] Retrieval timed out after 3s, continuing without context');
+          // Set empty context so the LLM can still respond
+          context = {};
+        } else {
+          console.warn(`[Chat API] Retrieval failed: ${reason?.message || 'Unknown error'}`);
+          // Set empty context so the LLM can still respond
+          context = {};
+        }
+      }
+    } else {
+      console.log('[Chat API] Simple conversational query detected, skipping retrieval');
+      // Fetch style feedback and user profile separately for conversational queries
+      const styleFeedbackAndProfileResults = await Promise.allSettled([
+        fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null),
+        fetch(`${API_BASE_URL}/preferences/user-profile`).catch(() => null)
+      ]);
+      styleFeedbackResponse = styleFeedbackAndProfileResults[0];
+      
+      // Process user profile response
+      const userProfileResultForSimple = styleFeedbackAndProfileResults[1];
+      if (userProfileResultForSimple.status === 'fulfilled' && userProfileResultForSimple.value) {
+        try {
+          const profileResult = userProfileResultForSimple.value;
+          if (profileResult && profileResult.ok) {
+            userProfile = await profileResult.json();
+            console.log('[Chat API] ✓ Loaded user profile for context');
+          }
+        } catch (err) {
+          console.warn('[Chat API] Failed to load user profile:', err);
         }
       }
     }
+    retrievalLatency = Date.now() - retrievalStartTime;
+    
+    // Build context text from structured context (empty if skipped retrieval)
+    const contextResult = await buildContextTextFromStructured(context, retrievalIntent, message, apiKey);
+    const contextText = contextResult.text;
+    const printedClaims = contextResult.printedClaims;
+    const printedQuotes = contextResult.printedQuotes;
+    const printedSources = contextResult.printedSources;
 
-    // Step 2: Get neighbors for context
-    console.log(`[Chat API] Step 2: Fetching neighbors for ${usedNodes.length} nodes`);
-    const nodeIds = usedNodes.map(n => n.node_id);
-    const neighborMap: Record<string, Concept[]> = {};
-
-    for (const nodeId of nodeIds) {
+    const lectureContext = '';
+    
+    // Process style feedback response (already fetched in parallel)
+    // Process style feedback (only once to avoid "Body is unusable" error)
+    // styleFeedbackResponse is set in both code paths above
+    if (styleFeedbackResponse && styleFeedbackResponse.status === 'fulfilled' && styleFeedbackResponse.value) {
       try {
-        const neighborsResponse = await fetch(`${API_BASE_URL}/concepts/${nodeId}/neighbors`);
-        if (neighborsResponse.ok) {
-          neighborMap[nodeId] = await neighborsResponse.json();
+        const response = styleFeedbackResponse.value;
+        if (response && response.ok) {
+          const styleFeedbacks = await response.json();
+          if (styleFeedbacks && styleFeedbacks.length > 0) {
+            styleFeedbackExamples = styleFeedbacks.map((fb: any, idx: number) => {
+              const original = (fb.original_response || '').substring(0, 200);
+              const feedback = (fb.feedback_notes || '').substring(0, 200);
+              const rewritten = fb.user_rewritten_version ? (fb.user_rewritten_version || '').substring(0, 200) : null;
+              const testLabel = fb.test_label ? `${fb.test_label}: ` : '';
+              let example = `${idx + 1}. ${testLabel}ORIGINAL: ${original}...\n   ${testLabel}FEEDBACK: ${feedback}...`;
+              if (rewritten) {
+                example += `\n   ${testLabel}REWRITTEN: ${rewritten}...`;
+              }
+              return example;
+            }).join('\n\n');
+            console.log(`[Chat API] ✓ Found ${styleFeedbacks.length} style feedback example(s) - will be included in GraphRAG prompt`);
+          }
         }
       } catch (err) {
-        console.warn(`[Chat API] Failed to fetch neighbors for ${nodeId}:`, err);
+        console.warn('[Chat API] Failed to process style feedback:', err);
       }
     }
-
-    // Step 3: Build context string
-    const contextParts: string[] = [];
     
-    // For gap questions, include all domain nodes
-    if (isGapQuestion && allDomainNodes.length > 0) {
-      contextParts.push(`ALL NODES IN ${usedNodes[0].domain.toUpperCase()} DOMAIN:`);
-      const domainNodeNames = allDomainNodes.map(n => n.name).join(', ');
-      contextParts.push(`Existing concepts: ${domainNodeNames}`);
-      contextParts.push(`Total: ${allDomainNodes.length} concepts`);
-      contextParts.push('');
+    // Build long-term memory context from summaries and topics
+    let longTermContext = '';
+    if (recentSummaries && recentSummaries.length > 0) {
+      const summaryTexts = recentSummaries.slice(0, 3).map((s: any) => 
+        `Previous: "${s.question}" → Topics: ${(s.topics || []).join(', ')}`
+      ).join('\n');
+      longTermContext += `## Recent Conversation History\n${summaryTexts}\n\n`;
+    }
+    if (activeTopics && activeTopics.length > 0) {
+      const topicNames = activeTopics.slice(0, 5).map((t: any) => t.name).join(', ');
+      longTermContext += `## Active Learning Topics\nYou've been learning about: ${topicNames}\n\n`;
     }
     
-    // Add segments if asking about previous definitions
-    if (isPreviousDefinitionQuestion && Object.keys(segmentsByConcept).length > 0) {
-      contextParts.push('HOW YOU\'VE EXPLAINED THESE CONCEPTS BEFORE (FROM YOUR LECTURES):');
-      for (const node of usedNodes) {
-        const segments = segmentsByConcept[node.name];
-        if (segments && segments.length > 0) {
-          contextParts.push(`\n${node.name}:`);
-          segments.forEach((seg: any, idx: number) => {
-            const segInfo = [
-              `  Explanation ${idx + 1} (from lecture ${seg.lecture_id}):`,
-              `  ${seg.text}`,
-            ];
-            if (seg.summary) {
-              segInfo.push(`  Summary: ${seg.summary}`);
-            }
-            if (seg.analogies && seg.analogies.length > 0) {
-              const analogyLabels = seg.analogies.map((a: any) => `"${a.label}"`).join(', ');
-              segInfo.push(`  Analogies used: ${analogyLabels}`);
-            }
-            if (seg.style_tags && seg.style_tags.length > 0) {
-              segInfo.push(`  Style: ${seg.style_tags.join(', ')}`);
-            }
-            contextParts.push(segInfo.join('\n'));
+    // Build combined context text (Web search + GraphRAG context + lecture mentions + long-term memory)
+    let combinedContextText = '';
+    
+    // Prepend web search results if available (most current/important)
+    if (webSearchContext) {
+      combinedContextText = webSearchContext;
+    }
+    
+    // Add GraphRAG context
+    if (contextText) {
+      combinedContextText += (combinedContextText ? '\n\n' : '') + contextText;
+    }
+    
+    // Add lecture context
+    if (lectureContext) {
+      combinedContextText += `\n\n${lectureContext}`;
+    }
+    
+    // Prepend long-term memory context
+    if (longTermContext) {
+      combinedContextText = longTermContext + (combinedContextText ? '\n\n' : '') + combinedContextText;
+    }
+    
+    console.log(`[Chat API] Context retrieved (${combinedContextText.length} chars)`);
+    
+    // Step 7: Dynamic Context Manager - Optimize context using AI importance scoring
+    // Estimate max tokens for context (leave room for system prompt, user message, and response)
+    // Typical: 128k context window, ~2k for system prompt, ~1k for user message, ~4k for response = ~121k for context
+    // But we'll be more conservative: use ~100k tokens max for context
+    const maxContextTokens = 100000; // Conservative limit
+    const estimatedContextTokens = Math.ceil(combinedContextText.length / 4); // Rough estimate: 1 token ≈ 4 chars
+    
+    if (estimatedContextTokens > maxContextTokens * 0.8) { // If using >80% of limit, optimize
+      console.log(`[Chat API] Context is large (${estimatedContextTokens} tokens), optimizing with AI...`);
+      try {
+        // Convert context into chunks for optimization
+        const contextChunks: ContextChunk[] = [];
+        
+        // Extract session context chunks
+        if (context.session_context) {
+          contextChunks.push({
+            content: JSON.stringify(context.session_context),
+            type: 'session',
+            id: context.session_context.trail_id,
           });
         }
-      }
-      contextParts.push('');
-    }
-    
-    // Add the relevant nodes from search
-    contextParts.push('RELEVANT NODES FROM YOUR QUESTION:');
-    for (const node of usedNodes) {
-      const nodeInfo = [
-        `Node: ${node.name}`,
-        `Type: ${node.type}`,
-        `Domain: ${node.domain}`,
-      ];
-      if (node.description) {
-        nodeInfo.push(`Description: ${node.description}`);
-      }
-      if (node.tags && node.tags.length > 0) {
-        nodeInfo.push(`Tags: ${node.tags.join(', ')}`);
-      }
-      const neighbors = neighborMap[node.node_id] || [];
-      if (neighbors.length > 0) {
-        const neighborNames = neighbors.map(n => n.name).join(', ');
-        nodeInfo.push(`Connected to: ${neighborNames}`);
-      }
-      contextParts.push(nodeInfo.join('\n'));
-    }
-
-    const contextString = contextParts.join('\n\n');
-    console.log(`[Chat API] Step 3: Built context (${contextString.length} chars)`);
-
-    // Step 3.5: Fetch personalization data from backend
-    console.log('[Chat API] Step 3.5: Fetching personalization data in parallel...');
-    let styleProfile: any = null;
-    let teachingStyleProfile: any = null;
-    let feedbackSummary: any = null;
-    let focusAreas: any[] = [];
-    let userProfile: any = null;
-    let exampleAnswers: Array<{ question: string; answer: string }> = [];
-    let styleFeedbackExamples: string = '';
-    
-    // Fetch all preferences in parallel (non-blocking - failures are OK)
-    const [
-      styleResponse,
-      teachingStyleResponse,
-      feedbackResponse,
-      focusResponse,
-      profileResponse,
-      examplesResponse,
-      styleFeedbackResponse,
-    ] = await Promise.allSettled([
-      fetch(`${API_BASE_URL}/preferences/response-style`).catch(() => null),
-      fetch(`${API_BASE_URL}/teaching-style`).catch(() => null),
-      fetch(`${API_BASE_URL}/feedback/summary`).catch(() => null),
-      fetch(`${API_BASE_URL}/preferences/focus-areas`).catch(() => null),
-      fetch(`${API_BASE_URL}/preferences/user-profile`).catch(() => null),
-      fetch(`${API_BASE_URL}/answers/examples?limit=5`).catch(() => null),
-      fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null),
-    ]);
-    
-    // Process responses (non-blocking, failures are OK)
-    if (styleResponse.status === 'fulfilled' && styleResponse.value?.ok) {
-      styleProfile = await styleResponse.value.json();
-      console.log('[Chat API] Loaded response style profile');
-    }
-    
-    if (teachingStyleResponse.status === 'fulfilled' && teachingStyleResponse.value?.ok) {
-      teachingStyleProfile = await teachingStyleResponse.value.json();
-      console.log('[Chat API] Loaded teaching style profile');
-    }
-    
-    if (feedbackResponse.status === 'fulfilled' && feedbackResponse.value?.ok) {
-      feedbackSummary = await feedbackResponse.value.json();
-      console.log('[Chat API] Loaded feedback summary');
-    }
-    
-    if (focusResponse.status === 'fulfilled' && focusResponse.value?.ok) {
-      focusAreas = await focusResponse.value.json();
-      const activeFocusAreas = focusAreas.filter((fa: any) => fa.active);
-      console.log(`[Chat API] Loaded ${activeFocusAreas.length} active focus areas`);
-    }
-    
-    if (profileResponse.status === 'fulfilled' && profileResponse.value?.ok) {
-      userProfile = await profileResponse.value.json();
-      console.log('[Chat API] Loaded user profile');
-    }
-    
-    if (examplesResponse.status === 'fulfilled' && examplesResponse.value?.ok) {
-      exampleAnswers = await examplesResponse.value.json();
-      console.log(`[Chat API] Found ${exampleAnswers.length} example answers`);
-    }
-    
-    if (styleFeedbackResponse.status === 'fulfilled' && styleFeedbackResponse.value?.ok) {
-      try {
-        const styleFeedbacks = await styleFeedbackResponse.value.json();
-        if (styleFeedbacks && styleFeedbacks.length > 0) {
-          styleFeedbackExamples = styleFeedbacks.map((fb: any, idx: number) => {
-            const original = (fb.original_response || '').substring(0, 200);
-            const feedback = (fb.feedback_notes || '').substring(0, 200);
-            const rewritten = fb.user_rewritten_version ? (fb.user_rewritten_version || '').substring(0, 200) : null;
-            const testLabel = fb.test_label ? `${fb.test_label}: ` : '';
-            let example = `${idx + 1}. ${testLabel}ORIGINAL: ${original}...\n   ${testLabel}FEEDBACK: ${feedback}...`;
-            if (rewritten) {
-              example += `\n   ${testLabel}REWRITTEN: ${rewritten}...`;
-            }
-            return example;
-          }).join('\n\n');
-          console.log(`[Chat API] ✓ Found ${styleFeedbacks.length} style feedback example(s) - will be included in prompt`);
+        
+        // Extract quote chunks
+        const allQuotes = [
+          ...(context.quotes || []),
+          ...(context.focus_context?.quotes || []),
+        ];
+        allQuotes.forEach((q: any) => {
+          contextChunks.push({
+            content: q.text || q.content || q.quote_text || '',
+            type: 'quote',
+            id: q.quote_id || q.id,
+          });
+        });
+        
+        // Extract claim chunks
+        const allClaims = [
+          ...(context.claims || []),
+          ...(context.focus_context?.claims || []),
+          ...(context.top_claims || []),
+        ];
+        allClaims.forEach((c: any) => {
+          contextChunks.push({
+            content: c.text || c.content || c.claim_text || '',
+            type: 'claim',
+            id: c.claim_id || c.id,
+          });
+        });
+        
+        // Extract concept chunks
+        const allConcepts = [
+          ...(context.concepts || []),
+          ...(context.focus_context?.concepts || []),
+        ];
+        allConcepts.forEach((concept: any) => {
+          contextChunks.push({
+            content: concept.description || concept.name || '',
+            type: 'concept',
+            id: concept.concept_id || concept.node_id || concept.id,
+          });
+        });
+        
+        // Now optimize using AI importance scoring
+        // TODO: Implement optimizeContextWithAI function or remove this optimization step
+        if (contextChunks.length > 0) {
+          console.log(`[Chat API] Context optimization skipped - optimizeContextWithAI not implemented`);
+          // For now, just use all chunks without optimization
+          combinedContextText = contextChunks.map(chunk => chunk.content).join('\n\n');
         }
       } catch (err) {
-        console.warn('[Chat API] Failed to process style feedback examples:', err);
+        console.warn('[Chat API] Context optimization failed, using original context:', err);
       }
     }
-
-    // Step 4: Call OpenAI Chat Completions (DRAFT ANSWER)
-    console.log('[Chat API] Step 4: Calling OpenAI API for draft answer...');
-    const openaiStartTime = Date.now();
     
-    // Build base system prompt (simpler for draft)
-    const baseSystemPrompt = isGapQuestion
-      ? `You are Brain Web, a learning companion that answers using ONLY the graph context provided.
+    // If context is empty or very minimal, add a note to the prompt
+    const contextNote = combinedContextText.trim().length === 0 
+      ? "\n\nNOTE: No GraphRAG context was found for this query. You can still respond naturally using your general knowledge."
+      : "";
 
-IMPORTANT: This is a question about GAPS in knowledge. Your task is to:
-1. Analyze what concepts EXIST in the domain (from "ALL NODES IN [DOMAIN] DOMAIN")
-2. Identify what is MISSING or UNDERDEVELOPED based on standard knowledge in that field
-3. Be specific about gaps - don't just list connected concepts, identify what SHOULD be there but ISN'T
-4. Focus on important missing concepts, not trivial ones
-5. Consider what a well-rounded knowledge of this domain should include
-6. Be honest - if the domain is well-covered, say so. Don't invent gaps.
+    // Style feedback is already processed above - don't process again to avoid "Body is unusable" error
+    
+    // Build system prompt for GraphRAG
+    // Build base system prompt for GraphRAG
+    const strictnessNote = evidence_strictness === 'high' 
+      ? '\n\nCRITICAL CITATION REQUIREMENTS (evidence_strictness=high):\n- Any factual assertion MUST include at least one citation token: [Quote: ...] OR [Claim: ...] OR [Source: ...]\n- If evidence is insufficient, say "Not enough evidence in your graph yet" and ask what to capture next.\n- Do not use general world knowledge unless explicitly labeled "General knowledge (uncited)" and only for background definitions.\n- Every sentence with verbs like "is/was/causes/leads to/results in/means" must cite evidence.\n'
+      : evidence_strictness === 'medium'
+      ? '\n\nCITATION GUIDELINES (evidence_strictness=medium):\n- Prefer citing evidence when available: [Quote: ...], [Claim: ...], or [Source: ...]\n- You may use general knowledge but prefer graph evidence when present.\n'
+      : '';
+    
+    const baseSystemPromptGraphrag = `You are Brain Web, a teaching assistant and conversational agent.
 
-FORMATTING REQUIREMENTS:
-- Use clear paragraphs separated by blank lines
-- Use bullet points (- or •) for lists
-- Use numbered lists for sequences
-- Break up long paragraphs into shorter, readable chunks
-- Use line breaks to separate major sections
-- Write in a clear, academic but accessible style
+CONVERSATIONAL CONTEXT:
+- Maintain context from conversation history when relevant
+- When the user asks "How does this relate to...", "What about...", or uses pronouns like "this", "that", "it" - identify what they're referring to from previous messages
+- Connect follow-up questions to topics discussed earlier ONLY when the connection is clear and relevant
+- Don't force connections to previous topics if the current question is unrelated
+- Remember details the user has shared about themselves, their learning goals, and their background
+- If the user asks about something mentioned earlier, reference that earlier discussion
 
-Format your response as:
-ANSWER: <your well-formatted answer with proper line breaks and structure>
+When GraphRAG context is provided:
+- Use the GraphRAG context to answer the question
+- Cite specific claims and sources when relevant using citation tokens: [Quote: QUOTE_ID], [Claim: CLAIM_ID], [Source: URL]
+- Reference communities when discussing related concepts
+- Be specific and traceable to the provided evidence
 
-SUGGESTED_ACTIONS: [
-  {"type": "link", "source": "Concept A", "target": "Concept B", "label": "link Concept A to Concept B"},
-  {"type": "add", "concept": "New Concept Name", "domain": "Domain Name", "label": "add New Concept Name to Domain Name"}
-]
+When Web Search results are provided:
+- Use the web search results to answer questions about current information
+- Cite web sources naturally: "According to [source]..." or mention the source
+- Web search results contain the most current/up-to-date information
+- Prioritize web search results over training data for current events, recent news, current leadership, etc.
 
-FOLLOW_UP_QUESTIONS: ['question1', 'question2', 'question3']`
-      : isPreviousDefinitionQuestion
-      ? `You are Brain Web, a teaching assistant that answers questions about how the user has previously explained concepts.
+When GraphRAG context is empty or minimal:
+- Answer questions directly using your general knowledge
+- You do NOT need citations for general knowledge questions
+- Be helpful and conversational
+- Don't require specific graph context to respond
+- Answer factual questions about real-world entities (companies, people, events, etc.) using your training data
+- Only say "I don't have information" if you genuinely don't know the answer, not because there's no graph context
+- If web search results are provided, use those instead of training data for current information
 
-IMPORTANT: This question is asking "How have I explained this before?" or "What have I said about this previously?"
+CITATION TOKEN RULES (ONLY when GraphRAG context is provided):
+- When GraphRAG context is available, factual assertions about graph content should include citation tokens: [Quote: ...] OR [Claim: ...] OR [Source: ...]
+- When GraphRAG context is empty, answer using general knowledge WITHOUT citations
+- If evidence is insufficient in the graph, say "Not enough evidence in your graph yet" and ask for what to capture next
+- Use exact IDs from the context (quote_id, claim_id, source URLs)
+- You may ONLY cite evidence IDs/URLs that appear in the Allowed Evidence IDs list (if provided)${strictnessNote}
+
+CRITICAL: Answer General Knowledge Questions Directly
+- When asked about general knowledge (companies, people, historical events, etc.), answer directly using your training data
+- Be SPECIFIC and FACTUAL: mention actual names, dates, events, and concrete details
+- DO NOT say "I don't have information" just because there's no graph context - use your general knowledge instead
+- Only admit uncertainty if you genuinely don't know the answer in your training data
+- Example of GOOD response: "The CEO of Tata Mobile (now Tata Teleservices) is [actual name]. The company was merged with Bharti Airtel in 2019."
+- Example of BAD response: "I don't have specific information about the CEO of Tata Mobile" (when you could answer from general knowledge)
+
+The context provided includes (in priority order):
+- Web Search Results (if provided): Current information from the internet with source links
+- Session Context (trail summary + focus context)
+- Supporting Quotes with IDs: [Quote: QUOTE_ID]
+- Supporting Claims with IDs: [Claim: CLAIM_ID]
+- Relevant communities of related concepts
+- Relevant concepts and their relationships
 
 Your task:
-1. Use the "HOW YOU'VE EXPLAINED THESE CONCEPTS BEFORE" section FIRST - this contains actual segments from the user's lectures
-2. Reference specific explanations, analogies, and teaching styles the user has used
-3. Show how their explanations evolved or varied across different lectures
-4. Highlight any analogies they used (these are in the segments)
-5. If they asked about multiple concepts, compare how they explained each one
-6. Be specific: reference lecture IDs, segment numbers, and actual text when relevant
-7. If no segments exist, fall back to the concept description
-
-The user explains things in a grounded, intuitive way:
-- They build from first principles and connect ideas to real-world workflows
-- They use concrete examples (e.g., npm run dev, localhost:3000, ports 22/80)
-- They explain dependencies between concepts (e.g., IDE → compiler → runtime → server → cloud)
-- They avoid dramatic or exaggerated language
-- They favor clear, direct sentences over academic jargon
-- They sometimes use analogies but keep them simple and practical
-
-FORMATTING REQUIREMENTS:
-- Use clear paragraphs separated by blank lines
-- Use bullet points (- or •) for lists
-- Break up long paragraphs into shorter, readable chunks
-- Use line breaks to separate major sections
-- When referencing segments, be specific: "In lecture X, you explained..."
-
-Format your response as:
-ANSWER: <your well-formatted answer referencing specific segments and explanations>
-
-SUGGESTED_ACTIONS: [
-  {"type": "link", "source": "Concept A", "target": "Concept B", "label": "link Concept A to Concept B"}
-]
-
-FOLLOW_UP_QUESTIONS: ['question1', 'question2', 'question3']`
-      : `You are Brain Web, a teaching assistant that speaks in the user's own style.
-
-The user explains things in a grounded, intuitive way:
-
-- They build from first principles and connect ideas to real-world workflows.
-- They use concrete examples (e.g., npm run dev, localhost:3000, ports 22/80).
-- They explain dependencies between concepts (e.g., IDE → compiler → runtime → server → cloud).
-- They avoid dramatic or exaggerated language.
-- They favor clear, direct sentences over academic jargon.
-- They sometimes use analogies but keep them simple and practical.
-- They are direct and conversational - no unnecessary transitions or formal introductions.
-- They integrate analogies naturally into the flow, not as separate paragraphs.
-- They use one expanded example rather than lists of examples.
-- They avoid ambiguous technical terms or explain them simply.
-
-You are given (1) a question, and (2) a set of concepts and relationships from the user's knowledge graph.
-
-Your job:
-
-1. Use the graph context FIRST. Prefer the user's existing concepts and descriptions over generic textbook definitions.
-
-2. Answer in the user's style:
-   - Start directly with what the concept is. No formal introductions.
-   - Show how it connects to related concepts in the graph.
-   - Point out prerequisites when helpful.
-   - Use simple examples drawn from software engineering, web dev, data science, or everyday workflows.
-   - Keep explanations focused and coherent. Be conversational, not fluffy.
-   - Integrate analogies naturally - weave them in, don't break paragraphs.
-   - Use one concrete example and expand it, don't list many.
-
-3. If something is not in the graph, you may use your own knowledge, but still explain it in this same style and, when possible, connect it to nearby concepts.
-
-4. When you mention a concept that exists in the graph, try to keep the name exactly as it appears in the graph so the frontend can highlight it. Do NOT use **bold** markdown formatting for concept names - mention them naturally without highlighting.
+1. If Web Search results are provided, use them FIRST for current information - they are the most up-to-date
+2. If GraphRAG context is available, use it to answer the question and cite sources
+3. If GraphRAG context is empty or minimal, answer using your general knowledge directly - no citations needed
+4. For general knowledge questions (companies, people, events), answer factually from your training data UNLESS web search results are provided
+5. Only cite sources when GraphRAG context is provided - general knowledge and web search results don't need citation tokens
+6. Reference communities when discussing related concepts (if available) - mention them naturally without using **bold** markdown formatting
+7. Connect to previous conversation topics ONLY when relevant - don't force connections
+8. Be conversational and helpful - answer questions directly rather than deflecting
 
 FORMATTING REQUIREMENTS:
 - Use clear paragraphs separated by blank lines
@@ -916,14 +1536,10 @@ FORMATTING REQUIREMENTS:
 
 Format your response as:
 ANSWER: <your well-formatted answer>
+SUGGESTED_ACTIONS: [optional array of actions]
+FOLLOW_UP_QUESTIONS: [optional array of questions]`;
 
-SUGGESTED_ACTIONS: [
-  {"type": "link", "source": "Concept A", "target": "Concept B", "label": "link Concept A to Concept B"}
-]
-
-FOLLOW_UP_QUESTIONS: ['question1', 'question2', 'question3']`;
-    
-    // Build personalized system prompt by layering personalization features
+    // Add personalization layers
     const additionalLayers: string[] = [];
     
     // Layer 0: Teaching Style Profile (highest priority - learned from lectures)
@@ -1028,55 +1644,61 @@ Use these examples to refine your responses. Pay attention to what the user like
     
     // Use PromptBuilder to compose system prompt with response preferences
     const { systemPrompt, maxTokens } = buildPrompt(
-      baseSystemPrompt,
+      baseSystemPromptGraphrag,
       finalResponsePrefs,
       finalVoiceId,
       additionalLayers
     );
     
-    // Build messages with conversation history
-    const classicMessages = buildMessagesWithHistory(systemPrompt, message, contextString, chatHistory);
+    // Build conversation summary for context
+    const conversationSummary = chatHistory ? buildConversationSummary(chatHistory) : '';
     
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+    // Build messages with conversation history
+    const messages = buildMessagesWithHistory(systemPrompt, message, combinedContextText + contextNote, chatHistory, conversationSummary, userProfile, ui_context);
+    
+    // Call OpenAI Chat Completions API
+    console.log('[Chat API] Calling OpenAI API for GraphRAG response...');
+    const openaiStartTime = Date.now();
+    const openaiResponseGraphrag = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        messages: classicMessages,
+        messages,
         temperature: 0.7,
         max_tokens: maxTokens,
       }),
     });
+
+    if (!openaiResponseGraphrag.ok) {
+      const errorData = await openaiResponseGraphrag.json().catch(() => ({}));
+      console.error(`[Chat API] OpenAI API error: ${openaiResponseGraphrag.status}`, errorData);
+      throw new Error(`OpenAI API error: ${openaiResponseGraphrag.statusText} - ${JSON.stringify(errorData)}`);
+    }
+
+    const openaiData = await openaiResponseGraphrag.json();
+    const responseText = openaiData.choices[0]?.message?.content || '';
+    const finishReason = openaiData.choices[0]?.finish_reason;
+    wasTruncated = finishReason === 'length';
+    
+    if (wasTruncated) {
+      console.warn(`[Chat API] Response was truncated by token limit (finish_reason: ${finishReason})`);
+    }
+    
     const openaiTime = Date.now() - openaiStartTime;
     console.log(`[Chat API] OpenAI API call took ${openaiTime}ms`);
 
-    if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.json().catch(() => ({}));
-      console.error(`[Chat API] OpenAI API error: ${openaiResponse.status}`, errorData);
-      throw new Error(`OpenAI API error: ${openaiResponse.statusText} - ${JSON.stringify(errorData)}`);
-    }
-
-    const openaiData = await openaiResponse.json();
-    const draftResponseText = openaiData.choices[0]?.message?.content || '';
-    const finishReason = openaiData.choices[0]?.finish_reason;
-    const wasTruncated = finishReason === 'length';
-    
-    if (wasTruncated) {
-      console.warn(`[Chat API] Step 5: Response was truncated by token limit (finish_reason: ${finishReason})`);
-    }
-    console.log(`[Chat API] Step 5: Received draft response from OpenAI (${draftResponseText.length} chars)`);
-
-    // Step 5: Parse draft response
-    let draftAnswer = draftResponseText;
-    let suggestedQuestions: string[] = [];
-    let suggestedActions: SuggestedAction[] = [];
+    // Parse response
+    answer = responseText;
+    suggestedQuestions = [];
+    suggestedActions = [];
 
     // Try to extract SUGGESTED_ACTIONS first (before removing other sections)
     // NOTE: avoid the `/s` (dotAll) flag for broader TS targets
-    const actionsMatch = draftResponseText.match(/SUGGESTED_ACTIONS:\s*\[([\s\S]*?)\]/);
+    actionsMatch = responseText.match(/SUGGESTED_ACTIONS:\s*\[([\s\S]*?)\]/);
     if (actionsMatch) {
       try {
         const actionsStr = actionsMatch[1];
@@ -1104,12 +1726,12 @@ Use these examples to refine your responses. Pay attention to what the user like
       } catch (err) {
         console.warn('[Chat API] Failed to parse suggested actions:', err);
       }
-      // Remove the SUGGESTED_ACTIONS section from draft answer
-      draftAnswer = draftAnswer.split('SUGGESTED_ACTIONS:')[0].trim();
+      // Remove the SUGGESTED_ACTIONS section from answer
+      answer = answer.split('SUGGESTED_ACTIONS:')[0].trim();
     }
 
     // Try to extract FOLLOW_UP_QUESTIONS
-    const followUpMatch = draftAnswer.match(/FOLLOW_UP_QUESTIONS:\s*\[([\s\S]*?)\]/);
+    followUpMatch = answer.match(/FOLLOW_UP_QUESTIONS:\s*\[([\s\S]*?)\]/);
     if (followUpMatch) {
       try {
         const questionsStr = followUpMatch[1];
@@ -1123,106 +1745,16 @@ Use these examples to refine your responses. Pay attention to what the user like
       } catch (err) {
         console.warn('[Chat API] Failed to parse follow-up questions:', err);
       }
-      // Remove the FOLLOW_UP_QUESTIONS section from draft answer
-      draftAnswer = draftAnswer.split('FOLLOW_UP_QUESTIONS:')[0].trim();
+      // Remove the FOLLOW_UP_QUESTIONS section from answer
+      answer = answer.split('FOLLOW_UP_QUESTIONS:')[0].trim();
     }
 
     // Remove ANSWER: prefix if present
-    if (draftAnswer.startsWith('ANSWER:')) {
-      draftAnswer = draftAnswer.substring(7).trim();
+    if (answer.startsWith('ANSWER:')) {
+      answer = answer.substring(7).trim();
     }
     
-    // Format draft answer with proper line breaks
-    draftAnswer = draftAnswer
-      .replace(/\n\n+/g, '\n\n')
-      .replace(/^[-•]\s+/gm, '• ')
-      .trim();
-
-    // Step 5.5: Apply style rewrite if we have examples or style profiles
-    let answer = draftAnswer;
-    let rewriteApplied = false;
-    const examplesUsed: Array<{ question: string; snippet: string }> = [];
-    
-    if (exampleAnswers.length > 0 || teachingStyleProfile || (styleProfile && styleProfile.profile)) {
-      console.log('[Chat API] Step 5.5: Applying style rewrite...');
-      try {
-        // Build rewrite prompt with examples
-        let rewritePrompt = `You are rewriting an answer to match the user's personal style.
-
-ORIGINAL DRAFT ANSWER:
-${draftAnswer}
-
-TASK: Rewrite this answer to match the user's style more closely. Keep all the factual content, but adjust the tone, structure, and style to match the examples below.
-
-`;
-        
-        if (exampleAnswers.length > 0) {
-          rewritePrompt += `EXAMPLES OF THE USER'S PREFERRED STYLE:\n\n`;
-          exampleAnswers.forEach((ex, idx) => {
-            const snippet = ex.answer.substring(0, 200);
-            examplesUsed.push({
-              question: ex.question,
-              snippet: snippet + (ex.answer.length > 200 ? '...' : ''),
-            });
-            rewritePrompt += `Example ${idx + 1}:\nQuestion: ${ex.question}\nAnswer: ${ex.answer}\n\n`;
-          });
-        }
-        
-        if (teachingStyleProfile) {
-          rewritePrompt += `\nTEACHING STYLE PROFILE:\n${JSON.stringify(teachingStyleProfile, null, 2)}\n\n`;
-        }
-        
-        if (styleProfile && styleProfile.profile) {
-          rewritePrompt += `\nRESPONSE STYLE PROFILE:\nTone: ${styleProfile.profile.tone}\nTeaching style: ${styleProfile.profile.teaching_style}\nSentence structure: ${styleProfile.profile.sentence_structure}\nExplanation order: ${styleProfile.profile.explanation_order.join(' → ')}\nForbidden styles: ${styleProfile.profile.forbidden_styles.join(', ')}\n\n`;
-        }
-        
-        rewritePrompt += `Rewrite the answer to match this style. Return ONLY the rewritten answer, no prefixes or labels.`;
-
-        const rewriteResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are a style rewriter. Rewrite answers to match the user\'s preferred style while preserving all factual content. CRITICAL: Do NOT use **bold** markdown formatting for concepts, nodes, or any text. Mention concepts naturally without highlighting.',
-              },
-              {
-                role: 'user',
-                content: rewritePrompt,
-              },
-            ],
-            temperature: 0.7,
-            max_tokens: 2000, // Increased to prevent response cropping
-          }),
-        });
-
-        if (rewriteResponse.ok) {
-          const rewriteData = await rewriteResponse.json();
-          const rewrittenText = rewriteData.choices[0]?.message?.content || '';
-          if (rewrittenText.trim() && rewrittenText.trim() !== draftAnswer.trim()) {
-            answer = rewrittenText.trim();
-            rewriteApplied = true;
-            console.log('[Chat API] Style rewrite applied successfully');
-          } else {
-            console.log('[Chat API] Rewrite produced same or empty answer, using draft');
-          }
-        } else {
-          console.warn('[Chat API] Rewrite failed, using draft answer');
-        }
-      } catch (err) {
-        console.warn('[Chat API] Error during rewrite, using draft:', err);
-      }
-    }
-    
-    // Apply post-processing guardrails (skip if already truncated by OpenAI)
-    answer = enforceGuardrails(answer, finalResponsePrefs, wasTruncated);
-    
-    // Format final answer
+    // Format answer with proper line breaks
     answer = answer
       .replace(/\n\n+/g, '\n\n')
       .replace(/^[-•]\s+/gm, '• ')
@@ -1231,7 +1763,7 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       .trim();
 
     // Step 6: Generate answerId and store answer
-    const answerId = `answer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    answerId = `answer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     
     // Store answer in backend
     try {
@@ -1268,6 +1800,94 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       console.warn('[Chat API] Error storing answer:', err);
     }
     
+    // Step 7: Extract and store conversation summary and learning topics (async, don't block)
+    // This runs in the background to build long-term memory
+    (async () => {
+      try {
+        // Extract topics and summary using AI
+        const extractionPrompt = `Extract key information from this conversation exchange.
+
+QUESTION: ${message.substring(0, 500)}
+ANSWER: ${answer.substring(0, 1000)}
+
+Return ONLY a JSON object:
+{
+  "topics": ["topic1", "topic2", ...],
+  "summary": "brief 1-2 sentence summary of what was discussed"
+}
+
+Focus on:
+- Main topics/concepts discussed (2-5 topics max)
+- What the user learned or asked about
+- Key relationships or connections mentioned`;
+
+        const extractionResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: 'You are a conversation analyzer. Return only valid JSON.' },
+              { role: 'user', content: extractionPrompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 300,
+            response_format: { type: 'json_object' },
+          }),
+        });
+
+        if (extractionResponse.ok) {
+          const extractionData = await extractionResponse.json();
+          const extracted = JSON.parse(extractionData.choices[0].message.content);
+          const topics = extracted.topics || [];
+          const summary = extracted.summary || '';
+
+          // Store conversation summary
+          const summaryId = `summary-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          await fetch(`${API_BASE_URL}/preferences/conversation-summaries`, {
+            method: 'POST',
+            headers: getBackendHeaders(),
+            body: JSON.stringify({
+              id: summaryId,
+              timestamp: Math.floor(Date.now() / 1000),
+              question: message,
+              answer: answer.substring(0, 2000), // Limit length
+              topics: topics.slice(0, 5), // Max 5 topics
+              summary: summary,
+            }),
+          }).catch(err => console.warn('[Chat API] Failed to store conversation summary:', err));
+
+          // Store learning topics
+          for (const topicName of topics.slice(0, 5)) {
+            if (topicName && topicName.length > 2) {
+              const topicId = `topic-${topicName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+              await fetch(`${API_BASE_URL}/preferences/learning-topics`, {
+                method: 'POST',
+                headers: getBackendHeaders(),
+                body: JSON.stringify({
+                  id: topicId,
+                  name: topicName,
+                  first_mentioned: Math.floor(Date.now() / 1000),
+                  last_mentioned: Math.floor(Date.now() / 1000),
+                  mention_count: 1,
+                  related_topics: topics.filter((t: string) => t !== topicName).slice(0, 3),
+                  notes: summary,
+                }),
+              }).catch(err => console.warn('[Chat API] Failed to store learning topic:', err));
+            }
+          }
+          
+          console.log(`[Chat API] ✓ Stored conversation summary and ${topics.length} learning topics`);
+        }
+      } catch (err) {
+        console.warn('[Chat API] Error extracting/storing conversation summary:', err);
+        // Don't fail the request if this fails
+      }
+    })();
+    
     // Get gap detection questions from backend
     let gapQuestions: string[] = [];
     try {
@@ -1296,23 +1916,15 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       suggestedQuestions = mergedQuestions;
     }
 
-    // Build debug metadata (only in dev)
-    const isDev = process.env.NODE_ENV !== 'production';
-    const meta: ChatResponse['meta'] = {
-      rewriteApplied,
-      ...(isDev && {
-        draftAnswer: draftAnswer !== answer ? draftAnswer : undefined,
-        examplesUsed: examplesUsed.length > 0 ? examplesUsed : undefined,
-      }),
-    };
-
-    const duration = Date.now() - startTime;
-    console.log(`[Chat API] Classic mode completed in ${duration}ms`);
-
     // Generate answer sections for inline claim alignment
-    const sections = splitAnswerIntoSections(answer);
-    // Classic mode doesn't have evidence, so sections will have empty supporting_evidence_ids
-    const answer_sections = mapEvidenceToSections(sections, []);
+    sections = splitAnswerIntoSections(answer);
+    // Map evidence to sections (convert claim IDs to EvidenceItem format)
+    // For now, we only have claim IDs, so we'll pass empty array - evidence mapping can be enhanced later
+    const evidenceItems: EvidenceItem[] = []; // TODO: Convert printedClaims (string[]) to EvidenceItem[] if needed
+    answer_sections = mapEvidenceToSections(sections, evidenceItems);
+
+    duration = Date.now() - startTime;
+    console.log(`[Chat API] GraphRAG mode completed in ${duration}ms`);
 
     const response: ChatResponse = {
       answer,
@@ -1321,1365 +1933,26 @@ TASK: Rewrite this answer to match the user's style more closely. Keep all the f
       suggestedActions: suggestedActions.slice(0, 5), // Limit to 5 actions
       answerId,
       answer_sections,
-      ...(isDev && { 
+      ...(process.env.NODE_ENV === 'development' && { 
         meta: {
-          ...meta,
-          mode: 'classic',
+          mode: 'graphrag',
           duration_ms: duration,
+          intent: retrievalIntent,
+          traceSteps: trace.length,
+          rewriteApplied: false,
         }
       }),
     };
 
-    return NextResponse.json(response);
-  } catch (error) {
-    console.error('Chat API error:', error);
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : 'Internal server error',
-        answer: "I encountered an error while processing your question. Please try again.",
-        usedNodes: [],
-        suggestedQuestions: [],
-      },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * Build messages array with conversation history for OpenAI API
- */
-function buildMessagesWithHistory(
-  systemPrompt: string,
-  currentMessage: string,
-  contextString: string,
-  chatHistory?: ChatHistoryMessage[]
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-    { role: 'system', content: systemPrompt },
-  ];
-
-  // Add conversation history (limit to last 10 exchanges to avoid token limits)
-  if (chatHistory && chatHistory.length > 0) {
-    const recentHistory = chatHistory.slice(-10); // Last 10 Q&A pairs
-    for (const hist of recentHistory) {
-      messages.push({ role: 'user', content: hist.question });
-      messages.push({ role: 'assistant', content: hist.answer });
-    }
-  }
-
-  // Add current message with context
-  messages.push({
-    role: 'user',
-    content: `Question: ${currentMessage}
-
-GRAPH CONTEXT:
-${contextString}`,
-  });
-
-  return messages;
-}
-
-async function handleGraphRAGMode(
-  message: string,
-  graph_id: string | undefined,
-  branch_id: string | undefined,
-  lecture_id: string | null | undefined,
-  apiKey: string,
-  vertical?: 'general' | 'finance',
-  lens?: string,
-  recency_days?: number,
-  evidence_strictness?: 'high' | 'medium' | 'low',
-  include_proposed_edges?: boolean,
-  responsePrefs?: ResponsePreferences,
-  voiceId?: string,
-  chatHistory?: ChatHistoryMessage[],
-  trail_id?: string,
-  focus_concept_id?: string,
-  focus_quote_id?: string,
-  focus_page_url?: string
-): Promise<NextResponse> {
-  const startTime = Date.now();
-  try {
-    // Default graph_id and branch_id if not provided
-    const defaultGraphId = graph_id || 'default';
-    const defaultBranchId = branch_id || 'main';
-
-    console.log(`[Chat API] GraphRAG mode: fetching context for graph_id=${defaultGraphId}, branch_id=${defaultBranchId}, vertical=${vertical || 'general'}`);
-
-    // Detect simple conversational queries that don't need retrieval
-    const simpleConversationalPatterns = [
-      /^(hi|hello|hey|sup|what's up|howdy|greetings)/i,
-      /^(thanks|thank you|thx|ty)$/i,
-      /^(ok|okay|sure|yep|yeah|yes|no|nope)$/i,
-      /^(bye|goodbye|see you|later)$/i,
-    ];
-    const isSimpleConversational = simpleConversationalPatterns.some(pattern => pattern.test(message.trim()));
-    
-    // Use LLM to detect task creation intent intelligently (not just pattern matching)
-    // This allows generalization to any natural language request
-    let isTaskCreationQuery = false;
-    let taskExtractionResult: any = null;
-    
-    try {
-      // First, do a lightweight check - if message contains task-related keywords, ask LLM to confirm
-      const hasTaskKeywords = /(?:task|todo|remind|schedule|need to|have to|must|should|plan to|going to)/i.test(message);
-      
-      if (hasTaskKeywords) {
-        console.log('[Chat API] Potential task creation detected, using LLM to understand intent...');
-        
-        const intentPrompt = `Analyze this user message and determine if they want to CREATE a task/todo/reminder. 
-
-Return ONLY a JSON object with this structure:
-{
-  "is_task_creation": true/false,
-  "confidence": 0.0-1.0,
-  "task_data": {
-    "title": "short descriptive title" or null,
-    "estimated_minutes": number or null,
-    "priority": "high|medium|low" or null,
-    "energy": "high|med|low" or null,
-    "due_date": "YYYY-MM-DD" or null,
-    "preferred_time_windows": ["morning"|"afternoon"|"evening"] or null,
-    "notes": "additional context" or null
-  }
-}
-
-Rules:
-- is_task_creation: true ONLY if user wants to CREATE/ADD a new task (not query existing tasks, not ask about tasks)
-- If false, set task_data to null
-- If true, extract task details intelligently:
-  * Title: extract the core action/thing to do
-  * Duration: infer from context or estimate based on task type (default 60 min)
-  * Priority: infer from urgency words (urgent, important, ASAP = high; normal = medium; whenever = low)
-  * Energy: infer from task type (physical/active = high; mental work = med; routine = low)
-  * Due date: extract if "tomorrow", "today", or specific date mentioned
-  * Preferred time: extract if morning/afternoon/evening mentioned
-
-User message: "${message}"
-
-Return ONLY the JSON object:`;
-
-        const intentResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
-              { role: 'user', content: intentPrompt }
-            ],
-            temperature: 0.2,
-            max_tokens: 300,
-          }),
-        });
-
-        if (intentResponse.ok) {
-          const intentData = await intentResponse.json();
-          const intentText = intentData.choices[0]?.message?.content?.trim() || '';
-          
-          try {
-            const jsonMatch = intentText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const parsed = JSON.parse(jsonMatch[0]);
-              isTaskCreationQuery = parsed.is_task_creation === true && parsed.confidence > 0.5;
-              taskExtractionResult = parsed.task_data;
-              console.log(`[Chat API] LLM intent analysis: is_task_creation=${isTaskCreationQuery}, confidence=${parsed.confidence}`);
-            }
-          } catch {
-            console.error('[Chat API] Failed to parse LLM intent response:', intentText);
-          }
-        }
+    if (retrievalData?.context?.retrieval_meta) {
+      const metaSource = retrievalData.context.retrieval_meta || {};
+      const retrievalMeta = { ...metaSource };
+      if (Array.isArray(retrievalMeta.topClaims) && retrievalMeta.topClaims.length > 5) {
+        retrievalMeta.topClaims = retrievalMeta.topClaims.slice(0, 5);
       }
-    } catch (err) {
-      console.error('[Chat API] Error in LLM intent detection:', err);
-      // Fall back to simple pattern matching if LLM fails
-      const fallbackPatterns = [
-        /create.*task/i,
-        /add.*task/i,
-        /new.*task/i,
-      ];
-      isTaskCreationQuery = fallbackPatterns.some(pattern => pattern.test(message));
-    }
-    
-    // Use LLM to detect itinerary/planning intent intelligently
-    let isItineraryQuery = false;
-    let itineraryDateInfo: { target_date: string | null; is_tomorrow: boolean; is_today: boolean } | null = null;
-    
-    try {
-      // Lightweight check for planning-related keywords
-      const hasPlanningKeywords = /(?:plan|schedule|itinerary|agenda|calendar|what.*doing|what.*on|show.*schedule|generate.*schedule|tomorrow|today)/i.test(message);
-      
-      if (hasPlanningKeywords && !isTaskCreationQuery) {
-        console.log('[Chat API] Potential itinerary query detected, using LLM to understand intent...');
-        
-        const itineraryIntentPrompt = `Analyze this user message and determine if they want to VIEW/GET their schedule/itinerary/plan for a specific day.
-
-Return ONLY a JSON object with this structure:
-{
-  "is_itinerary_query": true/false,
-  "confidence": 0.0-1.0,
-  "date_info": {
-    "target_date": "YYYY-MM-DD" or null,
-    "is_tomorrow": true/false,
-    "is_today": true/false,
-    "is_specific_date": true/false
-  }
-}
-
-Rules:
-- is_itinerary_query: true if user wants to SEE/VIEW/GET their schedule/plan/itinerary (not create tasks, not ask general questions)
-- Examples of itinerary queries: "what's my plan tomorrow", "show my schedule", "what am I doing today", "plan my day", "generate schedule"
-- Examples of NOT itinerary: "create a task", "what is machine learning", general questions
-- Extract date info: determine if they're asking about tomorrow, today, or a specific date
-- If no date mentioned, assume they want today's schedule
-
-User message: "${message}"
-
-Return ONLY the JSON object:`;
-
-        const itineraryIntentResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o-mini',
-            messages: [
-              { role: 'system', content: 'You are a helpful assistant that understands user intent. Return only valid JSON.' },
-              { role: 'user', content: itineraryIntentPrompt }
-            ],
-            temperature: 0.2,
-            max_tokens: 200,
-          }),
-        });
-
-        if (itineraryIntentResponse.ok) {
-          const itineraryIntentData = await itineraryIntentResponse.json();
-          const itineraryIntentText = itineraryIntentData.choices[0]?.message?.content?.trim() || '';
-          
-          try {
-            const jsonMatch = itineraryIntentText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const parsed = JSON.parse(jsonMatch[0]);
-              isItineraryQuery = parsed.is_itinerary_query === true && parsed.confidence > 0.5;
-              itineraryDateInfo = parsed.date_info || null;
-              console.log(`[Chat API] LLM itinerary analysis: is_itinerary_query=${isItineraryQuery}, confidence=${parsed.confidence}, date_info=${JSON.stringify(itineraryDateInfo)}`);
-            }
-          } catch {
-            console.error('[Chat API] Failed to parse LLM itinerary intent response:', itineraryIntentText);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[Chat API] Error in LLM itinerary intent detection:', err);
-      // Fall back to simple pattern matching if LLM fails
-      const fallbackPatterns = [
-        /what.*(my|your).*(plan|schedule|itinerary)/i,
-        /plan.*(my|your).*day/i,
-        /show.*schedule/i,
-      ];
-      isItineraryQuery = fallbackPatterns.some(pattern => pattern.test(message));
-    }
-    
-    console.log(`[Chat API] Task creation check: "${message.substring(0, 50)}" -> ${isTaskCreationQuery}`);
-    console.log(`[Chat API] Itinerary query check: "${message.substring(0, 50)}" -> ${isItineraryQuery}`);
-    if (isItineraryQuery) {
-      console.log(`[Chat API] ⚠️ ITINERARY QUERY DETECTED via LLM - will call scheduler API`);
-    }
-    
-    // Handle task creation queries first - use LLM-extracted data
-    if (isTaskCreationQuery && !isItineraryQuery && taskExtractionResult) {
-      try {
-        console.log('[Chat API] ✓ Detected task creation query via LLM, creating task...');
-        
-        // Validate LLM-extracted task data
-        if (!taskExtractionResult.title || taskExtractionResult.title.length < 3) {
-          return NextResponse.json({
-            answer: "I understood you want to create a task, but I couldn't extract what task you'd like to create. Could you rephrase it? For example:\n\n\"Create a task: Review Q4 reports, 2 hours, high priority, due tomorrow\"\n\nor\n\n\"I need to go to the hospital tomorrow\"",
-            usedNodes: [],
-            suggestedQuestions: [
-              "Create a task: Review reports, 2 hours, high priority, due tomorrow",
-              "What's my plan tomorrow?",
-              "Show me my calendar events"
-            ],
-          });
-        }
-        
-        // Prepare task payload with LLM-extracted data and defaults
-        const taskPayload: any = {
-          title: taskExtractionResult.title,
-          estimated_minutes: taskExtractionResult.estimated_minutes || 60,
-          priority: taskExtractionResult.priority || 'medium',
-          energy: taskExtractionResult.energy || 'med',
-        };
-        
-        if (taskExtractionResult.due_date) {
-          taskPayload.due_date = taskExtractionResult.due_date;
-        }
-        if (taskExtractionResult.preferred_time_windows && taskExtractionResult.preferred_time_windows.length > 0) {
-          taskPayload.preferred_time_windows = taskExtractionResult.preferred_time_windows;
-        }
-        
-        console.log(`[Chat API] Creating task from LLM extraction:`, taskPayload);
-        
-        // Create the task via API
-        const createTaskResponse = await fetch(
-          `${API_BASE_URL}/tasks`,
-          {
-            method: 'POST',
-            headers: getBackendHeaders(),
-            body: JSON.stringify(taskPayload),
-          }
-        );
-        
-        if (createTaskResponse.ok) {
-          const createdTask = await createTaskResponse.json();
-          console.log(`[Chat API] ✓ Created task: ${createdTask.id}`);
-          
-          let responseText = `✓ I've created a task: **${createdTask.title}**\n`;
-          responseText += `  • Duration: ${createdTask.estimated_minutes} minutes\n`;
-          responseText += `  • Priority: ${createdTask.priority}\n`;
-          responseText += `  • Energy level: ${createdTask.energy}\n`;
-          if (createdTask.due_date) {
-            responseText += `  • Due: ${createdTask.due_date}\n`;
-          }
-          if (createdTask.preferred_time_windows && createdTask.preferred_time_windows.length > 0) {
-            responseText += `  • Preferred time: ${createdTask.preferred_time_windows.join(', ')}\n`;
-          }
-          
-          const hasDueDate = createdTask.due_date;
-          const isTomorrow = hasDueDate && createdTask.due_date === new Date(Date.now() + 86400000).toISOString().split('T')[0];
-          const isToday = hasDueDate && createdTask.due_date === new Date().toISOString().split('T')[0];
-          
-          if (hasDueDate && (isTomorrow || isToday)) {
-            responseText += `\nWould you like me to plan your ${isTomorrow ? 'tomorrow' : 'today'} and schedule this task?`;
-          } else {
-            responseText += `\nWould you like me to help you plan when to do this task?`;
-          }
-          
-          return NextResponse.json({
-            answer: responseText,
-            usedNodes: [],
-            suggestedQuestions: [
-              hasDueDate && isTomorrow ? "What's my plan tomorrow?" : hasDueDate && isToday ? "What's my plan today?" : "What's my plan tomorrow?",
-              "Show me my calendar events",
-              "Create another task"
-            ],
-            createdTask: createdTask, // Include task data for frontend
-          });
-        } else {
-          const errorText = await createTaskResponse.text().catch(() => 'Unknown error');
-          console.error(`[Chat API] Failed to create task: ${createTaskResponse.status} - ${errorText}`);
-          
-          return NextResponse.json({
-            answer: `I had trouble creating that task. The error was: ${errorText}. Please try again or create the task manually.`,
-            usedNodes: [],
-            suggestedQuestions: [
-              "What's my plan tomorrow?",
-              "Show me my calendar events"
-            ],
-          });
-        }
-      } catch (err) {
-        console.error('[Chat API] Error handling task creation:', err);
-        // Fall through to normal processing - let GraphRAG handle it
-      }
-    }
-    
-    // Handle itinerary queries by calling scheduler API - use LLM-extracted date info
-    if (isItineraryQuery) {
-      try {
-        console.log('[Chat API] ✓ Detected itinerary query via LLM, calling scheduler API...');
-        
-        // Use LLM-extracted date info, with fallback to pattern matching
-        let targetDate = new Date();
-        let isTomorrow = false;
-        let isToday = false;
-        
-        if (itineraryDateInfo) {
-          isTomorrow = itineraryDateInfo.is_tomorrow === true;
-          isToday = itineraryDateInfo.is_today === true;
-          
-          if (itineraryDateInfo.target_date) {
-            // Use specific date from LLM
-            targetDate = new Date(itineraryDateInfo.target_date);
-            console.log(`[Chat API] Using LLM-extracted date: ${itineraryDateInfo.target_date}`);
-          } else if (isTomorrow) {
-            targetDate.setDate(targetDate.getDate() + 1);
-            console.log(`[Chat API] LLM detected: tomorrow (${targetDate.toISOString().split('T')[0]})`);
-          } else if (isToday) {
-            console.log(`[Chat API] LLM detected: today (${targetDate.toISOString().split('T')[0]})`);
-          } else {
-            // Default to today if no date info
-            console.log(`[Chat API] No date info from LLM, defaulting to today`);
-          }
-        } else {
-          // Fallback to pattern matching if LLM didn't extract date info
-          isTomorrow = /tomorrow/i.test(message);
-          isToday = /today/i.test(message);
-          
-          if (isTomorrow) {
-            targetDate.setDate(targetDate.getDate() + 1);
-            console.log(`[Chat API] Fallback pattern match: tomorrow (${targetDate.toISOString().split('T')[0]})`);
-          } else if (isToday) {
-            console.log(`[Chat API] Fallback pattern match: today (${targetDate.toISOString().split('T')[0]})`);
-          }
-        }
-        
-        // Set working hours in local timezone (8 AM - 10 PM)
-        const startDate = new Date(targetDate);
-        startDate.setHours(8, 0, 0, 0); // 8 AM local time
-        const endDate = new Date(targetDate);
-        endDate.setHours(22, 0, 0, 0); // 10 PM local time
-        
-        // Convert to ISO strings (will include timezone offset)
-        const startISO = startDate.toISOString();
-        const endISO = endDate.toISOString();
-        
-        console.log(`[Chat API] Date range: ${startISO} to ${endISO} (local time: ${startDate.toLocaleTimeString()} - ${endDate.toLocaleTimeString()})`);
-        
-        console.log(`[Chat API] Calling scheduler API: ${startISO} to ${endISO}`);
-        
-        // Call scheduler API to get suggestions
-        const schedulerResponse = await fetch(
-          `${API_BASE_URL}/schedule/suggestions?start=${encodeURIComponent(startISO)}&end=${encodeURIComponent(endISO)}`,
-          {
-            method: 'POST',
-            headers: getBackendHeaders(),
-          }
-        );
-        
-        console.log(`[Chat API] Scheduler API response status: ${schedulerResponse.status}`);
-        
-        if (schedulerResponse.ok) {
-          const suggestionsData = await schedulerResponse.json();
-          const suggestions = suggestionsData.suggestions || [];
-          
-          console.log(`[Chat API] Scheduler returned ${suggestions.length} suggestions`);
-          
-          if (suggestions.length === 0) {
-            // No suggestions - check if there are tasks
-            const targetDateStr = targetDate.toISOString().split('T')[0];
-            console.log(`[Chat API] No suggestions, checking for tasks with due_date: ${targetDateStr}`);
-            
-            const tasksResponse = await fetch(
-              `${API_BASE_URL}/tasks?range=7`,
-              { headers: getBackendHeaders() }
-            );
-            
-            if (tasksResponse.ok) {
-              const tasksData = await tasksResponse.json();
-              const tasks = tasksData.tasks || [];
-              console.log(`[Chat API] Found ${tasks.length} total tasks`);
-              
-              const relevantTasks = tasks.filter((t: any) => {
-                if (!t.due_date) {
-                  console.log(`[Chat API] Task "${t.title}" has no due_date`);
-                  return false;
-                }
-                // Compare date strings directly (YYYY-MM-DD format)
-                const taskDateStr = typeof t.due_date === 'string' 
-                  ? t.due_date.split('T')[0]  // Handle ISO datetime strings
-                  : t.due_date;
-                const matches = taskDateStr === targetDateStr;
-                if (matches) {
-                  console.log(`[Chat API] ✓ Found matching task: ${t.title} (due: ${t.due_date})`);
-                } else {
-                  console.log(`[Chat API] Task "${t.title}" due_date "${t.due_date}" doesn't match "${targetDateStr}"`);
-                }
-                return matches;
-              });
-              
-              console.log(`[Chat API] Found ${relevantTasks.length} tasks for target date`);
-              
-              if (relevantTasks.length === 0) {
-                // Check calendar events too
-                const calendarResponse = await fetch(
-                  `${API_BASE_URL}/calendar/events?start_date=${targetDate.toISOString().split('T')[0]}&end_date=${targetDate.toISOString().split('T')[0]}`,
-                  { headers: getBackendHeaders() }
-                ).catch(() => null);
-                
-                let calendarInfo = '';
-                if (calendarResponse?.ok) {
-                  const calendarData = await calendarResponse.json();
-                  const events = calendarData.events || [];
-                  if (events.length > 0) {
-                    calendarInfo = `\n\nI see you have ${events.length} calendar event${events.length > 1 ? 's' : ''} scheduled:\n${events.slice(0, 3).map((e: any) => `- ${e.title}${e.start_time ? ` at ${e.start_time.substring(0, 5)}` : ''}`).join('\n')}${events.length > 3 ? `\n... and ${events.length - 3} more` : ''}`;
-                  }
-                }
-                
-                return NextResponse.json({
-                  answer: `I don't see any tasks scheduled for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}.${calendarInfo}\n\nWould you like me to help you create some tasks? You can say something like:\n- "Create a task: Review Q4 reports, 2 hours, high priority, due tomorrow"\n- "I need to prepare a presentation tomorrow, it will take 2 hours"`,
-                  usedNodes: [],
-                  suggestedQuestions: [
-                    "Create a task: Review reports, 2 hours, high priority, due tomorrow",
-                    "Show me my calendar events",
-                    "What tasks do I have this week?"
-                  ],
-                });
-              } else {
-                return NextResponse.json({
-                  answer: `I found ${relevantTasks.length} task${relevantTasks.length > 1 ? 's' : ''} for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}, but I wasn't able to generate schedule suggestions. This might be because your calendar is fully booked or there are no suitable time slots. Here are your tasks:\n\n${relevantTasks.map((t: any) => `- ${t.title} (${t.estimated_minutes} min, ${t.priority} priority)`).join('\n')}\n\nWould you like me to help you manually schedule these?`,
-                  usedNodes: [],
-                  suggestedQuestions: [
-                    "Show me my calendar events",
-                    "Create a new task",
-                    "What are my free time blocks?"
-                  ],
-                });
-              }
-            }
-            
-            return NextResponse.json({
-              answer: `I don't see any schedule suggestions for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}. You might want to create some tasks first, or check if your calendar has available time slots.`,
-              usedNodes: [],
-              suggestedQuestions: [
-                "Create a task for tomorrow",
-                "Show me my calendar events",
-                "What are my free time blocks?"
-              ],
-            });
-          }
-          
-          // Format suggestions into a readable response
-          const dateStr = targetDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-          let answer = `Here's your suggested schedule for ${dateStr}:\n\n`;
-          
-          // Group by time
-          const sortedSuggestions = [...suggestions].sort((a, b) => 
-            new Date(a.start).getTime() - new Date(b.start).getTime()
-          );
-          
-          for (const sug of sortedSuggestions) {
-            const startTime = new Date(sug.start);
-            const endTime = new Date(sug.end);
-            const timeStr = `${startTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} - ${endTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-            
-            answer += `📅 **${sug.task_title}**\n`;
-            answer += `   Time: ${timeStr}\n`;
-            answer += `   Confidence: ${Math.round(sug.confidence * 100)}%\n`;
-            if (sug.reasons && sug.reasons.length > 0) {
-              answer += `   Reasons:\n`;
-              for (const reason of sug.reasons) {
-                answer += `   • ${reason}\n`;
-              }
-            }
-            answer += `\n`;
-          }
-          
-          answer += `\nThese suggestions are based on your tasks, calendar events, and preferences. You can accept or modify them as needed.`;
-          
-          return NextResponse.json({
-            answer,
-            usedNodes: [],
-            suggestedQuestions: [
-              "Show me my calendar events",
-              "Create a new task",
-              "What are my free time blocks?",
-              "Update a task"
-            ],
-            scheduleSuggestions: suggestions, // Include raw data for frontend
-          });
-        } else {
-          const errorText = await schedulerResponse.text().catch(() => 'Unknown error');
-          console.warn(`[Chat API] Scheduler API failed: ${schedulerResponse.status} - ${errorText}`);
-          
-          // Even if scheduler fails, try to get tasks and calendar events to give helpful response
-          try {
-            const tasksResponse = await fetch(
-              `${API_BASE_URL}/tasks?range=7`,
-              { headers: getBackendHeaders() }
-            );
-            
-            if (tasksResponse.ok) {
-              const tasksData = await tasksResponse.json();
-              const tasks = tasksData.tasks || [];
-              const relevantTasks = tasks.filter((t: any) => {
-                if (!t.due_date) return false;
-                const dueDate = new Date(t.due_date);
-                return dueDate.toDateString() === targetDate.toDateString();
-              });
-              
-              if (relevantTasks.length > 0) {
-                return NextResponse.json({
-                  answer: `I found ${relevantTasks.length} task${relevantTasks.length > 1 ? 's' : ''} for ${isTomorrow ? 'tomorrow' : isToday ? 'today' : 'that date'}, but I'm having trouble generating schedule suggestions right now. Here are your tasks:\n\n${relevantTasks.map((t: any) => `- ${t.title} (${t.estimated_minutes} min, ${t.priority} priority)`).join('\n')}\n\nYou can view your calendar events in the calendar widget on the right.`,
-                  usedNodes: [],
-                  suggestedQuestions: [
-                    "Show me my calendar events",
-                    "Create a new task",
-                    "What are my free time blocks?"
-                  ],
-                });
-              }
-            }
-          } catch (taskErr) {
-            console.error('[Chat API] Error fetching tasks:', taskErr);
-          }
-          
-          // Fall through to normal processing if we can't help
-        }
-      } catch (err) {
-        console.error('[Chat API] Error handling itinerary query:', err);
-        console.error('[Chat API] Error stack:', err instanceof Error ? err.stack : 'No stack');
-        // Fall through to normal processing
-      }
-    }
-    
-    let retrievalData: any = null;
-    let intent = 'DEFINITION_OVERVIEW';
-    let trace: any[] = [];
-    let context: any = {};
-    let styleFeedbackResponse: PromiseSettledResult<Response | null>;
-    
-    // Only fetch retrieval for non-conversational queries, with timeout
-    const retrievalStartTime = Date.now();
-    let retrievalLatency = 0;
-    if (!isSimpleConversational) {
-      // Build request body for intent-based retrieval
-      const requestBody: any = {
-        message,
-        mode: 'graphrag',
-        limit: 5,
-        graph_id: defaultGraphId,
-        branch_id: defaultBranchId,
-        detail_level: 'summary', // Request summary mode for progressive disclosure
-        trail_id,
-        focus_concept_id,
-        focus_quote_id,
-        focus_page_url,
-      };
-      
-      // PARALLEL: Fetch retrieval, style feedback, AND lecture mentions at the same time
-      // Add 3-second timeout to retrieval to prevent hanging (reduced from 5s for faster UX)
-      console.log('[Chat API] Fetching retrieval context, style feedback, and lecture mentions in parallel (3s timeout)...');
-      const retrievalController = new AbortController();
-      const retrievalTimeout = setTimeout(() => {
-        retrievalController.abort();
-      }, 3000); // 3 second timeout - fail fast if retrieval is slow
-      
-      // Build parallel fetch array
-      const parallelFetches: Promise<any>[] = [
-        fetch(`${API_BASE_URL}/ai/retrieve`, {
-          method: 'POST',
-          headers: getBackendHeaders(),
-          body: JSON.stringify(requestBody),
-          signal: retrievalController.signal,
-        }).finally(() => clearTimeout(retrievalTimeout)),
-        fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null), // Don't fail if this fails
-      ];
-      
-      // Add lecture mentions fetch in parallel if lecture_id exists
-      let lectureMentionsPromise: Promise<Response | null> | null = null;
-      if (lecture_id) {
-        lectureMentionsPromise = fetch(`${API_BASE_URL}/lectures/${lecture_id}/mentions`, {
-          headers: getBackendHeaders(),
-        }).catch(() => null);
-        parallelFetches.push(lectureMentionsPromise);
-      }
-      
-      const [retrievalResponse, styleFeedbackResponseResult] = await Promise.allSettled(parallelFetches);
-      
-      // Store style feedback response for later processing  
-      styleFeedbackResponse = styleFeedbackResponseResult;
-
-      // Process retrieval response
-      if (retrievalResponse.status === 'fulfilled' && retrievalResponse.value) {
-        const retrievalResult = retrievalResponse.value;
-        if (retrievalResult.ok) {
-          try {
-            retrievalData = await retrievalResult.json();
-            intent = retrievalData.intent || 'DEFINITION_OVERVIEW';
-            trace = retrievalData.trace || [];
-            context = retrievalData.context || {};
-            console.log(`[Chat API] Intent: ${intent}, Trace steps: ${trace.length}`);
-          } catch (err) {
-            console.warn('[Chat API] Failed to parse retrieval response:', err);
-          }
-        } else {
-          const errorText = await retrievalResult.text().catch(() => 'Unknown error');
-          console.warn(`[Chat API] Retrieval failed: ${retrievalResult.status} ${errorText}`);
-        }
-      } else if (retrievalResponse.status === 'rejected') {
-        const reason = retrievalResponse.reason;
-        if (reason?.name === 'AbortError') {
-          console.warn('[Chat API] Retrieval timed out after 3s, continuing without context');
-          // Set empty context so the LLM can still respond
-          context = {};
-        } else {
-          console.warn(`[Chat API] Retrieval failed: ${reason?.message || 'Unknown error'}`);
-          // Set empty context so the LLM can still respond
-          context = {};
-        }
-      }
-    } else {
-      console.log('[Chat API] Simple conversational query detected, skipping retrieval');
-      // Fetch style feedback separately for conversational queries
-      const styleFeedbackResult = await Promise.allSettled([
-        fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null)
-      ]);
-      styleFeedbackResponse = styleFeedbackResult[0];
-    }
-    retrievalLatency = Date.now() - retrievalStartTime;
-    
-    // Build context text from structured context (empty if skipped retrieval)
-    const contextResult = buildContextTextFromStructured(context, intent);
-    const contextText = contextResult.text;
-    const printedClaims = contextResult.printedClaims;
-    const printedQuotes = contextResult.printedQuotes;
-    const printedSources = contextResult.printedSources;
-
-    let lectureContext = '';
-    if (lecture_id) {
-      try {
-        const mentionsResponse = await fetch(`${API_BASE_URL}/lectures/${lecture_id}/mentions`, {
-          headers: getBackendHeaders(),
-        });
-        if (mentionsResponse.ok) {
-          const mentions = await mentionsResponse.json();
-          if (mentions && mentions.length > 0) {
-            const conceptMap = new Map<string, { concept: any; mentions: any[] }>();
-            mentions.forEach((mention: any) => {
-              const conceptId = mention.concept?.node_id || mention.concept_id;
-              if (!conceptId || !mention.concept) {
-                return;
-              }
-              if (!conceptMap.has(conceptId)) {
-                conceptMap.set(conceptId, { concept: mention.concept, mentions: [] });
-              }
-              conceptMap.get(conceptId)!.mentions.push(mention);
-            });
-
-            const grouped = Array.from(conceptMap.values()).slice(0, 8);
-            const lectureParts: string[] = ['## Linked Concepts in This Lecture'];
-            grouped.forEach((group) => {
-              lectureParts.push(`\n${group.concept.name}`);
-              if (group.concept.description) {
-                lectureParts.push(`Definition: ${group.concept.description}`);
-              }
-              const mentionNotes = group.mentions
-                .map((m: any) => m.context_note)
-                .filter((note: string | null) => !!note)
-                .slice(0, 2);
-              if (mentionNotes.length > 0) {
-                lectureParts.push(`Context notes: ${mentionNotes.join(' | ')}`);
-              }
-            });
-
-            lectureContext = lectureParts.join('\n');
-          }
-        }
-      } catch (err) {
-        console.warn('[Chat API] Failed to fetch lecture mentions for context:', err);
-      }
+      response.retrievalMeta = retrievalMeta;
     }
 
-    const combinedContextText = lectureContext ? `${contextText}\n\n${lectureContext}` : contextText;
-    
-    console.log(`[Chat API] Context retrieved (${combinedContextText.length} chars)`);
-    
-    // Phase A: Build evidence ID allowlist for strict mode
-    const allowedClaimIds = printedClaims;
-    const allowedQuoteIds = printedQuotes;
-    const allowedSourceUrls = printedSources;
-    
-    // Build allowlist block for prompt
-    let allowlistBlock = '';
-    if (evidence_strictness === 'high' && (allowedClaimIds.length > 0 || allowedQuoteIds.length > 0 || allowedSourceUrls.length > 0)) {
-      allowlistBlock = '\n\n## Allowed Evidence IDs (must only cite these)\n';
-      if (allowedClaimIds.length > 0) {
-        allowlistBlock += `- Allowed Claim IDs: ${allowedClaimIds.join(', ')}\n`;
-      }
-      if (allowedQuoteIds.length > 0) {
-        allowlistBlock += `- Allowed Quote IDs: ${allowedQuoteIds.join(', ')}\n`;
-      }
-      if (allowedSourceUrls.length > 0) {
-        allowlistBlock += `- Allowed Source URLs: ${allowedSourceUrls.join(', ')}\n`;
-      }
-      allowlistBlock += '\nYou may ONLY cite evidence IDs/URLs that appear in the Allowed Evidence IDs list above.';
-    }
-    
-    // If context is empty or very minimal, add a note to the prompt
-    const contextNote = combinedContextText.trim().length === 0 
-      ? "\n\nNOTE: No GraphRAG context was found for this query. You can still respond naturally using your general knowledge."
-      : "";
-
-    // Process style feedback response (already fetched in parallel)
-    let styleFeedbackExamples: string = '';
-    if (styleFeedbackResponse.status === 'fulfilled' && styleFeedbackResponse.value) {
-      try {
-        const response = styleFeedbackResponse.value;
-        if (response.ok) {
-          const styleFeedbacks = await response.json();
-          if (styleFeedbacks && styleFeedbacks.length > 0) {
-            styleFeedbackExamples = styleFeedbacks.map((fb: any, idx: number) => {
-              const original = (fb.original_response || '').substring(0, 200);
-              const feedback = (fb.feedback_notes || '').substring(0, 200);
-              const rewritten = fb.user_rewritten_version ? (fb.user_rewritten_version || '').substring(0, 200) : null;
-              const testLabel = fb.test_label ? `${fb.test_label}: ` : '';
-              let example = `${idx + 1}. ${testLabel}ORIGINAL: ${original}...\n   ${testLabel}FEEDBACK: ${feedback}...`;
-              if (rewritten) {
-                example += `\n   ${testLabel}REWRITTEN: ${rewritten}...`;
-              }
-              return example;
-            }).join('\n\n');
-            console.log(`[Chat API] ✓ Found ${styleFeedbacks.length} style feedback example(s) - will be included in GraphRAG prompt`);
-          } else {
-            console.log('[Chat API] No style feedback examples found yet');
-          }
-        }
-      } catch (err) {
-        console.warn('[Chat API] Failed to process style feedback examples:', err);
-      }
-    }
-
-    // Build base system prompt for GraphRAG
-    const strictnessNote = evidence_strictness === 'high' 
-      ? '\n\nCRITICAL CITATION REQUIREMENTS (evidence_strictness=high):\n- Any factual assertion MUST include at least one citation token: [Quote: ...] OR [Claim: ...] OR [Source: ...]\n- If evidence is insufficient, say "Not enough evidence in your graph yet" and ask what to capture next.\n- Do not use general world knowledge unless explicitly labeled "General knowledge (uncited)" and only for background definitions.\n- Every sentence with verbs like "is/was/causes/leads to/results in/means" must cite evidence.\n'
-      : evidence_strictness === 'medium'
-      ? '\n\nCITATION GUIDELINES (evidence_strictness=medium):\n- Prefer citing evidence when available: [Quote: ...], [Claim: ...], or [Source: ...]\n- You may use general knowledge but prefer graph evidence when present.\n'
-      : '';
-    
-    const baseSystemPrompt = `You are Brain Web, a teaching assistant and conversational agent.
-
-When GraphRAG context is provided:
-- Use the GraphRAG context to answer the question
-- Cite specific claims and sources when relevant using citation tokens: [Quote: QUOTE_ID], [Claim: CLAIM_ID], [Source: URL]
-- Reference communities when discussing related concepts
-- Be specific and traceable to the provided evidence
-
-When GraphRAG context is empty or minimal:
-- You can still have a normal conversation
-- Answer questions using your general knowledge
-- Be helpful and conversational
-- Don't require specific graph context to respond
-- If the user is just chatting or asking general questions, respond naturally
-
-CITATION TOKEN RULES:
-- Any factual assertion MUST include at least one of: [Quote: ...] OR [Claim: ...] OR [Source: ...]
-- If evidence is insufficient, say "Not enough evidence in your graph yet" and ask for what to capture next.
-- Use exact IDs from the context (quote_id, claim_id, source URLs)
-- You may ONLY cite evidence IDs/URLs that appear in the Allowed Evidence IDs list (if provided)${strictnessNote}
-
-CRITICAL: Honesty and Specificity
-- When asked about specific real-world entities (movies, TV shows, books, people, companies, events, etc.), be SPECIFIC and FACTUAL
-- If you don't know specific details about a particular entity, say so clearly: "I don't have specific information about [entity]" or "I'm not certain about the details of [entity]"
-- DO NOT make up generic, vague descriptions that could apply to anything
-- DO NOT invent cast members, plot details, or facts you're uncertain about
-- If asked about something you're unsure of, admit uncertainty rather than providing generic information
-- When you do know something, be specific: mention actual names, dates, events, and concrete details
-- Example of BAD response: "The cast features talented actors who bring depth to their roles" (too vague)
-- Example of GOOD response: "I don't have specific information about the cast of that film. Could you clarify which film you're referring to, or would you like me to search for more details?"
-
-The context provided includes:
-- Session Context (trail summary + focus context)
-- Supporting Quotes with IDs: [Quote: QUOTE_ID]
-- Supporting Claims with IDs: [Claim: CLAIM_ID]
-- Relevant communities of related concepts
-- Relevant concepts and their relationships
-
-Your task:
-1. If context is available, use it to answer the question
-2. If context is minimal or empty, respond naturally using your knowledge BUT be honest about uncertainty
-3. Cite specific claims and sources when relevant using citation tokens (if available)
-4. Reference communities when discussing related concepts (if available) - mention them naturally without using **bold** markdown formatting
-5. Be conversational and helpful, but NEVER make up specific facts about real-world entities
-6. When uncertain, admit it clearly rather than providing generic information
-
-FORMATTING REQUIREMENTS:
-- Use clear paragraphs separated by blank lines
-- Use bullet points (- or •) for lists
-- Break up long paragraphs into shorter, readable chunks
-- Use line breaks to separate major sections
-- Do NOT use **bold** markdown formatting for concepts, nodes, or section headers - mention them naturally
-
-Format your response as:
-ANSWER: <your well-formatted answer>
-
-SUGGESTED_ACTIONS: [
-  {"type": "link", "source": "Concept A", "target": "Concept B", "label": "link Concept A to Concept B"},
-  {"type": "add", "concept": "New Concept Name", "domain": "Domain Name", "label": "add New Concept Name to Domain Name"}
-]
-
-FOLLOW_UP_QUESTIONS: ['question1', 'question2', 'question3']
-
-CRITICAL ACTION HANDLING:
-- When the user asks to "add [X] to graph", "create a node for [X]", "add [X] as a node", etc., they want ACTION, not explanation.
-- When the user asks to "link [X] to [Y]", "connect [X] and [Y]", etc., they want the RELATIONSHIP CREATED, not just explained.
-- For action requests, keep your ANSWER brief (1-2 sentences max) and ALWAYS include the action in SUGGESTED_ACTIONS.
-- Only provide detailed explanations if the user explicitly asks "explain [X]" or "what is [X]".
-- Action request examples:
-  * "add TSMC to graph" → Brief: "Adding TSMC to the graph." + SUGGESTED_ACTIONS: [{"type": "add", "concept": "TSMC", "domain": "Technology", "label": "add TSMC to Technology"}]
-  * "create a node for NVIDIA" → Brief: "Creating NVIDIA node." + SUGGESTED_ACTIONS: [{"type": "add", "concept": "NVIDIA", "domain": "Technology", "label": "add NVIDIA to Technology"}]
-  * "link TSMC to NVDA" → Brief: "Linking TSMC to NVDA." + SUGGESTED_ACTIONS: [{"type": "link", "source": "TSMC", "target": "NVDA", "label": "link TSMC to NVDA"}]
-  * "connect X and Y" → Brief: "Connecting X and Y." + SUGGESTED_ACTIONS: [{"type": "link", "source": "X", "target": "Y", "label": "link X to Y"}]
-- IMPORTANT: For "link" requests, use exact concept names as they appear in the graph (case-sensitive matching).
-- If user asks "explain TSMC" or "what is TSMC", THEN provide detailed explanation without actions.`;
-
-    // Default ResponsePreferences if not provided
-    const defaultResponsePrefs: ResponsePreferences = {
-      mode: 'compact',
-      ask_question_policy: 'at_most_one',
-      end_with_next_step: true,
-    };
-    const finalResponsePrefs: ResponsePreferences = { ...defaultResponsePrefs, ...(responsePrefs || {}) };
-    const finalVoiceId = voiceId || 'neutral';
-
-    // Build additional layers for personalization (including style feedback)
-    const additionalLayers: string[] = [];
-    
-    // Add style feedback examples if available
-    if (styleFeedbackExamples) {
-      const styleFeedbackLayer = `
-
-RECENT STYLE FEEDBACK EXAMPLES (learn from these patterns):
-${styleFeedbackExamples}
-
-Use these examples to refine your responses. Pay attention to what the user liked and disliked. Match the style of responses they approved of.
-`;
-      additionalLayers.push(styleFeedbackLayer);
-    }
-
-    // Use PromptBuilder to compose system prompt with response preferences and style feedback
-    const { systemPrompt, maxTokens } = buildPrompt(
-      baseSystemPrompt,
-      finalResponsePrefs,
-      finalVoiceId,
-      additionalLayers
-    );
-
-    // Build messages with conversation history
-    const contextString = (combinedContextText || '(No specific context found - feel free to respond naturally)') + contextNote + allowlistBlock;
-    const messages = buildMessagesWithHistory(systemPrompt, message, contextString, chatHistory);
-
-    // Call OpenAI with GraphRAG context
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages,
-        temperature: 0.7,
-        max_tokens: maxTokens,
-      }),
-    });
-
-    if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.json().catch(() => ({}));
-      console.error(`[Chat API] OpenAI API error: ${openaiResponse.status}`, errorData);
-      throw new Error(`OpenAI API error: ${openaiResponse.statusText}`);
-    }
-
-    const openaiData = await openaiResponse.json();
-    let responseText = openaiData.choices[0]?.message?.content || '';
-    const finishReason = openaiData.choices[0]?.finish_reason;
-
-    // Check if response was truncated by token limit
-    if (finishReason === 'length') {
-      console.warn('[Chat API] Response was truncated due to token limit. Consider increasing max_tokens.');
-    }
-
-    // Phase B & C: Citation verification and strictness validation for 'high' mode
-    if (evidence_strictness === 'high') {
-      // Phase B: Parse and verify citation tokens
-      const citationTokens = parseCitationTokens(responseText);
-      const allowlists = {
-        claims: allowedClaimIds,
-        quotes: allowedQuoteIds,
-        sources: allowedSourceUrls,
-      };
-      
-      const verification = verifyCitationTokens(citationTokens, allowlists);
-      const strictnessCheck = checkStrictnessValidation(responseText);
-      
-      let needsRegeneration = false;
-      let regenerationReason = '';
-      
-      if (!verification.ok) {
-        needsRegeneration = true;
-        const invalidParts: string[] = [];
-        if (verification.invalid.claims.length > 0) {
-          invalidParts.push(`invalid claim IDs: ${verification.invalid.claims.join(', ')}`);
-        }
-        if (verification.invalid.quotes.length > 0) {
-          invalidParts.push(`invalid quote IDs: ${verification.invalid.quotes.join(', ')}`);
-        }
-        if (verification.invalid.sources.length > 0) {
-          invalidParts.push(`invalid source URLs: ${verification.invalid.sources.join(', ')}`);
-        }
-        regenerationReason = `Your previous answer cited IDs not present in the allowlist: ${invalidParts.join('; ')}. Only cite allowed IDs from the Allowed Evidence IDs list.`;
-      }
-      
-      if (!strictnessCheck.passes) {
-        needsRegeneration = true;
-        regenerationReason = regenerationReason || `In strict mode, include citations inline frequently. ${strictnessCheck.reason || 'If you cannot cite, say you lack evidence.'}`;
-      }
-      
-      if (needsRegeneration) {
-        console.log('[Chat API] High strictness: Validation failed, regenerating...', { verification, strictnessCheck });
-        
-        // Regenerate once with stricter reminder
-        const stricterPrompt = systemPrompt + '\n\nCRITICAL REMINDER: ' + regenerationReason;
-        
-        try {
-          const regenerateResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model: 'gpt-4o-mini',
-              messages: messages.map((m, idx) => idx === 0 ? { ...m, content: stricterPrompt } : m),
-              temperature: 0.7,
-              max_tokens: maxTokens,
-            }),
-          });
-          
-          if (regenerateResponse.ok) {
-            const regenerateData = await regenerateResponse.json();
-            const regeneratedText = regenerateData.choices[0]?.message?.content || '';
-            
-            // Verify again
-            const newTokens = parseCitationTokens(regeneratedText);
-            const newVerification = verifyCitationTokens(newTokens, allowlists);
-            const newStrictnessCheck = checkStrictnessValidation(regeneratedText);
-            
-            if (!newVerification.ok || !newStrictnessCheck.passes) {
-              // Still has issues, prepend warning
-              responseText = '⚠️ Warning: Some citations could not be verified against your graph evidence.\n\n' + regeneratedText;
-              // Store invalid tokens in trace for debugging (non-user visible)
-              console.warn('[Chat API] Regenerated answer still has validation issues:', {
-                invalid: newVerification.invalid,
-                strictness: newStrictnessCheck,
-              });
-            } else {
-              responseText = regeneratedText;
-            }
-          }
-        } catch (err) {
-          console.warn('[Chat API] Failed to regenerate with stricter prompt:', err);
-          // Prepend warning to original response
-          responseText = '⚠️ Warning: Some citations could not be verified against your graph evidence.\n\n' + responseText;
-        }
-      }
-    }
-
-    // Parse response (similar to classic mode)
-    let answer = responseText;
-    
-    // If response was truncated, don't apply aggressive guardrails
-    const wasTruncated = finishReason === 'length';
-    let suggestedQuestions: string[] = [];
-    let suggestedActions: SuggestedAction[] = [];
-
-    // Extract SUGGESTED_ACTIONS - improved parsing
-    const actionsMatch = responseText.match(/SUGGESTED_ACTIONS:\s*(\[[\s\S]*?\])/);
-    if (actionsMatch) {
-      try {
-        const actionsJson = actionsMatch[1];
-        // Try to parse the JSON array directly
-        suggestedActions = JSON.parse(actionsJson);
-        console.log(`[Chat API] Parsed ${suggestedActions.length} suggested actions:`, suggestedActions);
-        answer = answer.split('SUGGESTED_ACTIONS:')[0].trim();
-      } catch (err) {
-        console.warn('[Chat API] Failed to parse suggested actions:', err);
-        console.warn('[Chat API] Actions string:', actionsMatch[1]);
-        // Try alternative parsing - extract individual action objects
-        try {
-          const actionObjects = actionsMatch[1].match(/\{[^}]*"type"[^}]*\}/g);
-          if (actionObjects) {
-            suggestedActions = actionObjects.map((obj: string) => {
-              try {
-                return JSON.parse(obj);
-              } catch {
-                return null;
-              }
-            }).filter(Boolean) as SuggestedAction[];
-            console.log(`[Chat API] Parsed ${suggestedActions.length} actions using fallback method`);
-          }
-        } catch (fallbackErr) {
-          console.warn('[Chat API] Fallback parsing also failed:', fallbackErr);
-        }
-        answer = answer.split('SUGGESTED_ACTIONS:')[0].trim();
-      }
-    } else {
-      // Check if actions might be in a different format
-      console.log('[Chat API] No SUGGESTED_ACTIONS found in response');
-      console.log('[Chat API] Response preview:', responseText.substring(0, 500));
-    }
-
-    // Extract FOLLOW_UP_QUESTIONS
-    const followUpMatch = answer.match(/FOLLOW_UP_QUESTIONS:\s*\[([\s\S]*?)\]/);
-    if (followUpMatch) {
-      try {
-        const questionsStr = followUpMatch[1];
-        const questionMatches = (questionsStr.match(/'([^']+)'/g) || questionsStr.match(/"([^"]+)"/g)) as string[] | null;
-        if (questionMatches) {
-          suggestedQuestions = questionMatches.map((q: string) => q.slice(1, -1));
-        }
-        answer = answer.split('FOLLOW_UP_QUESTIONS:')[0].trim();
-      } catch (err) {
-        console.warn('[Chat API] Failed to parse follow-up questions:', err);
-      }
-    }
-
-    // Remove ANSWER: prefix if present
-    if (answer.startsWith('ANSWER:')) {
-      answer = answer.substring(7).trim();
-    }
-
-    // Auto-execute "link" actions when user explicitly asks to link nodes
-    // Check if message is a clear link request (e.g., "link X to Y", "connect X and Y")
-    const linkPattern = /link\s+(\w+)\s+to\s+(\w+)|connect\s+(\w+)\s+(?:and|to)\s+(\w+)|link\s+(\w+)\s+and\s+(\w+)/i;
-    const linkMatch = message.match(linkPattern);
-    const isExplicitLinkRequest = linkMatch !== null;
-    
-    // Auto-execute link actions if:
-    // 1. User explicitly asked to link (pattern match), OR
-    // 2. There's a "link" action in suggestedActions and message contains "link"
-    const linkAction = suggestedActions.find(a => a.type === 'link' && a.source && a.target);
-    if (linkAction && (isExplicitLinkRequest || message.toLowerCase().includes('link'))) {
-      try {
-        console.log('[Chat API] Auto-executing link action:', linkAction);
-        
-        // Resolve concept names to node_ids
-        const resolveConcept = async (name: string): Promise<string | null> => {
-          try {
-            // First try to find in the graph context
-            const contextConcept = context.focus_entities?.find((e: any) => 
-              e.name.toLowerCase() === name.toLowerCase()
-            );
-            if (contextConcept) {
-              return contextConcept.node_id;
-            }
-            
-            // If not in context, search for it
-            const searchResponse = await fetch(
-              `${API_BASE_URL}/concepts/search?q=${encodeURIComponent(name)}&limit=5${graph_id ? `&graph_id=${graph_id}` : ''}`,
-              { method: 'GET' }
-            );
-            if (searchResponse.ok) {
-              const searchData = await searchResponse.json();
-              // Search endpoint returns { results: Concept[], count: number }
-              const exactMatch = searchData.results?.find((c: Concept) => 
-                c.name.toLowerCase() === name.toLowerCase()
-              );
-              if (exactMatch) {
-                return exactMatch.node_id;
-              }
-            }
-            return null;
-          } catch (err) {
-            console.warn(`[Chat API] Failed to resolve concept "${name}":`, err);
-            return null;
-          }
-        };
-        
-        const sourceId = await resolveConcept(linkAction.source!);
-        const targetId = await resolveConcept(linkAction.target!);
-        
-        if (sourceId && targetId) {
-          // Create the relationship
-          const relationshipResponse = await fetch(
-            `${API_BASE_URL}/concepts/relationship-by-ids?source_id=${sourceId}&target_id=${targetId}&predicate=RELATED_TO`,
-            { method: 'POST' }
-          );
-          
-          if (relationshipResponse.ok) {
-            // Update answer to confirm the link was created
-            answer = `✅ Linked "${linkAction.source}" to "${linkAction.target}" successfully!\n\n${answer}`;
-            // Remove the link action from suggestedActions since it's already executed
-            suggestedActions = suggestedActions.filter(a => !(a.type === 'link' && a.source === linkAction.source && a.target === linkAction.target));
-            console.log('[Chat API] Successfully auto-executed link action');
-          } else {
-            const errorText = await relationshipResponse.text();
-            console.warn('[Chat API] Failed to create relationship:', errorText);
-            answer = `⚠️ Could not create link: ${errorText}\n\n${answer}`;
-          }
-        } else {
-          const missing = [];
-          if (!sourceId) missing.push(linkAction.source);
-          if (!targetId) missing.push(linkAction.target);
-          console.warn(`[Chat API] Could not find concepts: ${missing.join(', ')}`);
-          answer = `⚠️ Could not find concept(s): ${missing.join(', ')}. Make sure they exist in the graph.\n\n${answer}`;
-        }
-      } catch (err) {
-        console.error('[Chat API] Error auto-executing link action:', err);
-        // Don't fail the whole request - just log and continue
-      }
-    }
-
-    // Apply post-processing guardrails (skip if already truncated by OpenAI)
-    answer = enforceGuardrails(answer, finalResponsePrefs, wasTruncated);
-    
-    // Format answer
-    answer = answer
-      .replace(/\n\n+/g, '\n\n')
-      .replace(/^[-•]\s+/gm, '• ')
-      // Remove bold markdown formatting (**text** becomes text)
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .trim();
-
-    // Generate answerId
-    const answerId = `answer-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
-    // Store answer (optional - could extract used concepts from GraphRAG debug info)
-    try {
-      const storeResponse = await fetch(`${API_BASE_URL}/answers/store`, {
-        method: 'POST',
-        headers: getBackendHeaders(),
-          body: JSON.stringify({
-            answer_id: answerId,
-            question: message,
-            raw_answer: answer,
-            used_node_ids: context.focus_entities?.map((e: any) => e.node_id) || [],
-          }),
-      });
-      if (storeResponse.ok) {
-        // Log answer created event
-        try {
-          await fetch(`${API_BASE_URL}/events/activity`, {
-            method: 'POST',
-            headers: getBackendHeaders(),
-            body: JSON.stringify({
-              type: 'ANSWER_CREATED',
-              answer_id: answerId,
-              graph_id: graph_id || undefined,
-              payload: { conceptIdsUsed: context.focus_entities?.map((e: any) => e.node_id) || [] },
-            }),
-          }).catch(() => {}); // Swallow errors
-        } catch {
-          // Ignore event logging errors
-        }
-      } else {
-        console.warn('[Chat API] Failed to store answer:', await storeResponse.text());
-      }
-    } catch (err) {
-      console.warn('[Chat API] Error storing answer:', err);
-    }
-
-    // Extract retrieval metadata for display
-    // Use retrieval_meta from backend if available (summary mode), otherwise compute
-    const backendMeta = context.retrieval_meta;
-    const retrievalMeta = backendMeta ? {
-      communities: backendMeta.communities || 0,
-      claims: backendMeta.claims || 0,
-      concepts: backendMeta.concepts || 0,
-      edges: backendMeta.edges || 0,
-      sourceBreakdown: backendMeta.sourceBreakdown || {},
-      claimIds: backendMeta.claimIds || [],
-      communityIds: backendMeta.communityIds || [],
-      topClaims: backendMeta.topClaims || [], // Include claim previews
-      intent: intent,
-      traceSteps: trace.length,
-    } : {
-      communities: context.focus_communities?.length || 0,
-      claims: context.claims?.length || 0,
-      concepts: context.focus_entities?.length || 0,
-      edges: context.subgraph?.edges?.length || 0,
-      sourceBreakdown: {},
-      claimIds: context.claims?.map((c: any) => c.claim_id) || [],
-      communityIds: context.focus_communities?.map((c: any) => c.community_id) || [],
-      topClaims: context.top_claims || context.claims?.slice(0, 5) || [], // Fallback to claims if available
-      intent: intent,
-      traceSteps: trace.length,
-    };
-
-    // Convert focus_entities to Concept format for usedNodes
-    const usedNodes: Concept[] = (context.focus_entities || []).map((e: any) => ({
-      node_id: e.node_id,
-      name: e.name,
-      domain: e.domain || '',
-      type: e.type || 'concept',
-      description: e.description,
-      tags: e.tags,
-    }));
-
-    // Extract suggestions from context if available
-    const contextSuggestions = context.suggestions || [];
-    const suggestedQuestionsFromContext = contextSuggestions.map((s: any) => s.query || s.label).slice(0, 3);
-    
-    const duration = Date.now() - startTime;
-    
-    // Extract evidence_used from context
-    const evidenceUsed: EvidenceItem[] = context.evidence_used || [];
-
-    // Phase E: Populate meta.trace from retrievalData + session/focus contexts
-    const traceIds = context.trace_ids || {};
-    const sessionContext = context.session_context || {};
-    
-    // Build used_trail_steps from session_context
-    const usedTrailSteps = (sessionContext.steps || []).map((s: any) => ({
-      step_id: s.step_id,
-      kind: s.kind,
-      ref_id: s.ref_id,
-      title: s.title,
-      created_at: s.created_at,
-    }));
-    
-    // Build used_sources from evidence_used
-    const usedSources = evidenceUsed.map(e => ({
-      title: e.title,
-      url: e.url || undefined,
-    })).filter(s => s.title || s.url);
-    
-    // Phase D: Add printed_* fields to trace for consistency
-    const metaTrace = {
-      used_trail_steps: usedTrailSteps,
-      used_concepts: traceIds.used_concept_ids || [],
-      used_quotes: traceIds.used_quote_ids || [],
-      used_claims: traceIds.used_claim_ids || [],
-      used_sources: usedSources,
-      printed_quotes: printedQuotes,
-      printed_claims: printedClaims,
-      printed_sources: printedSources,
-      retrieval_plan: retrievalData?.plan_version || 'intent_plans_v1',
-      retrieval_latency_ms: retrievalLatency || 0,
-      evidence_strictness: evidence_strictness || 'medium',
-    };
-
-    // Generate answer sections for inline claim alignment
-    const sections = splitAnswerIntoSections(answer);
-    const answer_sections = mapEvidenceToSections(sections, evidenceUsed);
-
-    // Debug: Log the answer before returning
-    console.log('[Chat API] Final answer length:', answer.length);
-    console.log('[Chat API] Final answer preview:', answer.substring(0, 200));
-    
-    // CRITICAL: Ensure answer is not empty - if it is, use a fallback
-    if (!answer || answer.trim() === '') {
-      console.error('[Chat API] ⚠️ WARNING: Answer is empty after processing! Using fallback.');
-      answer = "I'm sorry, I encountered an issue generating a response. Please try rephrasing your question.";
-    }
-    
-    const response: ChatResponse = {
-      answer: answer.trim(), // Ensure answer is trimmed and not empty
-      usedNodes: usedNodes,
-      suggestedQuestions: suggestedQuestionsFromContext.length > 0 ? suggestedQuestionsFromContext : suggestedQuestions.slice(0, 3),
-      suggestedActions: suggestedActions.slice(0, 5),
-      answerId,
-      retrievalMeta, // Add retrieval metadata
-      evidenceUsed: evidenceUsed.length > 0 ? evidenceUsed : undefined,
-      answer_sections,
-      meta: {
-        mode: 'graphrag',
-        rewriteApplied: false,
-        duration_ms: duration,
-        intent: intent,
-        traceSteps: trace.length,
-        trace: metaTrace,
-      },
-    };
-
-    console.log('[Chat API] Returning response with answer length:', response.answer.length);
-    console.log('[Chat API] Response keys:', Object.keys(response));
     return NextResponse.json(response);
   } catch (error) {
     console.error('GraphRAG Chat API error:', error);
@@ -2883,6 +2156,7 @@ function verifyCitationTokens(
 }
 
 /**
+ * @deprecated Use AI Validator agent instead. This rule-based validation is replaced by AI agents.
  * Check strictness validation for high mode.
  * Returns true if answer meets citation requirements.
  */
@@ -2939,12 +2213,17 @@ function checkStrictnessValidation(answerText: string): { passes: boolean; reaso
  * Phase C: Prepend session context and quotes/claims with IDs.
  * Returns context text and printed evidence IDs for allowlist.
  */
-function buildContextTextFromStructured(context: any, intent: string): {
+async function buildContextTextFromStructured(
+  context: any, 
+  retrievalIntent: string,
+  question: string,
+  apiKey: string
+): Promise<{
   text: string;
   printedClaims: string[];
   printedQuotes: string[];
   printedSources: string[];
-} {
+}> {
   const parts: string[] = [];
   const printedClaims: string[] = [];
   const printedQuotes: string[] = [];
@@ -2990,7 +2269,16 @@ function buildContextTextFromStructured(context: any, intent: string): {
   
   if (allQuotes.length > 0) {
     parts.push("## Supporting Quotes");
-    const quotesToPrint = allQuotes.slice(0, 10);
+    // Use AI-based dynamic context manager to select most important quotes
+    const quoteChunks: ContextChunk[] = allQuotes.map((quote: any) => ({
+      content: quote.text || '',
+      type: 'quote' as const,
+      id: quote.quote_id,
+    }));
+    const optimizedQuotes = await buildOptimizedContext(quoteChunks, question, 4000, apiKey); // ~1000 tokens for quotes
+    const quotesToPrint = optimizedQuotes.selectedChunks.map(chunk => 
+      allQuotes.find((q: any) => q.quote_id === chunk.id) || allQuotes[0]
+    ).slice(0, 10); // Still limit to 10 for safety
     for (const quote of quotesToPrint) {
       const quoteId = quote.quote_id || '';
       const text = quote.text || '';
@@ -3049,7 +2337,17 @@ function buildContextTextFromStructured(context: any, intent: string): {
   // Add communities section (summary mode: names only, max 3, no summaries)
   if (context.focus_communities && context.focus_communities.length > 0) {
     parts.push("## Community Summaries (Global Memory)");
-    for (const comm of context.focus_communities.slice(0, 3)) {
+    // Use AI-based dynamic context manager to select most important communities
+    const communityChunks: ContextChunk[] = context.focus_communities.map((comm: any) => ({
+      content: comm.name || comm.community_id || '',
+      type: 'community' as const,
+      id: comm.community_id,
+    }));
+    const optimizedCommunities = await buildOptimizedContext(communityChunks, question, 1000, apiKey);
+    const communitiesToPrint = optimizedCommunities.selectedChunks.map(chunk => 
+      context.focus_communities.find((c: any) => c.community_id === chunk.id) || context.focus_communities[0]
+    ).slice(0, 3); // Limit to 3 for summary mode
+    for (const comm of communitiesToPrint) {
       parts.push(`\n### ${comm.name || comm.community_id}`);
       // Summary mode: no long summary text, just names
     }
@@ -3059,7 +2357,17 @@ function buildContextTextFromStructured(context: any, intent: string): {
   // Add concepts section (summary mode: max 5, no descriptions)
   if (context.focus_entities && context.focus_entities.length > 0) {
     parts.push("## Relevant Concepts");
-    for (const concept of context.focus_entities.slice(0, 5)) {
+    // Use AI-based dynamic context manager to select most important concepts
+    const conceptChunks: ContextChunk[] = context.focus_entities.map((concept: any) => ({
+      content: concept.name || concept.description || '',
+      type: 'concept' as const,
+      id: concept.node_id || concept.concept_id,
+    }));
+    const optimizedConcepts = await buildOptimizedContext(conceptChunks, retrievalIntent, 2000, apiKey);
+    const conceptsToPrint = optimizedConcepts.selectedChunks.map(chunk => 
+      context.focus_entities.find((c: any) => (c.node_id || c.concept_id) === chunk.id) || context.focus_entities[0]
+    ).slice(0, 5); // Limit to 5 for summary mode
+    for (const concept of conceptsToPrint) {
       parts.push(`\n### ${concept.name}`);
       // Summary mode: no descriptions, just names
       if (concept.domain) {
@@ -3073,17 +2381,37 @@ function buildContextTextFromStructured(context: any, intent: string): {
   }
   
   // Intent-specific sections
-  if (intent === 'TIMELINE' && context.timeline_items) {
+  if (retrievalIntent === 'TIMELINE' && context.timeline_items) {
     parts.push("## Timeline");
-    for (const item of context.timeline_items.slice(0, 15)) {
+    // Use AI-based dynamic context manager to select most important timeline items
+    const timelineChunks: ContextChunk[] = context.timeline_items.map((item: any) => ({
+      content: item.text || `${item.date || 'unknown'}: ${item.text || ''}`,
+      type: 'source' as const,
+      id: item.item_id || item.date,
+    }));
+    const optimizedTimeline = await buildOptimizedContext(timelineChunks, question, 3000, apiKey);
+    const timelineToPrint = optimizedTimeline.selectedChunks.map(chunk => 
+      context.timeline_items.find((item: any) => (item.item_id || item.date) === chunk.id) || context.timeline_items[0]
+    ).slice(0, 15); // Limit to 15 for timeline
+    for (const item of timelineToPrint) {
       parts.push(`\n[${item.date || 'unknown'}] ${item.text}`);
     }
     parts.push("");
   }
   
-  if (intent === 'CAUSAL_CHAIN' && context.causal_paths) {
+  if (retrievalIntent === 'CAUSAL_CHAIN' && context.causal_paths) {
     parts.push("## Causal Paths");
-    for (const path of context.causal_paths.slice(0, 3)) {
+    // Use AI-based dynamic context manager to select most important causal paths
+    const pathChunks: ContextChunk[] = context.causal_paths.map((path: any) => ({
+      content: `Path with ${path.nodes?.length || 0} nodes, ${path.edges?.length || 0} edges`,
+      type: 'source' as const,
+      id: path.path_id || `path-${path.nodes?.[0]?.node_id || 'unknown'}`,
+    }));
+    const optimizedPaths = await buildOptimizedContext(pathChunks, question, 2000, apiKey);
+    const pathsToPrint = optimizedPaths.selectedChunks.map(chunk => 
+      context.causal_paths.find((p: any) => (p.path_id || `path-${p.nodes?.[0]?.node_id || 'unknown'}`) === chunk.id) || context.causal_paths[0]
+    ).slice(0, 3); // Limit to 3 for causal paths
+    for (const path of pathsToPrint) {
       parts.push(`\nPath with ${path.nodes?.length || 0} nodes, ${path.edges?.length || 0} edges`);
       if (path.supporting_claim_ids) {
         parts.push(`Supported by ${path.supporting_claim_ids.length} claims`);
@@ -3092,7 +2420,7 @@ function buildContextTextFromStructured(context: any, intent: string): {
     parts.push("");
   }
   
-  if (intent === 'COMPARE' && context.compare) {
+  if (retrievalIntent === 'COMPARE' && context.compare) {
     parts.push("## Comparison");
     parts.push(`\nComparing: ${context.compare.A?.name || 'A'} vs ${context.compare.B?.name || 'B'}`);
     if (context.compare.overlaps?.shared_concepts) {
@@ -3101,7 +2429,7 @@ function buildContextTextFromStructured(context: any, intent: string): {
     parts.push("");
   }
   
-  if (intent === 'EVIDENCE_CHECK' && context.evidence) {
+  if (retrievalIntent === 'EVIDENCE_CHECK' && context.evidence) {
     parts.push("## Evidence");
     if (context.evidence.supporting) {
       parts.push(`\nSupporting claims: ${context.evidence.supporting.length}`);
@@ -3124,4 +2452,34 @@ function buildContextTextFromStructured(context: any, intent: string): {
     printedQuotes: Array.from(new Set(printedQuotes)),
     printedSources: Array.from(new Set(printedSources)),
   };
+}
+
+/**
+ * Helper function to select top claims using AI-based importance scoring
+ */
+async function _selectTopClaims(
+  claims: any[],
+  question: string,
+  apiKey: string,
+  maxClaims: number = 5
+): Promise<any[]> {
+  if (!claims || claims.length === 0) return [];
+  if (claims.length <= maxClaims) return claims;
+  
+  try {
+    const claimChunks: ContextChunk[] = claims.map((claim: any) => ({
+      content: claim.text || '',
+      type: 'claim' as const,
+      id: claim.claim_id,
+    }));
+    
+    const optimized = await buildOptimizedContext(claimChunks, question, 2000, apiKey);
+    return optimized.selectedChunks
+      .map(chunk => claims.find((c: any) => c.claim_id === chunk.id))
+      .filter((c): c is any => c !== undefined)
+      .slice(0, maxClaims);
+  } catch (error) {
+    console.error('[Chat API] Error selecting top claims, using first N:', error);
+    return claims.slice(0, maxClaims); // Fallback to simple slicing
+  }
 }

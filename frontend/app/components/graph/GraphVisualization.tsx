@@ -9,6 +9,8 @@ import ExplorerToolbar from './ExplorerToolbar';
 import GraphMiniMap from './GraphMiniMap';
 import ContextPanel, { type ContextPanelTab } from '../context/ContextPanel';
 import SessionDrawer from '../navigation/SessionDrawer';
+import ContextTracker, { ContextTrackerButton } from '../explorer/ContextTracker';
+import NavigationTestHelper from '../navigation/NavigationTestHelper';
 import { GraphProvider, useGraph, type VisualGraph } from './GraphContext';
 import { useChatState, type ChatMessage } from './hooks/useChatState';
 import { useGraphFilters } from './hooks/useGraphFilters';
@@ -21,6 +23,7 @@ import { normalizeEvidence } from '../../types/evidence';
 import { useEvidenceNavigation } from '../../hooks/useEvidenceNavigation';
 import { computeFreshness } from '../../utils/freshness';
 import { formatConfidence } from '../../utils/confidence';
+import { registerChatResetFunction, unregisterNavigationFunctions } from '../../lib/globalNavigationState';
 import {
   getResourcesForConcept,
   uploadResourceForConcept,
@@ -44,9 +47,11 @@ import {
   restoreSnapshot,
   getGraphOverview,
   getGraphNeighbors,
+  resolveLectureLinks,
 } from '../../api-client';
 import { fetchEvidenceForConcept } from '../../lib/evidenceFetch';
 import { setLastSession, getLastSession, pushRecentConceptView, trackConceptViewed, trackEvent } from '../../lib/sessionState';
+import { addConceptToHistory } from '../../lib/conceptNavigationHistory';
 import { logEvent } from '../../lib/eventsClient';
 import { 
   createChatSession, 
@@ -57,6 +62,8 @@ import {
   getChatSession,
   type ChatSession 
 } from '../../lib/chatSessions';
+import { emitChatMessageCreated } from '../../lib/sessionEvents';
+import { storeLectureLinkReturn, consumeLectureLinkReturn } from '../../lib/lectureLinkNavigation';
 import StyleFeedbackForm from '../ui/StyleFeedbackForm';
 
 // Activity Event Types
@@ -578,6 +585,16 @@ function GraphVisualizationInner() {
   const filters = useGraphFilters();
   const ui = useUIState();
   
+  // Register chat reset function for global navigation access
+  useEffect(() => {
+    registerChatResetFunction(chat.actions.resetChat);
+    
+    // Cleanup on unmount
+    return () => {
+      unregisterNavigationFunctions();
+    };
+  }, [chat.actions.resetChat]);
+  
   // Suppress React ref warning for LoadableComponent (Next.js dynamic import limitation)
   useEffect(() => {
     if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
@@ -645,6 +662,24 @@ function GraphVisualizationInner() {
       }
     };
   }, [chat.state.chatHistory.length, chat.state.chatAnswer]);
+
+  useEffect(() => {
+    if (!chatStreamRef.current || typeof window === 'undefined') {
+      return;
+    }
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    const returnState = consumeLectureLinkReturn(currentPath);
+    if (!returnState) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (chatStreamRef.current && returnState.chatScrollTop !== undefined) {
+        chatStreamRef.current.scrollTop = returnState.chatScrollTop;
+      } else if (returnState.windowScrollTop !== undefined) {
+        window.scrollTo({ top: returnState.windowScrollTop, behavior: 'auto' });
+      }
+    });
+  }, [chat.state.chatHistory.length]);
   
   // Clear transient chatAnswer if it's already in history (prevents duplicate display)
   useEffect(() => {
@@ -1450,6 +1485,20 @@ function GraphVisualizationInner() {
     }
   }, [convertGraphData, tempNodes, activeGraphId]);
 
+  // Listen for graph reload events (e.g., after node creation)
+  useEffect(() => {
+    const handleGraphReload = (event: CustomEvent) => {
+      const graphId = event.detail?.graph_id || activeGraphId;
+      if (graphId) {
+        loadGraph(graphId);
+      }
+    };
+    window.addEventListener('graph-reload' as any, handleGraphReload as EventListener);
+    return () => {
+      window.removeEventListener('graph-reload' as any, handleGraphReload as EventListener);
+    };
+  }, [activeGraphId, loadGraph]);
+
   const refreshGraphs = useCallback(async (preserveActiveGraph = true) => {
     try {
       const data = await listGraphs();
@@ -1842,8 +1891,24 @@ function GraphVisualizationInner() {
     // Check if concept is in the loaded graph
     const conceptInGraph = graphData.nodes.find((n: any) => n.node_id === conceptIdParam);
     if (conceptInGraph) {
+      // Track navigation if we have a previous node
+      if (selectedNode && selectedNode.node_id !== conceptIdParam) {
+        const edge = graphData.links.find(
+          link => 
+            (link.source === selectedNode.node_id && link.target === conceptIdParam) ||
+            (link.source === conceptIdParam && link.target === selectedNode.node_id)
+        );
+        const relationship = edge?.predicate || 'navigated_to';
+        addConceptToHistory(conceptIdParam, conceptInGraph.name, relationship, selectedNode.node_id);
+      } else if (!selectedNode) {
+        addConceptToHistory(conceptIdParam, conceptInGraph.name);
+      }
+      
       // Concept is in graph, select it
       setSelectedNode(conceptInGraph);
+      if (typeof window !== 'undefined') {
+        (window as any).__brainWebSelectedNode = conceptInGraph;
+      }
       updateSelectedPosition(conceptInGraph);
       
       // Load resources for the concept (only if not cached)
@@ -2033,8 +2098,19 @@ function GraphVisualizationInner() {
             // Use getConcept API to fetch full concept data
             import('../../api-client').then((api) => {
               api.getConcept(conceptIdParam).then((concept) => {
+                // Track navigation
+                if (selectedNode && selectedNode.node_id !== conceptIdParam) {
+                  const relationship = 'navigated_to';
+                  addConceptToHistory(conceptIdParam, concept.name, relationship, selectedNode.node_id);
+                } else if (!selectedNode) {
+                  addConceptToHistory(conceptIdParam, concept.name);
+                }
+                
                 // Set the selected node - this will automatically open the context panel
                 setSelectedNode(concept);
+                if (typeof window !== 'undefined') {
+                  (window as any).__brainWebSelectedNode = concept;
+                }
                 updateSelectedPosition(concept);
                 
                 // Load resources for the concept
@@ -2267,7 +2343,60 @@ function GraphVisualizationInner() {
   // Chat input handler
   // Ref to track the current message ID being processed
   const currentMessageIdRef = useRef<string | null>(null);
-  
+
+  const handleFindInLecture = useCallback(async (msg: ChatMessage) => {
+    const chatId = searchParams?.get('chat') || getCurrentSessionId();
+    if (!chatId) {
+      alert('Start a chat session to link to lectures.');
+      return;
+    }
+
+    const sourceId = msg.eventId || msg.id;
+    try {
+      const result = await resolveLectureLinks({
+        chat_id: chatId,
+        source_type: 'main_chat_event',
+        source_id: sourceId,
+      });
+
+      if (!result.links.length) {
+        alert('No lecture matches found.');
+        return;
+      }
+
+      let selected = result.links[0];
+      if (result.weak && result.links.length > 1) {
+        const options = result.links.map((link, idx) =>
+          `${idx + 1}. ${link.lecture_section_id} (${Math.round(link.confidence_score * 100)}%)`
+        ).join('\n');
+        const choice = window.prompt(`Low confidence. Choose a match:\n${options}`, '1');
+        const index = Number(choice) - 1;
+        if (!Number.isNaN(index) && result.links[index]) {
+          selected = result.links[index];
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        storeLectureLinkReturn({
+          path: `${window.location.pathname}${window.location.search}`,
+          chatScrollTop: chatStreamRef.current?.scrollTop ?? 0,
+        });
+      }
+
+      const params = new URLSearchParams({
+        lecture_document_id: selected.lecture_document_id,
+        section_id: selected.lecture_section_id,
+        start_offset: String(selected.start_offset),
+        end_offset: String(selected.end_offset),
+        link_id: selected.id,
+      });
+      router.push(`/lecture-viewer?${params.toString()}`);
+    } catch (err) {
+      console.error('Failed to resolve lecture link:', err);
+      alert('Failed to resolve lecture link.');
+    }
+  }, [searchParams, router]);
+
   const handleChatSubmit = useCallback(async (message: string) => {
     // Prevent duplicate submissions
     if (!message.trim() || chat.state.isChatLoading || isSubmittingChatRef.current) {
@@ -2300,6 +2429,7 @@ function GraphVisualizationInner() {
       question: message,
       answer: '', // Empty initially, will be filled when response arrives
       answerId: null,
+      eventId: null,
       answerSections: null,
       timestamp: Date.now(),
       suggestedQuestions: [],
@@ -2346,6 +2476,11 @@ function GraphVisualizationInner() {
         historyLength: chatHistoryForAPI.length,
       });
       
+      // Get current context from ContextTracker if available
+      const context = typeof window !== 'undefined' && (window as any).__brainWebContext 
+        ? (window as any).__brainWebContext 
+        : null;
+
       const response = await fetch('/api/brain-web/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2356,6 +2491,12 @@ function GraphVisualizationInner() {
           branch_id: activeBranchId,
           lens: undefined,
           chatHistory: chatHistoryForAPI,
+          ui_context: context ? {
+            dom_path: context.domPath,
+            position: context.position,
+            react_component: context.reactComponent,
+            html_element: context.htmlElement?.substring(0, 200), // Truncate for size
+          } : undefined,
         }),
       });
       
@@ -2644,6 +2785,7 @@ function GraphVisualizationInner() {
               question: message || 'User question',
               answer: data.answer,
               answerId: data.answerId || null,
+              eventId: null,
               answerSections: data.answer_sections || data.sections || null,
               timestamp: Date.now(),
               suggestedQuestions: data.suggestedQuestions || [],
@@ -2706,6 +2848,7 @@ function GraphVisualizationInner() {
                 question: message || 'User question',
                 answer: data.answer,
                 answerId: data.answerId || null,
+                eventId: null,
                 answerSections: data.answer_sections || null,
                 timestamp: Date.now(),
                 suggestedQuestions: data.suggestedQuestions || [],
@@ -2744,6 +2887,7 @@ function GraphVisualizationInner() {
             message,
             data.answer || '',
             data.answerId || null,
+            null,
             activeGraphId,
             activeBranchId
           );
@@ -2756,14 +2900,36 @@ function GraphVisualizationInner() {
       
       // Add message to session
       if (currentSessionId && data.answer && message.trim()) {
+        const messageIdForEvent = currentMessageIdRef.current || userMessageId;
+        let emittedEventId: string | null = null;
+        try {
+          const eventResult = await emitChatMessageCreated(currentSessionId, {
+            message,
+            answer: data.answer,
+            answer_summary: data.answer.slice(0, 500),
+            message_id: messageIdForEvent,
+          });
+          emittedEventId = eventResult?.event_id || null;
+        } catch (err) {
+          console.warn('[Chat] Failed to emit chat message event:', err);
+        }
+
         addMessageToSession(
           currentSessionId,
           message,
           data.answer,
           data.answerId || null,
           data.suggestedQuestions || [],
-          normalizedEvidence
+          normalizedEvidence,
+          emittedEventId
         );
+
+        if (emittedEventId) {
+          const updatedHistory = chat.state.chatHistory.map((msg) =>
+            msg.id === messageIdForEvent ? { ...msg, eventId: emittedEventId } : msg
+          );
+          chat.actions.setChatHistory(updatedHistory);
+        }
       }
       
       // Scroll chat to bottom after a brief delay to ensure DOM is updated
@@ -2828,6 +2994,27 @@ function GraphVisualizationInner() {
     setSelectedNode(concept);
     trackConceptViewed(concept.node_id, concept.name);
     pushRecentConceptView({ id: concept.node_id, name: concept.name });
+    
+    // Track concept navigation with relationship info
+    if (selectedNode && isDifferentNode) {
+      // Find the relationship between previous and current concept
+      const edge = graphData.links.find(
+        link => 
+          (link.source === selectedNode.node_id && link.target === concept.node_id) ||
+          (link.source === concept.node_id && link.target === selectedNode.node_id)
+      );
+      const relationship = edge?.predicate || 'navigated_to';
+      addConceptToHistory(concept.node_id, concept.name, relationship, selectedNode.node_id);
+    } else {
+      // First concept or no previous concept
+      addConceptToHistory(concept.node_id, concept.name);
+    }
+    
+    // Store selectedNode globally for ContextTrackerButton
+    if (typeof window !== 'undefined') {
+      (window as any).__brainWebSelectedNode = concept;
+    }
+    
     // Set a default position immediately so panel shows up right away
     if (typeof window !== 'undefined') {
       ui.actions.setSelectedPosition({ 
@@ -2904,6 +3091,7 @@ function GraphVisualizationInner() {
           question: msg.question,
           answer: msg.answer,
           answerId: msg.answerId,
+          eventId: msg.eventId || null,
           answerSections: null,
           timestamp: msg.timestamp,
           suggestedQuestions: msg.suggestedQuestions || [],
@@ -2960,6 +3148,9 @@ function GraphVisualizationInner() {
   // Don't block UI - show everything immediately, just show loading state in graph area
   return (
     <div className="app-shell" style={{ position: 'relative', width: '100%', height: '100vh', overflow: 'hidden' }}>
+      
+      {/* Navigation test helper (development only) */}
+      <NavigationTestHelper />
 
       {/* Graph canvas - full screen behind everything */}
       <div 
@@ -3170,6 +3361,12 @@ function GraphVisualizationInner() {
             const isSelected = selectedNode?.node_id === node.node_id;
             
             if (isSelected) {
+              // Validate node position is finite before drawing
+              if (typeof node.x !== 'number' || typeof node.y !== 'number' || 
+                  !isFinite(node.x) || !isFinite(node.y)) {
+                return; // Skip drawing if position is invalid
+              }
+              
               const nodeSize = 24;
               // Draw bright white glow effect for selected node
               const glowRadius = nodeSize + 12;
@@ -3512,7 +3709,8 @@ function GraphVisualizationInner() {
             </div>
             
             {/* Control buttons row */}
-            <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
+              <ContextTrackerButton />
               <button
                 onClick={() => {
                   // Maximize/Expand chat
@@ -3761,6 +3959,24 @@ function GraphVisualizationInner() {
                       </div>
                     );
                   })()}
+
+                  {msg.answer && msg.answer.trim() && (
+                    <button
+                      onClick={() => handleFindInLecture(msg)}
+                      style={{
+                        alignSelf: 'flex-start',
+                        padding: '6px 10px',
+                        fontSize: '12px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--ink)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Find in lecture
+                    </button>
+                  )}
                   
                   {/* Answer sections with evidence */}
                   {msg.answerSections && msg.answerSections.length > 0 && (
@@ -4783,6 +4999,7 @@ function GraphVisualizationInner() {
           {ui.state.graphSwitchBanner.message}
         </div>
       )}
+      <ContextTracker />
     </div>
   );
 }

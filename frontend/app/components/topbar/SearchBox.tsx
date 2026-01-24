@@ -560,9 +560,52 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
             </div>
           ) : searchResults.length === 0 ? (
             <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280' }}>
-              <div>No matches found</div>
+              <div style={{ marginBottom: '12px' }}>No matches found</div>
+              {activeGraphId && searchQuery.trim() && (
+                <div
+                  onClick={async () => {
+                    try {
+                      await selectGraph(activeGraphId);
+                      const newConcept = await createConcept({
+                        name: searchQuery.trim(),
+                        domain: 'general',
+                        type: 'concept',
+                        graph_id: activeGraphId,
+                      });
+                      window.dispatchEvent(new CustomEvent('graph-action', { detail: { type: 'added' } }));
+                      // Trigger graph reload event
+                      window.dispatchEvent(new CustomEvent('graph-reload', { detail: { graph_id: activeGraphId } }));
+                      const params = new URLSearchParams();
+                      params.set('select', newConcept.node_id);
+                      params.set('graph_id', activeGraphId);
+                      router.push(`/?${params.toString()}`);
+                      setSearchQuery('');
+                      setSearchFocused(false);
+                    } catch (err) {
+                      console.error('Failed to create concept:', err);
+                      alert(`Failed to create node: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                    }
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    background: '#6366f1',
+                    color: 'white',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500',
+                    display: 'inline-block',
+                    marginTop: '8px',
+                    transition: 'background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = '#4f46e5'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = '#6366f1'}
+                >
+                  Add "{searchQuery.trim()}"
+                </div>
+              )}
               {activeGraphId && (
-                <div style={{ fontSize: '11px', marginTop: '4px', color: '#9ca3af' }}>
+                <div style={{ fontSize: '11px', marginTop: '8px', color: '#9ca3af' }}>
                   Searching in graph: {activeGraphId}
                 </div>
               )}

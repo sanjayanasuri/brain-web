@@ -72,6 +72,37 @@ export interface Concept {
   last_updated_by?: string | null;
 }
 
+export type ConceptNote = {
+  id: string;
+  chat_id: string;
+  section_id: string;
+  section_title: string;
+  summary_text: string;
+  source_type: string;
+  confidence_level: number | null;
+  created_at: string;
+  related_node_ids: string[];
+};
+
+export async function getConceptNotes(nodeId: string, limit = 10, offset = 0): Promise<ConceptNote[]> {
+  const headers = await getApiHeaders();
+  const params = new URLSearchParams({
+    limit: limit.toString(),
+    offset: offset.toString(),
+  });
+  const res = await fetch(`${API_BASE_URL}/concepts/${encodeURIComponent(nodeId)}/notes?${params.toString()}`, {
+    headers,
+  });
+  if (!res.ok) {
+    if (res.status === 404) {
+      return [];
+    }
+    const errorText = await res.text();
+    throw new Error(`Failed to get concept notes: ${res.statusText}${errorText ? ` - ${errorText}` : ''}`);
+  }
+  return res.json();
+}
+
 export interface Relationship {
   source_id: string;
   predicate: string;
@@ -1164,6 +1195,48 @@ export interface LectureIngestResult {
   created_claim_ids?: string[];
 }
 
+export type LectureLinkSourceType = 'main_chat_event' | 'branch' | 'bridging_hint' | 'notes_entry';
+export type LectureLinkMethod = 'keyword' | 'embedding' | 'hybrid';
+
+export interface LectureLink {
+  id: string;
+  chat_id: string;
+  source_type: LectureLinkSourceType;
+  source_id: string;
+  lecture_document_id: string;
+  lecture_section_id: string;
+  start_offset: number;
+  end_offset: number;
+  confidence_score: number;
+  method: LectureLinkMethod;
+  justification_text: string;
+  created_at?: string | null;
+}
+
+export interface LectureLinkResolveRequest {
+  chat_id: string;
+  source_type: LectureLinkSourceType;
+  source_id: string;
+  lecture_document_ids?: string[] | null;
+  top_n?: number | null;
+}
+
+export interface LectureLinkResolveResponse {
+  links: LectureLink[];
+  weak: boolean;
+}
+
+export interface LectureSection {
+  id: string;
+  lecture_document_id: string;
+  section_index: number;
+  title?: string | null;
+  raw_text: string;
+  source_uri?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 /**
  * Ingest a lecture by extracting concepts and relationships using LLM
  */
@@ -1407,6 +1480,77 @@ export async function updateSegment(
     throw new Error(`Failed to update segment: ${response.statusText} - ${errorText}`);
   }
   return response.json();
+}
+
+export async function resolveLectureLinks(
+  payload: LectureLinkResolveRequest
+): Promise<LectureLinkResolveResponse> {
+  const response = await fetch(`${API_BASE_URL}/lecture-links/resolve`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to resolve lecture links: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function listLectureLinks(
+  chatId: string,
+  sourceType: LectureLinkSourceType,
+  sourceId: string
+): Promise<LectureLink[]> {
+  const params = new URLSearchParams({
+    chat_id: chatId,
+    source_type: sourceType,
+    source_id: sourceId,
+  });
+  const response = await fetch(`${API_BASE_URL}/lecture-links?${params.toString()}`, {
+    headers: await getApiHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to list lecture links: ${response.statusText} - ${errorText}`);
+  }
+  return response.json();
+}
+
+export async function getLectureSection(
+  lectureId: string,
+  sectionId: string,
+  linkId?: string | null
+): Promise<LectureSection> {
+  const params = new URLSearchParams();
+  if (linkId) {
+    params.set('link_id', linkId);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/sections/${sectionId}${suffix}`, {
+    headers: await getApiHeaders(),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch lecture section: ${response.statusText} - ${errorText}`);
+  }
+  const data = await response.json();
+  return data.section || data;
+}
+
+export async function submitLectureLinkFeedback(
+  linkId: string,
+  action: 'dismiss' | 'helpful'
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/lecture-links/${linkId}/feedback`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+    body: JSON.stringify({ action }),
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to submit lecture link feedback: ${response.statusText} - ${errorText}`);
+  }
 }
 
 /**
@@ -1974,6 +2118,173 @@ export async function uploadResourceForConcept(
     throw new Error(`Failed to upload resource: ${res.statusText}`);
   }
   return res.json();
+}
+
+/**
+ * PDF Ingestion Response
+ */
+export interface PDFIngestResponse {
+  status: 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  artifact_id?: string | null;
+  run_id?: string | null;
+  concepts_created: number;
+  concepts_updated: number;
+  links_created: number;
+  chunks_created: number;
+  claims_created: number;
+  page_count: number;
+  extraction_method?: string | null;
+  warnings: string[];
+  errors: string[];
+}
+
+/**
+ * Ingest a PDF file into the knowledge graph
+ */
+export async function ingestPDF(
+  file: File,
+  options?: {
+    domain?: string;
+    use_ocr?: boolean;
+    extract_tables?: boolean;
+    extract_concepts?: boolean;
+    extract_claims?: boolean;
+  }
+): Promise<PDFIngestResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (options?.domain) formData.append('domain', options.domain);
+  if (options?.use_ocr !== undefined) formData.append('use_ocr', String(options.use_ocr));
+  if (options?.extract_tables !== undefined) formData.append('extract_tables', String(options.extract_tables));
+  if (options?.extract_concepts !== undefined) formData.append('extract_concepts', String(options.extract_concepts));
+  if (options?.extract_claims !== undefined) formData.append('extract_claims', String(options.extract_claims));
+
+  const headers = await getApiHeaders();
+  // Remove Content-Type header for FormData (browser will set it with boundary)
+  delete headers['Content-Type'];
+
+  const res = await fetch(`${API_BASE_URL}/pdf/ingest`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to ingest PDF: ${res.statusText} - ${errorText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Stream PDF ingestion with real-time progress updates
+ * Returns an async generator that yields progress events
+ */
+export async function* ingestPDFStream(
+  file: File,
+  options?: {
+    domain?: string;
+    use_ocr?: boolean;
+    extract_tables?: boolean;
+    extract_concepts?: boolean;
+    extract_claims?: boolean;
+  }
+): AsyncGenerator<any, void, unknown> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (options?.domain) formData.append('domain', options.domain);
+  if (options?.use_ocr !== undefined) formData.append('use_ocr', String(options.use_ocr));
+  if (options?.extract_tables !== undefined) formData.append('extract_tables', String(options.extract_tables));
+  if (options?.extract_concepts !== undefined) formData.append('extract_concepts', String(options.extract_concepts));
+  if (options?.extract_claims !== undefined) formData.append('extract_claims', String(options.extract_claims));
+
+  const headers = await getApiHeaders();
+  // Remove Content-Type header for FormData (browser will set it with boundary)
+  delete headers['Content-Type'];
+
+  console.log('Sending PDF ingestion request to:', `${API_BASE_URL}/pdf/ingest-stream`);
+  
+  // Add a timeout to detect if the request hangs
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+    console.error('PDF ingestion request timed out after 60 seconds');
+  }, 60000); // 60 second timeout
+  
+  let res;
+  try {
+    res = await fetch(`${API_BASE_URL}/pdf/ingest-stream`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('PDF ingestion request timed out. The backend may be processing a large file.');
+    }
+    throw error;
+  }
+
+  console.log('Response status:', res.status, res.statusText);
+  if (!res.ok) {
+    const errorText = await res.text();
+    console.error('PDF ingestion request failed:', res.status, errorText);
+    throw new Error(`Failed to stream PDF ingestion: ${res.statusText} - ${errorText}`);
+  }
+
+  const reader = res.body?.getReader();
+  const decoder = new TextDecoder();
+
+  if (!reader) {
+    console.error('Response body is not readable');
+    throw new Error('Response body is not readable');
+  }
+  
+  console.log('Stream reader obtained, starting to read events...');
+
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.trim() && line.startsWith('data: ')) {
+        try {
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr) {
+            const data = JSON.parse(jsonStr);
+            console.log('Parsed SSE event:', data.type, data);
+            yield data;
+          }
+        } catch (e) {
+          console.error('Failed to parse SSE data:', e, 'Line:', line);
+        }
+      } else if (line.trim() && !line.startsWith(':')) {
+        // Log non-empty lines that aren't comments or data
+        console.log('SSE line (not data):', line);
+      }
+    }
+  }
+
+  // Process remaining buffer
+  if (buffer.trim()) {
+    if (buffer.startsWith('data: ')) {
+      try {
+        const data = JSON.parse(buffer.slice(6));
+        yield data;
+      } catch (e) {
+        console.error('Failed to parse final SSE data:', e);
+      }
+    }
+  }
 }
 
 /**

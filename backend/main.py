@@ -14,10 +14,12 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 
+from api_health import router as health_router
 from api_concepts import router as concepts_router
 from api_ai import router as ai_router
 from api_retrieval import router as retrieval_router
 from api_lectures import router as lectures_router
+from api_lecture_links import router as lecture_links_router, sections_router as lecture_sections_router
 from api_mentions import router as mentions_router
 from api_admin import router as admin_router
 from api_notion import router as notion_router
@@ -37,6 +39,8 @@ from api_tests import router as tests_router
 from api_gaps import router as gaps_router
 from api_graphs import router as graphs_router
 from api_branches import router as branches_router
+from api_contextual_branches import router as contextual_branches_router
+from api_notes_digest import router as notes_digest_router
 from api_snapshots import router as snapshots_router
 from api_events import router as events_router, sessions_router
 from api_events_replay import router as events_replay_router
@@ -49,6 +53,7 @@ from api_ingestion_runs import router as ingestion_runs_router
 from api_paths import router as paths_router
 from api_quality import router as quality_router
 from api_web_ingestion import router as web_ingestion_router
+from api_pdf_ingestion import router as pdf_ingestion_router
 from api_quotes import router as quotes_router
 from api_claims_from_quotes import router as claims_from_quotes_router
 from api_signals import router as signals_router
@@ -74,6 +79,10 @@ from config import REQUEST_TIMEOUT_SECONDS
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("brain_web")
+
+# --- Dev-only route introspection helpers ---
+# These are intentionally simple and only enabled outside production.
+_ENABLE_DEBUG_INTROSPECTION = os.getenv("NODE_ENV", "development") != "production"
 
 def _is_tcp_reachable(host: str, port: int, timeout_s: float = 0.4) -> bool:
     """
@@ -230,10 +239,13 @@ app.add_middleware(
 # Add timeout middleware (after CORS, before auth)
 app.add_middleware(TimeoutMiddleware)
 
+app.include_router(health_router)
 app.include_router(concepts_router)
 app.include_router(ai_router)
 app.include_router(retrieval_router)
 app.include_router(lectures_router)
+app.include_router(lecture_links_router)
+app.include_router(lecture_sections_router)
 app.include_router(mentions_router)
 app.include_router(preferences_router)
 app.include_router(feedback_router)
@@ -243,6 +255,8 @@ app.include_router(resources_router)
 app.include_router(gaps_router)
 app.include_router(graphs_router)
 app.include_router(branches_router)
+app.include_router(contextual_branches_router)
+app.include_router(notes_digest_router)
 app.include_router(snapshots_router)
 app.include_router(events_router)
 app.include_router(sessions_router)
@@ -254,6 +268,8 @@ app.include_router(paths_router)
 app.include_router(quality_router)
 # Web ingestion router is always included but has local-only guard
 app.include_router(web_ingestion_router)
+# PDF ingestion router for ingesting PDFs into the knowledge graph
+app.include_router(pdf_ingestion_router)
 # Phase 2: Evidence Graph endpoints
 app.include_router(quotes_router)
 app.include_router(claims_from_quotes_router)
@@ -286,6 +302,9 @@ from api_sessions_websocket import router as sessions_websocket_router
 app.include_router(sessions_websocket_router)
 # Session events and context API
 app.include_router(sessions_events_router)
+# Web search API (native Brain Web web search)
+from api_web_search import router as web_search_router
+app.include_router(web_search_router)
 
 # Include all routers
 app.include_router(admin_router)
@@ -296,6 +315,46 @@ app.include_router(tests_router)
 app.include_router(connectors_router)
 app.include_router(finance_ingestion_router)
 app.include_router(ingestion_runs_router)
+
+
+if _ENABLE_DEBUG_INTROSPECTION:
+    @app.get("/__debug/routes")
+    async def __debug_routes():
+        """Return registered routes for debugging local dev issues."""
+        items = []
+        for r in app.router.routes:
+            methods = sorted(getattr(r, "methods", []) or [])
+            path = getattr(r, "path", None) or getattr(r, "path_format", None)
+            name = getattr(r, "name", None)
+            items.append({"path": path, "methods": methods, "name": name})
+        return {"count": len(items), "routes": items}
+
+    @app.get("/__debug/contextual-branches")
+    async def __debug_contextual_branches():
+        """
+        Confirm the imported module file and router routes for contextual branches.
+        """
+        try:
+            import api_contextual_branches as m  # type: ignore
+            router = getattr(m, "router", None)
+            router_routes = []
+            if router is not None:
+                for r in getattr(router, "routes", []) or []:
+                    router_routes.append(
+                        {
+                            "path": getattr(r, "path", None) or getattr(r, "path_format", None),
+                            "methods": sorted(getattr(r, "methods", []) or []),
+                            "name": getattr(r, "name", None),
+                        }
+                    )
+            return {
+                "module_file": getattr(m, "__file__", None),
+                "router_prefix": getattr(router, "prefix", None) if router is not None else None,
+                "router_routes_count": len(router_routes),
+                "router_routes": router_routes,
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
 
 @app.middleware("http")
