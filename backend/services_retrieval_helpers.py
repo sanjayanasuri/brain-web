@@ -47,7 +47,8 @@ def retrieve_claims_for_community_ids(
     graph_id: str,
     branch_id: str,
     community_ids: List[str],
-    limit_per: int = 30
+    limit_per: int = 30,
+    ingestion_run_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve claims for given community IDs.
@@ -58,6 +59,7 @@ def retrieve_claims_for_community_ids(
         branch_id: Branch ID
         community_ids: List of community IDs
         limit_per: Max claims per community
+        ingestion_run_id: Optional run ID filter
     
     Returns:
         Flattened list of claim dicts
@@ -67,7 +69,8 @@ def retrieve_claims_for_community_ids(
         session=session,
         graph_id=graph_id,
         community_ids=community_ids,
-        limit_per_comm=limit_per
+        limit_per_comm=limit_per,
+        ingestion_run_id=ingestion_run_id
     )
     
     # Flatten
@@ -85,7 +88,8 @@ def retrieve_top_claims_by_query_embedding(
     graph_id: str,
     branch_id: str,
     query: str,
-    limit: int = 30
+    limit: int = 30,
+    ingestion_run_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve top claims by embedding similarity to query.
@@ -96,6 +100,7 @@ def retrieve_top_claims_by_query_embedding(
         branch_id: Branch ID
         query: Query text
         limit: Max claims to return
+        ingestion_run_id: Optional run ID filter
     
     Returns:
         List of claim dicts sorted by similarity
@@ -115,6 +120,7 @@ def retrieve_top_claims_by_query_embedding(
     MATCH (claim:Claim {graph_id: $graph_id})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(claim.on_branches, [])
       AND claim.embedding IS NOT NULL
+      AND ($run_id IS NULL OR claim.ingestion_run_id = $run_id)
     OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
     RETURN claim.claim_id AS claim_id,
            claim.text AS text,
@@ -129,7 +135,8 @@ def retrieve_top_claims_by_query_embedding(
     result = session.run(
         query_cypher,
         graph_id=graph_id,
-        branch_id=branch_id
+        branch_id=branch_id,
+        run_id=ingestion_run_id
     )
     
     claims_with_scores = []

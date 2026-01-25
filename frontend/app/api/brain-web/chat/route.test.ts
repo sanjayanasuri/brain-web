@@ -46,7 +46,7 @@ describe('/api/brain-web/chat route', () => {
 
   const mockGraphRagFetchSequence = (mockRetrievalResponse: unknown) => {
     const fetchMock = global.fetch as jest.MockedFunction<typeof fetch>;
-    fetchMock.mockImplementation(async (input: RequestInfo, init?: RequestInit) => {
+    fetchMock.mockImplementation(async (input: any, init?: RequestInit): Promise<any> => {
       const requestUrl = typeof input === 'string' ? input : input.url;
       const requestBody = typeof init?.body === 'string' ? init.body : '';
 
@@ -362,7 +362,7 @@ describe('/api/brain-web/chat route', () => {
 
       // Verify chunks are not in response
       expect(data).not.toHaveProperty('chunks');
-      
+
       // Verify we only return retrievalMeta, not full context
       expect(data).toHaveProperty('retrievalMeta');
       expect(data.retrievalMeta).not.toHaveProperty('chunks');
@@ -405,7 +405,7 @@ describe('/api/brain-web/chat route', () => {
 
       const response = await POST(request);
       expect(response.status).toBe(200);
-      
+
       const data = await response.json();
       expect(data).toHaveProperty('answer');
     });

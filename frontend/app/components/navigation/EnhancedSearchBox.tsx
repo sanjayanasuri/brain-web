@@ -57,70 +57,70 @@ const QUICK_ACTIONS: SearchResult[] = [
   }
 ];
 
-export default function EnhancedSearchBox({ 
-  placeholder = 'Search concepts, start chat, or navigate...', 
+export default function EnhancedSearchBox({
+  placeholder = 'Search concepts, start chat, or navigate...',
   activeGraphId,
-  onNavigate 
+  onNavigate
 }: EnhancedSearchBoxProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  
+
   const router = useRouter();
   const pathname = usePathname();
   const { navigateWithOptimization } = useOptimizedNavigation();
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  
+
   // Search concepts and generate results
   const performSearch = useCallback(async (searchQuery: string) => {
     if (!searchQuery.trim()) {
       setResults(QUICK_ACTIONS);
       return;
     }
-    
+
     setIsLoading(true);
-    
+
     try {
       // Search concepts if we have a graph
       const searchResults: SearchResult[] = [];
-      
+
       if (activeGraphId) {
-        const concepts = await searchConcepts(searchQuery, { graphId: activeGraphId });
-        concepts.slice(0, 5).forEach(concept => {
+        const concepts = await searchConcepts(searchQuery, activeGraphId);
+        concepts.results.slice(0, 5).forEach(concept => {
           searchResults.push({
             type: 'concept',
             id: concept.node_id,
             title: concept.name,
             subtitle: concept.domain || 'Concept',
-            description: concept.description,
+            description: concept.description || undefined,
             graphId: activeGraphId,
             url: quickNav.toConcept(concept.node_id, activeGraphId)
           });
         });
       }
-      
+
       // Add matching quick actions
       const matchingActions = QUICK_ACTIONS.filter(action =>
         action.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         action.description?.toLowerCase().includes(searchQuery.toLowerCase())
       );
-      
+
       searchResults.push(...matchingActions);
-      
+
       // Add page suggestions
       const pageResults: SearchResult[] = [
-        { type: 'page', id: 'home', title: 'Home', url: '/home', icon: '🏠' },
-        { type: 'page', id: 'explorer', title: 'Explorer', url: quickNav.toExplorer(activeGraphId), icon: '🗺️' },
-        { type: 'page', id: 'source-management', title: 'Source Management', url: '/source-management', icon: '📚' }
+        { type: 'page' as const, id: 'home', title: 'Home', url: '/home', icon: '🏠' },
+        { type: 'page' as const, id: 'explorer', title: 'Explorer', url: quickNav.toExplorer(activeGraphId), icon: '🗺️' },
+        { type: 'page' as const, id: 'source-management', title: 'Source Management', url: '/source-management', icon: '📚' }
       ].filter(page =>
         page.title.toLowerCase().includes(searchQuery.toLowerCase())
       );
-      
+
       searchResults.push(...pageResults);
-      
+
       setResults(searchResults.slice(0, 8));
     } catch (error) {
       console.error('Search error:', error);
@@ -129,7 +129,7 @@ export default function EnhancedSearchBox({
       setIsLoading(false);
     }
   }, [activeGraphId]);
-  
+
   // Debounced search
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -137,32 +137,32 @@ export default function EnhancedSearchBox({
         performSearch(query);
       }
     }, 200);
-    
+
     return () => clearTimeout(timeoutId);
   }, [query, performSearch, isOpen]);
-  
+
   // Handle input changes
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);
     setSelectedIndex(0);
     setIsOpen(true);
   }, []);
-  
+
   // Handle keyboard navigation
   const handleKeyDown = useCallback(async (e: React.KeyboardEvent) => {
     if (!isOpen && e.key !== 'Enter') return;
-    
+
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
         setSelectedIndex(prev => Math.min(prev + 1, results.length - 1));
         break;
-        
+
       case 'ArrowUp':
         e.preventDefault();
         setSelectedIndex(prev => Math.max(prev - 1, 0));
         break;
-        
+
       case 'Enter':
         e.preventDefault();
         if (results[selectedIndex]) {
@@ -175,7 +175,7 @@ export default function EnhancedSearchBox({
           });
         }
         break;
-        
+
       case 'Escape':
         setIsOpen(false);
         setQuery('');
@@ -183,16 +183,16 @@ export default function EnhancedSearchBox({
         break;
     }
   }, [isOpen, results, selectedIndex, navigateWithOptimization, activeGraphId, query]);
-  
+
   // Handle result selection
   const handleSelectResult = useCallback(async (result: SearchResult) => {
     const url = result.url || '/';
-    
+
     setIsOpen(false);
     setQuery('');
     inputRef.current?.blur();
     onNavigate?.();
-    
+
     // Navigate with appropriate prefetching
     await navigateWithOptimization(url, {
       prefetch: async () => {
@@ -211,7 +211,7 @@ export default function EnhancedSearchBox({
       }
     });
   }, [navigateWithOptimization, onNavigate, activeGraphId]);
-  
+
   // Handle clicks outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -219,16 +219,16 @@ export default function EnhancedSearchBox({
         setIsOpen(false);
       }
     };
-    
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-  
+
   // Focus shortcuts
   useEffect(() => {
     // Skip on server-side
     if (typeof window === 'undefined') return;
-    
+
     const handleGlobalKeydown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
@@ -240,11 +240,11 @@ export default function EnhancedSearchBox({
         setIsOpen(true);
       }
     };
-    
+
     window.addEventListener('keydown', handleGlobalKeydown);
     return () => window.removeEventListener('keydown', handleGlobalKeydown);
   }, []);
-  
+
   return (
     <div ref={containerRef} style={{ position: 'relative', width: '100%', maxWidth: '600px' }}>
       <div style={{ position: 'relative' }}>
@@ -269,7 +269,7 @@ export default function EnhancedSearchBox({
             transition: 'all 200ms cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         />
-        
+
         {/* Search icon */}
         <div style={{
           position: 'absolute',
@@ -281,7 +281,7 @@ export default function EnhancedSearchBox({
         }}>
           {isLoading ? '⋯' : '🔍'}
         </div>
-        
+
         {/* Keyboard hint */}
         <div style={{
           position: 'absolute',
@@ -297,7 +297,7 @@ export default function EnhancedSearchBox({
           ⌘K
         </div>
       </div>
-      
+
       {/* Results dropdown */}
       {isOpen && results.length > 0 && (
         <div style={{
@@ -335,7 +335,7 @@ export default function EnhancedSearchBox({
                   {result.icon}
                 </span>
               )}
-              
+
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
                   fontWeight: '500',
@@ -346,7 +346,7 @@ export default function EnhancedSearchBox({
                 }}>
                   {result.title}
                 </div>
-                
+
                 {(result.subtitle || result.description) && (
                   <div style={{
                     fontSize: '12px',
@@ -359,7 +359,7 @@ export default function EnhancedSearchBox({
                   </div>
                 )}
               </div>
-              
+
               {result.type === 'concept' && (
                 <div style={{
                   fontSize: '10px',

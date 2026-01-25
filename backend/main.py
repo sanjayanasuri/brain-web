@@ -306,6 +306,10 @@ app.include_router(sessions_events_router)
 from api_web_search import router as web_search_router
 app.include_router(web_search_router)
 
+# Deep Research API
+from api_deep_research import router as deep_research_router
+app.include_router(deep_research_router)
+
 # Include all routers
 app.include_router(admin_router)
 app.include_router(notion_router)
@@ -405,6 +409,27 @@ async def auth_middleware(request: Request, call_next):
     request.state.user_id = user_context.get("user_id")
     request.state.tenant_id = user_context.get("tenant_id") or request.headers.get("x-tenant-id")
     request.state.is_authenticated = user_context.get("is_authenticated", False)
+
+    # Demo Mode enforcement
+    from demo_mode import load_demo_settings, enforce_demo_mode_request, FixedWindowRateLimiter
+    
+    # Simple global limiter for the middleware
+    if not hasattr(app.state, "demo_limiter"):
+        app.state.demo_limiter = FixedWindowRateLimiter()
+    
+    demo_settings = load_demo_settings()
+    if demo_settings.demo_mode:
+        try:
+            enforce_demo_mode_request(request, demo_settings, app.state.demo_limiter)
+            
+            # ALLOW unauthenticated users in demo mode by forcing them into the 'demo' tenant
+            # This makes the entire app 'public' but sandboxed to the demo data
+            if not request.state.is_authenticated:
+                request.state.user_id = "guest"
+                request.state.tenant_id = demo_settings.tenant_id
+                request.state.is_authenticated = True # Elevate to allowed for demo purposes
+        except HTTPException as e:
+            return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
 
     try:
         response = await call_next(request)

@@ -27,7 +27,7 @@ interface UIState {
   contentIngestLoading: boolean;
   showSegments: boolean;
   segmentsLoading: boolean;
-  nodePanelTab: 'overview' | 'resources' | 'evidence' | 'confusions';
+  nodePanelTab: 'overview' | 'evidence' | 'notes' | 'connections' | 'activity' | 'data';
   activeDomainPlugins: string[]; // Array of active domain plugin IDs
 }
 
@@ -55,7 +55,7 @@ type UIAction =
   | { type: 'SET_CONTENT_INGEST_LOADING'; payload: boolean }
   | { type: 'SET_SHOW_SEGMENTS'; payload: boolean }
   | { type: 'SET_SEGMENTS_LOADING'; payload: boolean }
-  | { type: 'SET_NODE_PANEL_TAB'; payload: 'overview' | 'resources' | 'evidence' | 'confusions' }
+  | { type: 'SET_NODE_PANEL_TAB'; payload: 'overview' | 'evidence' | 'notes' | 'connections' | 'activity' | 'data' }
   | { type: 'SET_ACTIVE_DOMAIN_PLUGINS'; payload: string[] };
 
 const initialState: UIState = {
@@ -145,7 +145,7 @@ function uiReducer(state: UIState, action: UIAction): UIState {
 
 export function useUIState() {
   const [state, dispatch] = useReducer(uiReducer, initialState);
-  
+
   const actions = {
     setSidebarCollapsed: useCallback((collapsed: boolean) => {
       dispatch({ type: 'SET_SIDEBAR_COLLAPSED', payload: collapsed });
@@ -216,14 +216,14 @@ export function useUIState() {
     setSegmentsLoading: useCallback((loading: boolean) => {
       dispatch({ type: 'SET_SEGMENTS_LOADING', payload: loading });
     }, []),
-    setNodePanelTab: useCallback((tab: 'overview' | 'resources' | 'evidence' | 'confusions') => {
+    setNodePanelTab: useCallback((tab: 'overview' | 'evidence' | 'notes' | 'connections' | 'activity' | 'data') => {
       dispatch({ type: 'SET_NODE_PANEL_TAB', payload: tab });
     }, []),
     setActiveDomainPlugins: useCallback((plugins: string[]) => {
       dispatch({ type: 'SET_ACTIVE_DOMAIN_PLUGINS', payload: plugins });
     }, []),
   };
-  
+
   return { state, actions };
 }
 

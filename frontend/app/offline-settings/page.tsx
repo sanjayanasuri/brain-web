@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import OfflineControls from '@/components/OfflineControls';
+// import OfflineControls from '@/app/components/OfflineControls';
 import { getLastSession } from '../lib/sessionState';
 import { getActiveTrailId } from '../lib/trailState';
 
@@ -16,7 +16,7 @@ export default function OfflineSettingsPage() {
     const lastSession = getLastSession();
     if (lastSession) {
       setGraphId(lastSession.graph_id || '');
-      setBranchId(typeof window !== 'undefined' 
+      setBranchId(typeof window !== 'undefined'
         ? sessionStorage.getItem('brainweb:activeBranchId') || 'main'
         : 'main');
     }
@@ -58,17 +58,20 @@ export default function OfflineSettingsPage() {
         </p>
       </div>
 
-      <div style={{ 
-        border: '1px solid var(--border)', 
-        borderRadius: '8px', 
+      <div style={{
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
         padding: '24px',
         background: 'var(--panel)',
       }}>
-        <OfflineControls 
-          graph_id={graphId} 
-          branch_id={branchId} 
+        {/* <OfflineControls
+          graph_id={graphId}
+          branch_id={branchId}
           trail_id={trailId}
-        />
+        /> */}
+        <p style={{ textAlign: 'center', color: 'var(--muted)' }}>
+          Offline Controls are currently unavailable.
+        </p>
       </div>
 
       <div style={{ marginTop: '24px', padding: '16px', background: 'var(--panel)', borderRadius: '8px' }}>

@@ -137,3 +137,14 @@ else:
     REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
     REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 USE_REDIS = os.getenv("USE_REDIS", "true").lower() in ("true", "1", "yes")  # Enable Redis by default
+
+# Demo Mode configuration
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")
+DEMO_ALLOW_WRITES = os.getenv("DEMO_ALLOW_WRITES", "false").lower() in ("true", "1", "yes")
+DEMO_TENANT_ID = os.getenv("DEMO_TENANT_ID", "demo")
+DEMO_SAFE_WRITE_PATHS = [
+    p.strip() for p in os.getenv("DEMO_SAFE_WRITE_PATHS", "/feedback").split(",") if p.strip()
+]
+DEMO_RATE_LIMIT_PER_IP_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_IP_PER_MIN", "60"))
+DEMO_RATE_LIMIT_PER_SESSION_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_SESSION_PER_MIN", "30"))
+DEMO_BEDROCK_MAX_TOKENS_PER_SESSION = int(os.getenv("DEMO_BEDROCK_MAX_TOKENS_PER_SESSION", "50000"))

@@ -1,35 +1,19 @@
 'use client';
 
 import { createContext, useContext, useCallback, useState, ReactNode, Dispatch, SetStateAction } from 'react';
-import type { Concept, GraphSummary, BranchSummary, FocusArea } from '../../api-client';
+import type { Concept, GraphSummary, BranchSummary, FocusArea, TeachingStyleProfile } from '../../api-client';
+import { VisualGraph, VisualNode, VisualLink, TempNode, DomainBubble } from './GraphTypes';
 
-export interface VisualGraph {
-  nodes: Concept[];
-  links: Array<{
-    source: Concept | string;
-    target: Concept | string;
-    predicate: string;
-    relationship_status?: string;
-    relationship_confidence?: number;
-    relationship_method?: string;
-    relationship_rationale?: string;
-    relationship_source_id?: string;
-    relationship_chunk_id?: string;
-    source_type?: string;
-    source_id?: string;
-    target_id?: string;
-  }>;
-}
 
 interface GraphContextType {
   // Graph data
   graphData: VisualGraph;
   setGraphData: Dispatch<SetStateAction<VisualGraph>>;
-  
+
   // Selected node
   selectedNode: Concept | null;
   setSelectedNode: (node: Concept | null) => void;
-  
+
   // Graphs and branches
   graphs: GraphSummary[];
   setGraphs: (graphs: GraphSummary[]) => void;
@@ -41,7 +25,9 @@ interface GraphContextType {
   setActiveBranchId: (id: string) => void;
   focusAreas: FocusArea[];
   setFocusAreas: (areas: FocusArea[]) => void;
-  
+  teachingStyle: TeachingStyleProfile | null;
+  setTeachingStyle: (style: TeachingStyleProfile | null) => void;
+
   // Loading and error states
   loading: boolean;
   setLoading: (loading: boolean) => void;
@@ -51,11 +37,11 @@ interface GraphContextType {
   setLoadingNeighbors: (id: string | null) => void;
   overviewMeta: { node_count?: number; sampled?: boolean } | null;
   setOverviewMeta: (meta: { node_count?: number; sampled?: boolean } | null) => void;
-  
+
   // Neighbor cache
   neighborCache: Map<string, { nodes: Concept[]; edges: any[] }>;
   clearNeighborCache: () => void;
-  
+
   // Graph visualization state
   selectedDomains: Set<string>;
   setSelectedDomains: (domains: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
@@ -65,18 +51,18 @@ interface GraphContextType {
   setCollapsedGroups: (groups: Record<string, string[]> | ((prev: Record<string, string[]>) => Record<string, string[]>)) => void;
   focusedNodeId: string | null;
   setFocusedNodeId: (id: string | null) => void;
-  domainBubbles: Array<{ domain: string; x: number; y: number; radius: number }>;
-  setDomainBubbles: (bubbles: Array<{ domain: string; x: number; y: number; radius: number }>) => void;
-  
+  domainBubbles: Array<DomainBubble>;
+  setDomainBubbles: (bubbles: Array<DomainBubble>) => void;
+
   // Highlighting
   highlightedConceptIds: Set<string>;
   setHighlightedConceptIds: (ids: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
   highlightedRelationshipIds: Set<string>;
   setHighlightedRelationshipIds: (ids: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
-  
+
   // Temp nodes
-  tempNodes: Array<{ id: string; name: string; domain: string; x?: number; y?: number }>;
-  setTempNodes: (nodes: Array<{ id: string; name: string; domain: string; x?: number; y?: number }>) => void;
+  tempNodes: Array<TempNode>;
+  setTempNodes: (nodes: Array<TempNode>) => void;
 }
 
 const GraphContext = createContext<GraphContextType | undefined>(undefined);
@@ -89,6 +75,7 @@ export function GraphProvider({ children }: { children: ReactNode }) {
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [activeBranchId, setActiveBranchId] = useState<string>('main');
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
+  const [teachingStyle, setTeachingStyle] = useState<TeachingStyleProfile | null>(null);
   const [loading, setLoading] = useState(false); // Start as false so UI renders immediately
   const [error, setError] = useState<string | null>(null);
   const [loadingNeighbors, setLoadingNeighbors] = useState<string | null>(null);
@@ -98,15 +85,15 @@ export function GraphProvider({ children }: { children: ReactNode }) {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, string[]>>({});
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
-  const [domainBubbles, setDomainBubbles] = useState<Array<{ domain: string; x: number; y: number; radius: number }>>([]);
+  const [domainBubbles, setDomainBubbles] = useState<Array<DomainBubble>>([]);
   const [highlightedConceptIds, setHighlightedConceptIds] = useState<Set<string>>(new Set());
   const [highlightedRelationshipIds, setHighlightedRelationshipIds] = useState<Set<string>>(new Set());
-  const [tempNodes, setTempNodes] = useState<Array<{ id: string; name: string; domain: string; x?: number; y?: number }>>([]);
-  
+  const [tempNodes, setTempNodes] = useState<Array<TempNode>>([]);
+
   const clearNeighborCache = useCallback(() => {
     neighborCache.clear();
   }, [neighborCache]);
-  
+
   return (
     <GraphContext.Provider
       value={{
@@ -124,6 +111,8 @@ export function GraphProvider({ children }: { children: ReactNode }) {
         setActiveBranchId,
         focusAreas,
         setFocusAreas,
+        teachingStyle,
+        setTeachingStyle,
         loading,
         setLoading,
         error,

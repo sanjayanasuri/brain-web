@@ -12,7 +12,7 @@ import {
   type IngestionRunChanges,
   type PDFIngestResponse,
 } from '../api-client';
-import PDFIngestionUpload from '../components/pdf/PDFIngestionUpload';
+import PDFIngestionUpload, { type ExtractionItem } from '../components/pdf/PDFIngestionUpload';
 import PDFIngestionResults from '../components/pdf/PDFIngestionResults';
 
 export default function IngestionHubPage() {
@@ -88,7 +88,7 @@ export default function IngestionHubPage() {
       setRunChanges(null);
       return;
     }
-    
+
     try {
       setLoadingChanges(true);
       setSelectedRunId(runId);
@@ -107,10 +107,10 @@ export default function IngestionHubPage() {
       setError(null);
       const result = await undoIngestionRun(runId, undoMode);
       setShowUndoDialog(null);
-      
+
       // Reload runs to get updated state
       await loadRuns();
-      
+
       // Show success message with summary
       const summary = `Archived: ${result.archived.relationships} relationships, ${result.archived.concepts} concepts, ${result.archived.resources} resources`;
       const skippedCount = result.skipped.concepts.length + result.skipped.resources.length + result.skipped.relationships.length;
@@ -131,10 +131,10 @@ export default function IngestionHubPage() {
       setRestoring(true);
       setError(null);
       const result = await restoreIngestionRun(runId);
-      
+
       // Reload runs to get updated state
       await loadRuns();
-      
+
       // Show success message
       const summary = `Restored: ${result.restored.relationships} relationships, ${result.restored.concepts} concepts, ${result.restored.resources} resources`;
       alert(`Successfully restored run.\n\n${summary}`);
@@ -305,9 +305,9 @@ export default function IngestionHubPage() {
                       <div style={{
                         width: '4px',
                         height: '100%',
-                        background: extraction.type === 'concept' ? 'var(--accent)' : 
-                                   extraction.type === 'name' ? '#22c55e' :
-                                   extraction.type === 'date' ? '#f59e0b' : '#6b7280',
+                        background: extraction.type === 'concept' ? 'var(--accent)' :
+                          extraction.type === 'name' ? '#22c55e' :
+                            extraction.type === 'date' ? '#f59e0b' : '#6b7280',
                         borderRadius: '2px',
                         flexShrink: 0,
                       }} />
@@ -321,14 +321,14 @@ export default function IngestionHubPage() {
                           <span style={{
                             fontSize: '11px',
                             fontWeight: '600',
-                            color: extraction.type === 'concept' ? 'var(--accent)' : 
-                                   extraction.type === 'name' ? '#22c55e' :
-                                   extraction.type === 'date' ? '#f59e0b' : '#6b7280',
+                            color: extraction.type === 'concept' ? 'var(--accent)' :
+                              extraction.type === 'name' ? '#22c55e' :
+                                extraction.type === 'date' ? '#f59e0b' : '#6b7280',
                             textTransform: 'uppercase',
                             padding: '2px 8px',
-                            background: extraction.type === 'concept' ? 'rgba(37, 99, 235, 0.1)' : 
-                                       extraction.type === 'name' ? 'rgba(34, 197, 94, 0.1)' :
-                                       extraction.type === 'date' ? 'rgba(251, 191, 36, 0.1)' : 'rgba(107, 114, 128, 0.1)',
+                            background: extraction.type === 'concept' ? 'rgba(37, 99, 235, 0.1)' :
+                              extraction.type === 'name' ? 'rgba(34, 197, 94, 0.1)' :
+                                extraction.type === 'date' ? 'rgba(251, 191, 36, 0.1)' : 'rgba(107, 114, 128, 0.1)',
                             borderRadius: '4px',
                           }}>
                             {extraction.type}
@@ -373,7 +373,7 @@ export default function IngestionHubPage() {
                 fontSize: '14px',
                 textAlign: 'center',
               }}>
-                {selectedFile 
+                {selectedFile
                   ? 'Start ingestion to see live extraction updates'
                   : 'Select a PDF file to begin'}
               </div>
@@ -478,8 +478,8 @@ export default function IngestionHubPage() {
 
         {/* Runs List */}
         {loading ? (
-          <div style={{ 
-            textAlign: 'center', 
+          <div style={{
+            textAlign: 'center',
             padding: '40px',
             background: 'var(--panel)',
             borderRadius: '12px',
@@ -540,8 +540,8 @@ export default function IngestionHubPage() {
               }}>
                 ▶
               </div>
-              <div style={{ 
-                fontSize: '16px', 
+              <div style={{
+                fontSize: '16px',
                 fontWeight: '600',
                 color: 'var(--ink)',
                 flex: 1,
@@ -553,138 +553,342 @@ export default function IngestionHubPage() {
             {runsListExpanded && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {runs.map((run) => {
-                const summary = run.summary_counts || {};
-                const isSelected = selectedRunId === run.run_id;
+                  const summary = run.summary_counts || {};
+                  const isSelected = selectedRunId === run.run_id;
 
-                return (
-                  <div key={run.run_id}>
-                    <div
-                      style={{
-                        padding: '16px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        background: 'var(--panel)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '12px' }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
-                            <span style={{
-                              padding: '4px 10px',
-                              background: run.status === 'COMPLETED' ? 'rgba(34, 197, 94, 0.1)' :
-                                        run.status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' :
-                                        run.status === 'PARTIAL' ? 'rgba(251, 191, 36, 0.1)' :
-                                        'rgba(107, 114, 128, 0.1)',
-                              color: run.status === 'COMPLETED' ? '#22c55e' :
-                                     run.status === 'FAILED' ? '#ef4444' :
-                                     run.status === 'PARTIAL' ? '#fbbf24' :
-                                     '#6b7280',
-                              borderRadius: '12px',
-                              fontSize: '12px',
-                              fontWeight: '600',
-                            }}>
-                              {run.status}
-                            </span>
-                            <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
-                              {run.source_type}
-                            </span>
-                            {run.source_label && (
-                              <span style={{ fontSize: '14px', color: 'var(--muted)' }}>
-                                {run.source_label}
+                  return (
+                    <div key={run.run_id}>
+                      <div
+                        style={{
+                          padding: '16px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--panel)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', flexWrap: 'wrap', gap: '12px' }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
+                              <span style={{
+                                padding: '4px 10px',
+                                background: run.status === 'COMPLETED' ? 'rgba(34, 197, 94, 0.1)' :
+                                  run.status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' :
+                                    run.status === 'PARTIAL' ? 'rgba(251, 191, 36, 0.1)' :
+                                      'rgba(107, 114, 128, 0.1)',
+                                color: run.status === 'COMPLETED' ? '#22c55e' :
+                                  run.status === 'FAILED' ? '#ef4444' :
+                                    run.status === 'PARTIAL' ? '#fbbf24' :
+                                      '#6b7280',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                              }}>
+                                {run.status}
                               </span>
-                            )}
-                            <span style={{ fontSize: '12px', color: 'var(--muted)', fontFamily: 'monospace' }}>
-                              {formatShortId(run.run_id)}
-                            </span>
-                          </div>
-
-                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '8px' }}>
-                            Started: {formatTime(run.started_at)}
-                            {run.completed_at && ` • Completed: ${formatTime(run.completed_at)}`}
-                          </div>
-
-                          {summary && (
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '12px' }}>
-                              {summary.concepts_created !== undefined && summary.concepts_created > 0 && (
-                                <span style={{
-                                  padding: '2px 8px',
-                                  background: 'rgba(17, 138, 178, 0.1)',
-                                  color: 'var(--accent)',
-                                  borderRadius: '12px',
-                                }}>
-                                  {summary.concepts_created} concept{summary.concepts_created !== 1 ? 's' : ''} created
+                              <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--ink)' }}>
+                                {run.source_type}
+                              </span>
+                              {run.source_label && (
+                                <span style={{ fontSize: '14px', color: 'var(--muted)' }}>
+                                  {run.source_label}
                                 </span>
                               )}
-                              {summary.concepts_updated !== undefined && summary.concepts_updated > 0 && (
-                                <span style={{
-                                  padding: '2px 8px',
-                                  background: 'rgba(17, 138, 178, 0.1)',
-                                  color: 'var(--accent)',
-                                  borderRadius: '12px',
-                                }}>
-                                  {summary.concepts_updated} concept{summary.concepts_updated !== 1 ? 's' : ''} updated
-                                </span>
-                              )}
-                              {summary.resources_created !== undefined && summary.resources_created > 0 && (
-                                <span style={{
-                                  padding: '2px 8px',
-                                  background: 'rgba(17, 138, 178, 0.1)',
-                                  color: 'var(--accent)',
-                                  borderRadius: '12px',
-                                }}>
-                                  {summary.resources_created} resource{summary.resources_created !== 1 ? 's' : ''} created
-                                </span>
-                              )}
-                              {summary.relationships_proposed !== undefined && summary.relationships_proposed > 0 && (
-                                <span style={{
-                                  padding: '2px 8px',
-                                  background: 'rgba(251, 191, 36, 0.1)',
-                                  color: '#fbbf24',
-                                  borderRadius: '12px',
-                                }}>
-                                  {summary.relationships_proposed} relationship{summary.relationships_proposed !== 1 ? 's' : ''} proposed
-                                </span>
-                              )}
+                              <span style={{ fontSize: '12px', color: 'var(--muted)', fontFamily: 'monospace' }}>
+                                {formatShortId(run.run_id)}
+                              </span>
                             </div>
-                          )}
-                        </div>
 
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                          {summary.relationships_proposed !== undefined && summary.relationships_proposed > 0 && (
+                            <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '8px' }}>
+                              Started: {formatTime(run.started_at)}
+                              {run.completed_at && ` • Completed: ${formatTime(run.completed_at)}`}
+                            </div>
+
+                            {summary && (
+                              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', fontSize: '12px' }}>
+                                {summary.concepts_created !== undefined && summary.concepts_created > 0 && (
+                                  <span style={{
+                                    padding: '2px 8px',
+                                    background: 'rgba(17, 138, 178, 0.1)',
+                                    color: 'var(--accent)',
+                                    borderRadius: '12px',
+                                  }}>
+                                    {summary.concepts_created} concept{summary.concepts_created !== 1 ? 's' : ''} created
+                                  </span>
+                                )}
+                                {summary.concepts_updated !== undefined && summary.concepts_updated > 0 && (
+                                  <span style={{
+                                    padding: '2px 8px',
+                                    background: 'rgba(17, 138, 178, 0.1)',
+                                    color: 'var(--accent)',
+                                    borderRadius: '12px',
+                                  }}>
+                                    {summary.concepts_updated} concept{summary.concepts_updated !== 1 ? 's' : ''} updated
+                                  </span>
+                                )}
+                                {summary.resources_created !== undefined && summary.resources_created > 0 && (
+                                  <span style={{
+                                    padding: '2px 8px',
+                                    background: 'rgba(17, 138, 178, 0.1)',
+                                    color: 'var(--accent)',
+                                    borderRadius: '12px',
+                                  }}>
+                                    {summary.resources_created} resource{summary.resources_created !== 1 ? 's' : ''} created
+                                  </span>
+                                )}
+                                {summary.relationships_proposed !== undefined && summary.relationships_proposed > 0 && (
+                                  <span style={{
+                                    padding: '2px 8px',
+                                    background: 'rgba(251, 191, 36, 0.1)',
+                                    color: '#fbbf24',
+                                    borderRadius: '12px',
+                                  }}>
+                                    {summary.relationships_proposed} relationship{summary.relationships_proposed !== 1 ? 's' : ''} proposed
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            {summary.relationships_proposed !== undefined && summary.relationships_proposed > 0 && (
+                              <button
+                                onClick={() => handleReviewChanges(run.run_id, run.graph_id)}
+                                style={{
+                                  padding: '6px 12px',
+                                  background: 'var(--accent)',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Review changes
+                              </button>
+                            )}
                             <button
-                              onClick={() => handleReviewChanges(run.run_id, run.graph_id)}
+                              onClick={() => handleShowInExplorer(run.run_id, run.graph_id)}
                               style={{
                                 padding: '6px 12px',
-                                background: 'var(--accent)',
-                                color: 'white',
-                                border: 'none',
+                                background: 'transparent',
+                                color: 'var(--accent)',
+                                border: '1px solid var(--accent)',
                                 borderRadius: '6px',
                                 fontSize: '12px',
                                 fontWeight: '500',
                                 cursor: 'pointer',
                               }}
                             >
-                              Review changes
+                              Show in Explorer
                             </button>
+                            {(summary.concepts_created !== undefined && summary.concepts_created > 0) && (
+                              <button
+                                onClick={() => handleOpenCreatedConcepts(run.run_id)}
+                                style={{
+                                  padding: '6px 12px',
+                                  background: 'transparent',
+                                  color: 'var(--muted)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {isSelected ? 'Hide' : 'Open'} created concepts
+                              </button>
+                            )}
+                            {!run.undone_at && (
+                              <button
+                                onClick={() => setShowUndoDialog(run.run_id)}
+                                style={{
+                                  padding: '6px 12px',
+                                  background: 'transparent',
+                                  color: '#ef4444',
+                                  border: '1px solid #ef4444',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Undo run
+                              </button>
+                            )}
+                            {run.undone_at && !run.restored_at && (
+                              <button
+                                onClick={() => handleRestoreRun(run.run_id)}
+                                disabled={restoring}
+                                style={{
+                                  padding: '6px 12px',
+                                  background: 'transparent',
+                                  color: '#22c55e',
+                                  border: '1px solid #22c55e',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  cursor: restoring ? 'not-allowed' : 'pointer',
+                                  opacity: restoring ? 0.6 : 1,
+                                }}
+                              >
+                                {restoring ? 'Restoring...' : 'Restore'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Created Concepts Panel */}
+                      {isSelected && runChanges && (
+                        <div style={{
+                          marginTop: '8px',
+                          padding: '16px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                        }}>
+                          {loadingChanges ? (
+                            <div style={{ textAlign: 'center', padding: '20px' }}>
+                              <div style={{ fontSize: '14px', color: 'var(--muted)' }}>Loading changes...</div>
+                            </div>
+                          ) : (
+                            <div>
+                              {runChanges.concepts_created.length > 0 && (
+                                <div style={{ marginBottom: '16px' }}>
+                                  <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
+                                    Created Concepts ({runChanges.concepts_created.length})
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    {runChanges.concepts_created.map((concept) => (
+                                      <Link
+                                        key={concept.concept_id}
+                                        href={`/concepts/${concept.concept_id}`}
+                                        style={{
+                                          padding: '6px 12px',
+                                          background: 'var(--panel)',
+                                          borderRadius: '4px',
+                                          border: '1px solid var(--border)',
+                                          textDecoration: 'none',
+                                          color: 'var(--accent)',
+                                          fontSize: '13px',
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                        }}
+                                      >
+                                        <span style={{ color: 'var(--ink)' }}>{concept.name}</span>
+                                        <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                                          {concept.domain} • {concept.type}
+                                        </span>
+                                      </Link>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {runChanges.concepts_updated.length > 0 && (
+                                <div style={{ marginBottom: '16px' }}>
+                                  <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>
+                                    Updated Concepts ({runChanges.concepts_updated.length})
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    {runChanges.concepts_updated.map((concept) => (
+                                      <Link
+                                        key={concept.concept_id}
+                                        href={`/concepts/${concept.concept_id}`}
+                                        style={{
+                                          padding: '6px 12px',
+                                          background: 'var(--panel)',
+                                          borderRadius: '4px',
+                                          border: '1px solid var(--border)',
+                                          textDecoration: 'none',
+                                          color: 'var(--accent)',
+                                          fontSize: '13px',
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                        }}
+                                      >
+                                        <span style={{ color: 'var(--ink)' }}>{concept.name}</span>
+                                        <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                                          {concept.domain} • {concept.type}
+                                        </span>
+                                      </Link>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {runChanges.resources_created.length > 0 && (
+                                <div>
+                                  <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
+                                    Created Resources ({runChanges.resources_created.length})
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    {runChanges.resources_created.map((resource) => (
+                                      <div
+                                        key={resource.resource_id}
+                                        style={{
+                                          padding: '6px 12px',
+                                          background: 'var(--panel)',
+                                          borderRadius: '4px',
+                                          border: '1px solid var(--border)',
+                                          fontSize: '13px',
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                        }}
+                                      >
+                                        <span style={{ color: 'var(--ink)' }}>{resource.title}</span>
+                                        <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                                          {resource.source_type}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           )}
-                          <button
-                            onClick={() => handleShowInExplorer(run.run_id, run.graph_id)}
-                            style={{
-                              padding: '6px 12px',
-                              background: 'transparent',
-                              color: 'var(--accent)',
-                              border: '1px solid var(--accent)',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: '500',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Show in Explorer
-                          </button>
-                          {(summary.concepts_created !== undefined && summary.concepts_created > 0) && (
+                        </div>
+                      )}
+
+                      {/* Undo Dialog */}
+                      {showUndoDialog === run.run_id && (
+                        <div style={{
+                          marginTop: '8px',
+                          padding: '16px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--border)',
+                          background: 'var(--panel)',
+                          boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                        }}>
+                          <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
+                            Undo Ingestion Run
+                          </div>
+                          <div style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
+                            This will hide proposed relationships and archive concepts/resources created by this run when safe.
+                          </div>
+                          <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '8px', color: 'var(--ink)' }}>
+                              <input
+                                type="radio"
+                                checked={undoMode === 'SAFE'}
+                                onChange={() => setUndoMode('SAFE')}
+                              />
+                              <span>Safe undo (default) - Archive concepts/resources when safe</span>
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--ink)' }}>
+                              <input
+                                type="radio"
+                                checked={undoMode === 'RELATIONSHIPS_ONLY'}
+                                onChange={() => setUndoMode('RELATIONSHIPS_ONLY')}
+                              />
+                              <span>Relationships only - Only archive proposed relationships</span>
+                            </label>
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                             <button
-                              onClick={() => handleOpenCreatedConcepts(run.run_id)}
+                              onClick={() => setShowUndoDialog(null)}
                               style={{
                                 padding: '6px 12px',
                                 background: 'transparent',
@@ -696,235 +900,31 @@ export default function IngestionHubPage() {
                                 cursor: 'pointer',
                               }}
                             >
-                              {isSelected ? 'Hide' : 'Open'} created concepts
+                              Cancel
                             </button>
-                          )}
-                          {!run.undone_at && (
                             <button
-                              onClick={() => setShowUndoDialog(run.run_id)}
+                              onClick={() => handleUndoRun(run.run_id)}
+                              disabled={undoing}
                               style={{
                                 padding: '6px 12px',
-                                background: 'transparent',
-                                color: '#ef4444',
-                                border: '1px solid #ef4444',
+                                background: '#ef4444',
+                                color: 'white',
+                                border: 'none',
                                 borderRadius: '6px',
                                 fontSize: '12px',
                                 fontWeight: '500',
-                                cursor: 'pointer',
+                                cursor: undoing ? 'not-allowed' : 'pointer',
+                                opacity: undoing ? 0.6 : 1,
                               }}
                             >
-                              Undo run
+                              {undoing ? 'Undoing...' : 'Confirm Undo'}
                             </button>
-                          )}
-                          {run.undone_at && !run.restored_at && (
-                            <button
-                              onClick={() => handleRestoreRun(run.run_id)}
-                              disabled={restoring}
-                              style={{
-                                padding: '6px 12px',
-                                background: 'transparent',
-                                color: '#22c55e',
-                                border: '1px solid #22c55e',
-                                borderRadius: '6px',
-                                fontSize: '12px',
-                                fontWeight: '500',
-                                cursor: restoring ? 'not-allowed' : 'pointer',
-                                opacity: restoring ? 0.6 : 1,
-                              }}
-                            >
-                              {restoring ? 'Restoring...' : 'Restore'}
-                            </button>
-                          )}
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
-
-                    {/* Created Concepts Panel */}
-                    {isSelected && runChanges && (
-                      <div style={{
-                        marginTop: '8px',
-                        padding: '16px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        background: 'var(--surface)',
-                      }}>
-                        {loadingChanges ? (
-                          <div style={{ textAlign: 'center', padding: '20px' }}>
-                            <div style={{ fontSize: '14px', color: 'var(--muted)' }}>Loading changes...</div>
-                          </div>
-                        ) : (
-                          <div>
-                            {runChanges.concepts_created.length > 0 && (
-                              <div style={{ marginBottom: '16px' }}>
-                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
-                                  Created Concepts ({runChanges.concepts_created.length})
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  {runChanges.concepts_created.map((concept) => (
-                                    <Link
-                                      key={concept.concept_id}
-                                      href={`/concepts/${concept.concept_id}`}
-                                      style={{
-                                        padding: '6px 12px',
-                                        background: 'var(--panel)',
-                                        borderRadius: '4px',
-                                        border: '1px solid var(--border)',
-                                        textDecoration: 'none',
-                                        color: 'var(--accent)',
-                                        fontSize: '13px',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center',
-                                      }}
-                                    >
-                                      <span style={{ color: 'var(--ink)' }}>{concept.name}</span>
-                                      <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                                        {concept.domain} • {concept.type}
-                                      </span>
-                                    </Link>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {runChanges.concepts_updated.length > 0 && (
-                              <div style={{ marginBottom: '16px' }}>
-                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px' }}>
-                                  Updated Concepts ({runChanges.concepts_updated.length})
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  {runChanges.concepts_updated.map((concept) => (
-                                    <Link
-                                      key={concept.concept_id}
-                                      href={`/concepts/${concept.concept_id}`}
-                                      style={{
-                                        padding: '6px 12px',
-                                        background: 'var(--panel)',
-                                        borderRadius: '4px',
-                                        border: '1px solid var(--border)',
-                                        textDecoration: 'none',
-                                        color: 'var(--accent)',
-                                        fontSize: '13px',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center',
-                                      }}
-                                    >
-                                      <span style={{ color: 'var(--ink)' }}>{concept.name}</span>
-                                      <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                                        {concept.domain} • {concept.type}
-                                      </span>
-                                    </Link>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {runChanges.resources_created.length > 0 && (
-                              <div>
-                                <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
-                                  Created Resources ({runChanges.resources_created.length})
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  {runChanges.resources_created.map((resource) => (
-                                    <div
-                                      key={resource.resource_id}
-                                      style={{
-                                        padding: '6px 12px',
-                                        background: 'var(--panel)',
-                                        borderRadius: '4px',
-                                        border: '1px solid var(--border)',
-                                        fontSize: '13px',
-                                        display: 'flex',
-                                        justifyContent: 'space-between',
-                                        alignItems: 'center',
-                                      }}
-                                    >
-                                      <span style={{ color: 'var(--ink)' }}>{resource.title}</span>
-                                      <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                                        {resource.source_type}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Undo Dialog */}
-                    {showUndoDialog === run.run_id && (
-                      <div style={{
-                        marginTop: '8px',
-                        padding: '16px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        background: 'var(--panel)',
-                        boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-                      }}>
-                        <div style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', color: 'var(--ink)' }}>
-                          Undo Ingestion Run
-                        </div>
-                        <div style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '16px' }}>
-                          This will hide proposed relationships and archive concepts/resources created by this run when safe.
-                        </div>
-                        <div style={{ marginBottom: '16px' }}>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '8px', color: 'var(--ink)' }}>
-                            <input
-                              type="radio"
-                              checked={undoMode === 'SAFE'}
-                              onChange={() => setUndoMode('SAFE')}
-                            />
-                            <span>Safe undo (default) - Archive concepts/resources when safe</span>
-                          </label>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--ink)' }}>
-                            <input
-                              type="radio"
-                              checked={undoMode === 'RELATIONSHIPS_ONLY'}
-                              onChange={() => setUndoMode('RELATIONSHIPS_ONLY')}
-                            />
-                            <span>Relationships only - Only archive proposed relationships</span>
-                          </label>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                          <button
-                            onClick={() => setShowUndoDialog(null)}
-                            style={{
-                              padding: '6px 12px',
-                              background: 'transparent',
-                              color: 'var(--muted)',
-                              border: '1px solid var(--border)',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: '500',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={() => handleUndoRun(run.run_id)}
-                            disabled={undoing}
-                            style={{
-                              padding: '6px 12px',
-                              background: '#ef4444',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              fontWeight: '500',
-                              cursor: undoing ? 'not-allowed' : 'pointer',
-                              opacity: undoing ? 0.6 : 1,
-                            }}
-                          >
-                            {undoing ? 'Undoing...' : 'Confirm Undo'}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
               </div>
             )}
           </div>

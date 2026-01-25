@@ -34,9 +34,9 @@ export async function scoreContextImportance(
 QUESTION: ${question}
 
 CONTEXT CHUNKS:
-${chunks.map((chunk, idx) => 
-  `${idx}. [${chunk.type}] ${chunk.id || 'no-id'}\n${chunk.content.slice(0, 500)}`
-).join('\n\n')}
+${chunks.map((chunk, idx) =>
+    `${idx}. [${chunk.type}] ${chunk.id || 'no-id'}\n${chunk.content.slice(0, 500)}`
+  ).join('\n\n')}
 
 Return ONLY a JSON object:
 {
@@ -79,7 +79,7 @@ Be strict: prioritize chunks that directly help answer the question.`;
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
-    
+
     return chunks.map((chunk, idx) => {
       const scoreData = result.scores?.find((s: any) => s.index === idx) || { score: 0.5, reasoning: 'No score provided' };
       return {
@@ -114,20 +114,20 @@ export async function buildOptimizedContext(
 }> {
   // Score all chunks
   const scored = await scoreContextImportance(chunks, question, maxTokens, apiKey);
-  
+
   // Sort by score (highest first)
   scored.sort((a, b) => b.score - a.score);
-  
+
   // Estimate tokens (rough: 1 token ≈ 4 characters)
   const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-  
+
   const selectedChunks: ContextChunk[] = [];
   const excludedChunks: ContextChunk[] = [];
   let totalTokens = 0;
-  
+
   for (const { chunk, score } of scored) {
     const chunkTokens = estimateTokens(chunk.content);
-    
+
     if (totalTokens + chunkTokens <= maxTokens * 0.9) { // Leave 10% buffer
       selectedChunks.push(chunk);
       totalTokens += chunkTokens;
@@ -135,13 +135,13 @@ export async function buildOptimizedContext(
       excludedChunks.push(chunk);
     }
   }
-  
+
   // Always include highest-scoring chunks even if we go slightly over
   if (selectedChunks.length === 0 && scored.length > 0) {
     selectedChunks.push(scored[0].chunk);
     totalTokens = estimateTokens(scored[0].chunk.content);
   }
-  
+
   return {
     selectedChunks,
     totalTokens,
@@ -159,20 +159,20 @@ export async function truncateContextIntelligently(
   apiKey: string
 ): Promise<string> {
   const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-  
+
   if (estimateTokens(context) <= maxTokens) {
     return context; // No truncation needed
   }
-  
+
   // Split into chunks (by paragraphs or sections)
   const chunks = context.split(/\n\n+/).map((text, idx) => ({
     content: text,
-    type: 'text' as const,
+    type: 'source' as const,
     id: `chunk-${idx}`,
   }));
-  
+
   const optimized = await buildOptimizedContext(chunks, question, maxTokens, apiKey);
-  
+
   return optimized.selectedChunks.map(c => c.content).join('\n\n');
 }
 
@@ -229,7 +229,7 @@ Focus on information that directly helps answer the question.`;
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
-    
+
     return {
       keyPoints: result.keyPoints || [],
       relevantSections: result.relevantSections || [],

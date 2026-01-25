@@ -32,16 +32,14 @@ youtube-transcript-api>=1.0.0  # YouTube transcript extraction (optional)
 scrapy>=2.11.0  # Site-wide web crawling (optional)
 itemadapter>=0.8.0  # For Scrapy item handling (optional)
 curl-cffi>=0.7.0  # Advanced stealth mode with TLS fingerprinting (optional)
-playwright>=1.40.0  # JavaScript rendering (optional, requires: playwright install chromium)
-selenium>=4.15.0  # Alternative JavaScript rendering (optional, requires ChromeDriver)
-googletrans>=4.0.0  # Free translation API (optional, for translate_content)
-pytesseract>=0.3.10  # Image OCR (optional, requires Tesseract OCR installed)
-easyocr>=1.7.0; python_version >= "3.11" and platform_machine != "arm64"  # Alternative image OCR (optional, GPU-accelerated, may have numpy conflicts on some systems)
+# playwright>=1.40.0  # JavaScript rendering (HEAVY - Commented for demo)
+# selenium>=4.15.0  # Alternative JavaScript rendering (optional)
+googletrans>=4.0.0  # Free translation API (optional)
+pytesseract>=0.3.10  # Image OCR (uses system binaries)
+# easyocr>=1.7.0; python_version >= "3.11" and platform_machine != "arm64"  # HEAVY - Pulls in Torch (Commented for demo)
 python-dateutil>=2.8.0  # Date parsing for content validation and fact-checking
 numpy<2.0,>=1.26.4  # Pin numpy version to avoid conflicts with other packages
 PyJWT==2.8.0
 qdrant-client==1.7.0
 psycopg2-binary==2.9.9
 redis==5.0.1
-
-

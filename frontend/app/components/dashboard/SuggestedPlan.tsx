@@ -9,6 +9,9 @@ import {
   completeSuggestion,
   type SuggestionsResponse,
 } from '../../api-client';
+import GlassCard from '../ui/GlassCard';
+import Button from '../ui/Button';
+import Badge from '../ui/Badge';
 
 interface SuggestedPlanProps {
   daysAhead?: number;
@@ -27,18 +30,16 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
       const start = new Date();
       const end = new Date();
       end.setDate(end.getDate() + daysAhead);
-      
+
       const startISO = start.toISOString();
       const endISO = end.toISOString();
-      
-      // Try to load existing suggestions first
+
       let data = await listSuggestions(startISO, endISO);
-      
-      // If no suggestions exist, generate them
+
       if (data.total === 0) {
         data = await generateSuggestions(startISO, endISO);
       }
-      
+
       setSuggestions(data);
     } catch (err) {
       console.error('Failed to load suggestions:', err);
@@ -56,7 +57,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
     setUpdatingIds(prev => new Set(prev).add(suggestionId));
     try {
       await acceptSuggestion(suggestionId);
-      await loadSuggestions(); // Reload to update UI
+      await loadSuggestions();
     } catch (err) {
       console.error('Failed to accept suggestion:', err);
       alert('Failed to accept suggestion. Please try again.');
@@ -73,7 +74,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
     setUpdatingIds(prev => new Set(prev).add(suggestionId));
     try {
       await rejectSuggestion(suggestionId);
-      await loadSuggestions(); // Reload to update UI
+      await loadSuggestions();
     } catch (err) {
       console.error('Failed to reject suggestion:', err);
       alert('Failed to reject suggestion. Please try again.');
@@ -90,7 +91,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
     setUpdatingIds(prev => new Set(prev).add(suggestionId));
     try {
       await completeSuggestion(suggestionId);
-      await loadSuggestions(); // Reload to update UI
+      await loadSuggestions();
     } catch (err) {
       console.error('Failed to complete suggestion:', err);
       alert('Failed to mark suggestion as completed. Please try again.');
@@ -113,7 +114,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
     const today = new Date();
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    
+
     if (date.toDateString() === today.toDateString()) {
       return 'Today';
     } else if (date.toDateString() === tomorrow.toDateString()) {
@@ -123,231 +124,159 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
     }
   };
 
-  const getStatusColor = (status: string): string => {
+  const getStatusColor = (status: string) => {
     switch (status) {
-      case 'accepted':
-        return '#10b981'; // green
-      case 'rejected':
-        return '#ef4444'; // red
-      case 'completed':
-        return '#3b82f6'; // blue
-      default:
-        return '#6b7280'; // gray
+      case 'accepted': return 'success';
+      case 'rejected': return 'error';
+      case 'completed': return 'primary';
+      default: return 'secondary';
     }
   };
 
   if (loading && !suggestions) {
     return (
-      <div style={{
-        padding: '24px',
-        background: 'var(--card-bg, #ffffff)',
-        borderRadius: '8px',
-        border: '1px solid var(--border-color, #e5e7eb)',
-      }}>
-        <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: 600 }}>Suggested Plan</h2>
-        <div style={{ color: '#6b7280' }}>Loading suggestions...</div>
-      </div>
+      <GlassCard style={{ padding: '24px' }}>
+        <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: 600, color: 'var(--ink)' }}>Suggested Plan</h2>
+        <div style={{ color: 'var(--muted)', fontSize: '14px' }}>Loading suggestions...</div>
+      </GlassCard>
     );
   }
 
   if (error) {
     return (
-      <div style={{
-        padding: '24px',
-        background: 'var(--card-bg, #ffffff)',
-        borderRadius: '8px',
-        border: '1px solid var(--border-color, #e5e7eb)',
-      }}>
-        <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: 600 }}>Suggested Plan</h2>
-        <div style={{ color: '#ef4444', marginBottom: '12px' }}>{error}</div>
-        <button
-          onClick={loadSuggestions}
-          style={{
-            padding: '8px 16px',
-            background: '#3b82f6',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-          }}
-        >
-          Retry
-        </button>
-      </div>
+      <GlassCard style={{ padding: '24px' }}>
+        <h2 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: 600, color: 'var(--ink)' }}>Suggested Plan</h2>
+        <div style={{ color: '#ef4444', marginBottom: '16px', fontSize: '14px' }}>{error}</div>
+        <Button variant="primary" onClick={loadSuggestions}>Retry</Button>
+      </GlassCard>
     );
   }
 
   if (!suggestions || suggestions.total === 0) {
     return (
-      <div style={{
-        padding: '24px',
-        background: 'var(--card-bg, #ffffff)',
-        borderRadius: '8px',
-        border: '1px solid var(--border-color, #e5e7eb)',
-      }}>
+      <GlassCard style={{ padding: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Suggested Plan</h2>
-          <button
-            onClick={loadSuggestions}
-            style={{
-              padding: '6px 12px',
-              background: '#3b82f6',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Generate
-          </button>
+          <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--ink)' }}>Suggested Plan</h2>
+          <Button variant="primary" size="sm" onClick={loadSuggestions}>Generate</Button>
         </div>
-        <div style={{ color: '#6b7280', textAlign: 'center', padding: '24px' }}>
+        <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '24px', fontSize: '14px' }}>
           No suggestions yet. Click &quot;Generate&quot; to create a plan.
         </div>
-      </div>
+      </GlassCard>
     );
   }
 
   return (
-    <div style={{
-      padding: '24px',
-      background: 'var(--card-bg, #ffffff)',
-      borderRadius: '8px',
-      border: '1px solid var(--border-color, #e5e7eb)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Suggested Plan</h2>
-        <button
-          onClick={loadSuggestions}
-          disabled={loading}
-          style={{
-            padding: '6px 12px',
-            background: loading ? '#9ca3af' : '#3b82f6',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            fontSize: '14px',
-          }}
-        >
+    <GlassCard style={{ padding: '24px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--ink)', fontFamily: 'var(--font-display)' }}>
+          Suggested Plan
+        </h2>
+        <Button variant="secondary" size="sm" onClick={loadSuggestions} isLoading={loading}>
           {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
+        </Button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
         {suggestions.suggestions_by_day.map((dayGroup) => (
-          <div key={dayGroup.date} style={{ borderBottom: '1px solid var(--border-color, #e5e7eb)', paddingBottom: '16px' }}>
+          <div key={dayGroup.date}>
             <h3 style={{
-              margin: '0 0 12px 0',
-              fontSize: '16px',
-              fontWeight: 600,
-              color: '#374151',
+              margin: '0 0 16px 0',
+              fontSize: '15px',
+              fontWeight: 700,
+              color: 'var(--ink)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
             }}>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent)' }} />
               {formatDate(dayGroup.date)}
             </h3>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginLeft: '12px', borderLeft: '1px solid var(--border)', paddingLeft: '20px' }}>
               {dayGroup.suggestions.map((suggestion) => {
                 const isUpdating = updatingIds.has(suggestion.id);
-                const statusColor = getStatusColor(suggestion.status);
-                
+
                 return (
                   <div
                     key={suggestion.id}
                     style={{
-                      padding: '12px',
-                      background: suggestion.status === 'suggested' ? '#f9fafb' : '#f3f4f6',
-                      borderRadius: '6px',
-                      border: `1px solid ${statusColor}40`,
+                      padding: '16px',
+                      background: 'var(--surface)',
+                      borderRadius: '12px',
+                      border: '1px solid var(--border)',
+                      transition: 'transform 0.2s ease, border-color 0.2s ease',
+                      position: 'relative'
                     }}
+                    className="hover:border-accent/30"
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px' }}>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, marginBottom: '4px', color: '#111827' }}>
+                        <div style={{ fontWeight: 600, marginBottom: '4px', color: 'var(--ink)', fontSize: '15px' }}>
                           {suggestion.task_title}
                         </div>
-                        <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>
+                        <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ fontSize: '14px' }}>🕒</span>
                           {formatTime(suggestion.start)} - {formatTime(suggestion.end)}
                         </div>
                         {suggestion.reasons.length > 0 && (
-                          <ul style={{ margin: '8px 0', paddingLeft: '20px', fontSize: '13px', color: '#4b5563' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
                             {suggestion.reasons.map((reason, idx) => (
-                              <li key={idx} style={{ marginBottom: '4px' }}>{reason}</li>
+                              <div key={idx} style={{
+                                fontSize: '12px',
+                                color: 'var(--muted)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                              }}>
+                                <span style={{ color: 'var(--accent)' }}>•</span>
+                                {reason}
+                              </div>
                             ))}
-                          </ul>
-                        )}
-                        {suggestion.status !== 'suggested' && (
-                          <div style={{
-                            display: 'inline-block',
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            background: `${statusColor}20`,
-                            color: statusColor,
-                            fontSize: '12px',
-                            fontWeight: 500,
-                            marginTop: '8px',
-                          }}>
-                            {suggestion.status.charAt(0).toUpperCase() + suggestion.status.slice(1)}
                           </div>
                         )}
+                        {suggestion.status !== 'suggested' && (
+                          <Badge variant={suggestion.status === 'accepted' ? 'success' : suggestion.status === 'completed' ? 'accent' : 'error'}>
+                            {suggestion.status}
+                          </Badge>
+                        )}
                       </div>
-                      
-                      {suggestion.status === 'suggested' && (
-                        <div style={{ display: 'flex', gap: '8px', marginLeft: '12px' }}>
-                          <button
-                            onClick={() => handleAccept(suggestion.id)}
+
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        {suggestion.status === 'suggested' && (
+                          <>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              onClick={() => handleAccept(suggestion.id)}
+                              disabled={isUpdating}
+                              isLoading={isUpdating}
+                            >
+                              Accept
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleReject(suggestion.id)}
+                              disabled={isUpdating}
+                            >
+                              Reject
+                            </Button>
+                          </>
+                        )}
+
+                        {suggestion.status === 'accepted' && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleComplete(suggestion.id)}
                             disabled={isUpdating}
-                            style={{
-                              padding: '6px 12px',
-                              background: '#10b981',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '4px',
-                              cursor: isUpdating ? 'not-allowed' : 'pointer',
-                              fontSize: '13px',
-                              opacity: isUpdating ? 0.6 : 1,
-                            }}
+                            isLoading={isUpdating}
                           >
-                            Accept
-                          </button>
-                          <button
-                            onClick={() => handleReject(suggestion.id)}
-                            disabled={isUpdating}
-                            style={{
-                              padding: '6px 12px',
-                              background: '#ef4444',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '4px',
-                              cursor: isUpdating ? 'not-allowed' : 'pointer',
-                              fontSize: '13px',
-                              opacity: isUpdating ? 0.6 : 1,
-                            }}
-                          >
-                            Reject
-                          </button>
-                        </div>
-                      )}
-                      
-                      {suggestion.status === 'accepted' && (
-                        <button
-                          onClick={() => handleComplete(suggestion.id)}
-                          disabled={isUpdating}
-                          style={{
-                            padding: '6px 12px',
-                            background: '#3b82f6',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: isUpdating ? 'not-allowed' : 'pointer',
-                            fontSize: '13px',
-                            opacity: isUpdating ? 0.6 : 1,
-                          }}
-                        >
-                          {isUpdating ? '...' : 'Mark Complete'}
-                        </button>
-                      )}
+                            Mark Complete
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -356,6 +285,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
           </div>
         ))}
       </div>
-    </div>
+    </GlassCard>
   );
 }
+

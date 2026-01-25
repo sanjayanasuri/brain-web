@@ -3126,7 +3126,8 @@ def get_claims_for_communities(
     session: Session,
     graph_id: str,
     community_ids: List[str],
-    limit_per_comm: int = 30
+    limit_per_comm: int = 30,
+    ingestion_run_id: Optional[str] = None
 ) -> Dict[str, List[dict]]:
     """
     Get claims that mention concepts in each community, ordered by confidence.
@@ -3136,6 +3137,7 @@ def get_claims_for_communities(
         graph_id: Graph ID for scoping
         community_ids: List of community IDs
         limit_per_comm: Maximum claims per community
+        ingestion_run_id: Optional ingestion run ID to filter claims
     
     Returns:
         Dict mapping community_id to list of claim dicts
@@ -3152,6 +3154,7 @@ def get_claims_for_communities(
     MATCH (c:Concept {graph_id: $graph_id})-[:IN_COMMUNITY]->(k)
     MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(c)
     WHERE $branch_id IN COALESCE(claim.on_branches, [])
+      AND ($run_id IS NULL OR claim.ingestion_run_id = $run_id)
     WITH k.community_id AS comm_id, claim
     ORDER BY claim.confidence DESC
     WITH comm_id, collect(claim)[0..$limit] AS claims
@@ -3166,7 +3169,8 @@ def get_claims_for_communities(
             graph_id=graph_id,
             branch_id=branch_id,
             comm_id=comm_id,
-            limit=limit_per_comm
+            limit=limit_per_comm,
+            run_id=ingestion_run_id
         )
         record = result.single()
         if record:

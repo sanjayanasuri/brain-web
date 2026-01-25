@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-
-// Exam type is imported from api-client
-
 import { listExams, createExam, deleteExam, type ExamData } from '../../api-client';
+import Button from '../ui/Button';
+import GlassCard from '../ui/GlassCard';
+import { Input, Select } from '../ui/Input';
+import Badge from '../ui/Badge';
 
 export default function ExamManager() {
   const [exams, setExams] = useState<ExamData[]>([]);
@@ -51,7 +52,7 @@ export default function ExamManager() {
         domain: formData.domain || undefined,
         description: formData.description || undefined,
       });
-      
+
       await loadExams();
       setShowForm(false);
       setFormData({
@@ -70,7 +71,7 @@ export default function ExamManager() {
 
   const handleDelete = async (examId: string) => {
     if (!confirm('Are you sure you want to delete this exam?')) return;
-    
+
     try {
       await deleteExam(examId);
       await loadExams();
@@ -81,232 +82,152 @@ export default function ExamManager() {
   };
 
   if (loading) {
-    return <div style={{ padding: '20px', color: 'var(--muted)' }}>Loading exams...</div>;
+    return <div style={{ padding: '20px', color: 'var(--muted)', textAlign: 'center' }}>Loading exams...</div>;
   }
 
   return (
-    <div style={{
-      background: 'var(--panel)',
-      borderRadius: '16px',
-      padding: '24px',
-      border: '1px solid var(--border)',
-    }}>
+    <GlassCard style={{ padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h2 style={{ fontSize: '20px', fontWeight: '600', color: 'var(--ink)' }}>
+        <h2 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--ink)', margin: 0 }}>
           Upcoming Exams
         </h2>
-        <button
+        <Button
+          variant={showForm ? 'secondary' : 'primary'}
+          size="sm"
           onClick={() => setShowForm(!showForm)}
-          style={{
-            padding: '8px 16px',
-            background: 'var(--accent)',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: '600',
-          }}
         >
           {showForm ? 'Cancel' : '+ Add Exam'}
-        </button>
+        </Button>
       </div>
 
       {showForm && (
         <form onSubmit={handleSubmit} style={{
           padding: '20px',
           background: 'var(--surface)',
-          borderRadius: '8px',
+          borderRadius: '12px',
           marginBottom: '20px',
           border: '1px solid var(--border)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px'
         }}>
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: '500', color: 'var(--ink)' }}>
-              Exam Title *
-            </label>
-            <input
-              type="text"
+          <div>
+            <Input
+              label="Exam Title"
+              placeholder="e.g., Biology Midterm"
               value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, title: e.target.value })}
               required
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                fontSize: '14px',
-                background: 'var(--panel)',
-                color: 'var(--ink)',
-              }}
             />
           </div>
 
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: '500', color: 'var(--ink)' }}>
-              Exam Date *
-            </label>
-            <input
+          <div>
+            <Input
               type="datetime-local"
+              label="Exam Date"
               value={formData.exam_date}
-              onChange={(e) => setFormData({ ...formData, exam_date: e.target.value })}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, exam_date: e.target.value })}
               required
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                fontSize: '14px',
-                background: 'var(--panel)',
-                color: 'var(--ink)',
-              }}
             />
           </div>
 
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: '500', color: 'var(--ink)' }}>
-              Domain (optional)
-            </label>
-            <input
-              type="text"
-              value={formData.domain}
-              onChange={(e) => setFormData({ ...formData, domain: e.target.value })}
+          <div>
+            <Input
+              label="Domain"
               placeholder="e.g., Biology, Physics"
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                fontSize: '14px',
-                background: 'var(--panel)',
-                color: 'var(--ink)',
-              }}
+              value={formData.domain}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, domain: e.target.value })}
             />
           </div>
 
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: '500', color: 'var(--ink)' }}>
-              Required Concepts (comma-separated, optional)
-            </label>
-            <input
-              type="text"
+          <div>
+            <Input
+              label="Required Concepts (comma-separated)"
+              placeholder="e.g., Thermodynamics, Entropy"
               value={formData.required_concepts}
-              onChange={(e) => setFormData({ ...formData, required_concepts: e.target.value })}
-              placeholder="e.g., Thermodynamics, Entropy, Heat Transfer"
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                fontSize: '14px',
-                background: 'var(--panel)',
-                color: 'var(--ink)',
-              }}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, required_concepts: e.target.value })}
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-            <button
-              type="button"
-              onClick={() => setShowForm(false)}
-              style={{
-                padding: '8px 16px',
-                background: 'transparent',
-                color: 'var(--ink)',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '14px',
-              }}
-            >
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '4px' }}>
+            <Button variant="ghost" type="button" onClick={() => setShowForm(false)}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              style={{
-                padding: '8px 16px',
-                background: 'var(--accent)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '600',
-              }}
-            >
+            </Button>
+            <Button variant="primary" type="submit">
               Create Exam
-            </button>
+            </Button>
           </div>
         </form>
       )}
 
       {exams.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px', color: 'var(--muted)' }}>
+        <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--muted)' }}>
           <div style={{ fontSize: '32px', marginBottom: '12px' }}>📅</div>
-          <div style={{ fontSize: '14px' }}>No upcoming exams. Add one to get study recommendations.</div>
+          <div style={{ fontSize: '13px' }}>No upcoming exams. Add one to get study recommendations.</div>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {exams.map((exam) => (
+          {exams.sort((a, b) => a.days_until - b.days_until).map((exam) => (
             <div
               key={exam.exam_id}
               style={{
                 padding: '16px',
-                background: exam.days_until <= 7 ? 'rgba(239, 68, 68, 0.1)' : 'var(--surface)',
-                borderRadius: '8px',
-                border: `1px solid ${exam.days_until <= 7 ? 'var(--error)' : 'var(--border)'}`,
+                background: 'var(--surface)',
+                borderRadius: '12px',
+                border: '1px solid var(--border)',
+                borderLeft: `4px solid ${exam.days_until <= 7 ? 'var(--error)' : 'var(--accent)'}`,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{
-                    fontSize: '16px',
-                    fontWeight: '600',
+                    fontSize: '15px',
+                    fontWeight: '700',
                     color: 'var(--ink)',
                     marginBottom: '4px',
                   }}>
                     {exam.title}
                   </div>
-                  {exam.domain && (
-                    <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '4px' }}>
-                      {exam.domain}
-                    </div>
-                  )}
-                  <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
-                    {new Date(exam.date).toLocaleDateString()} • {exam.required_concepts.length} concepts
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                    {exam.domain && (
+                      <Badge variant="accent" size="sm">
+                        {exam.domain}
+                      </Badge>
+                    )}
+                    <span style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                      {new Date(exam.date).toLocaleDateString()}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span>📚</span>
+                    <span>{exam.required_concepts.length} {exam.required_concepts.length === 1 ? 'concept' : 'concepts'} to study</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <div style={{
-                    padding: '6px 12px',
-                    background: exam.days_until <= 7 ? 'var(--error)' : 'var(--accent)',
-                    color: 'white',
-                    borderRadius: '6px',
-                    fontSize: '14px',
-                    fontWeight: '600',
-                    whiteSpace: 'nowrap',
-                  }}>
-                    {exam.days_until} {exam.days_until === 1 ? 'day' : 'days'}
-                  </div>
-                  <button
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
+                  <Badge variant={exam.days_until <= 7 ? 'error' : 'accent'} style={{ fontWeight: 700 }}>
+                    {exam.days_until} {exam.days_until === 1 ? 'day' : 'days'} left
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => handleDelete(exam.exam_id)}
                     style={{
-                      padding: '6px 12px',
-                      background: 'transparent',
+                      padding: '4px 8px',
+                      fontSize: '11px',
+                      height: 'auto',
                       color: 'var(--error)',
-                      border: '1px solid var(--error)',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      fontSize: '12px',
+                      borderColor: 'rgba(239, 68, 68, 0.2)'
                     }}
                   >
                     Delete
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
           ))}
         </div>
       )}
-    </div>
+    </GlassCard>
   );
 }
+

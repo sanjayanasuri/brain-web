@@ -1,3 +1,4 @@
+import React, { Suspense } from 'react';
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import TopBarWrapper from './components/topbar/TopBarWrapper';
@@ -36,11 +37,13 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           <QueryProvider>
-            <RouteTransition />
-            <SidebarProvider>
-              <OfflineSyncInitializer />
-              <TopBarWrapper>{children}</TopBarWrapper>
-            </SidebarProvider>
+            <Suspense fallback={null}>
+              <RouteTransition />
+              <SidebarProvider>
+                <OfflineSyncInitializer />
+                <TopBarWrapper>{children}</TopBarWrapper>
+              </SidebarProvider>
+            </Suspense>
           </QueryProvider>
         </ThemeProvider>
       </body>

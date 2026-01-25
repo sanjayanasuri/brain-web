@@ -30,30 +30,30 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
     preloadCritical = true,
     intersectionThreshold = 0.1
   } = options;
-  
+
   const router = useRouter();
   const pathname = usePathname();
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
   const prefetchQueueRef = useRef<Set<string>>(new Set());
   const intersectionObserverRef = useRef<IntersectionObserver | null>(null);
-  
+
   /**
    * Cache management utilities
    */
   const cache = {
-    get: <T>(key: string): T | null => {
+    get: <T,>(key: string): T | null => {
       const entry = cacheRef.current.get(key);
       if (!entry) return null;
-      
+
       if (Date.now() > entry.expiresAt) {
         cacheRef.current.delete(key);
         return null;
       }
-      
+
       return entry.data;
     },
-    
-    set: <T>(key: string, data: T, customTTL?: number): void => {
+
+    set: <T,>(key: string, data: T, customTTL?: number): void => {
       const ttl = customTTL || cacheTTL;
       const entry: CacheEntry<T> = {
         data,
@@ -62,27 +62,27 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       };
       cacheRef.current.set(key, entry);
     },
-    
+
     invalidate: (key: string): void => {
       cacheRef.current.delete(key);
     },
-    
+
     clear: (): void => {
       cacheRef.current.clear();
     },
-    
+
     size: (): number => {
       return cacheRef.current.size;
     }
   };
-  
+
   /**
    * Preload critical resources
    */
   const preloadResource = useCallback(async (url: string, type: 'script' | 'style' | 'fetch' = 'fetch') => {
     if (prefetchQueueRef.current.has(url)) return;
     prefetchQueueRef.current.add(url);
-    
+
     try {
       switch (type) {
         case 'script':
@@ -92,7 +92,7 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
           script.href = url;
           document.head.appendChild(script);
           break;
-          
+
         case 'style':
           const style = document.createElement('link');
           style.rel = 'preload';
@@ -100,11 +100,11 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
           style.href = url;
           document.head.appendChild(style);
           break;
-          
+
         case 'fetch':
           // Use fetch with low priority to preload data
           if ('fetch' in window) {
-            await fetch(url, { 
+            await fetch(url, {
               method: 'GET',
               priority: 'low' as any, // Future API
             });
@@ -115,18 +115,18 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       console.warn('Failed to preload resource:', url, error);
     }
   }, []);
-  
+
   /**
    * Prefetch route data
    */
   const prefetchRoute = useCallback(async (route: string) => {
     if (prefetchQueueRef.current.has(route)) return;
     prefetchQueueRef.current.add(route);
-    
+
     try {
       // Use Next.js router prefetch
       router.prefetch(route);
-      
+
       // Also prefetch API data if available
       const apiEndpoint = getApiEndpointForRoute(route);
       if (apiEndpoint) {
@@ -136,15 +136,15 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       console.warn('Failed to prefetch route:', route, error);
     }
   }, [router, preloadResource]);
-  
+
   /**
    * Create hover prefetch handler
    */
   const createHoverPrefetch = useCallback((route: string) => {
     if (!prefetchOnHover) return {};
-    
+
     let hoverTimeout: NodeJS.Timeout;
-    
+
     return {
       onMouseEnter: () => {
         hoverTimeout = setTimeout(() => {
@@ -158,7 +158,7 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       }
     };
   }, [prefetchOnHover, prefetchRoute]);
-  
+
   /**
    * Create intersection observer for viewport-based prefetching
    */
@@ -179,11 +179,11 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
         { threshold: intersectionThreshold }
       );
     }
-    
+
     element.setAttribute('data-prefetch-route', route);
     intersectionObserverRef.current.observe(element);
   }, [prefetchRoute, intersectionThreshold]);
-  
+
   /**
    * Performance metrics collection
    */
@@ -192,18 +192,18 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       // This would need to be implemented with hit/miss tracking
       return 0; // Placeholder
     },
-    
+
     averageLoadTime: (): number => {
       // This would need to be implemented with performance tracking
       return 0; // Placeholder
     },
-    
+
     prefetchEffectiveness: (): number => {
       // This would need to be implemented with usage tracking
       return 0; // Placeholder
     }
   };
-  
+
   /**
    * Cleanup on unmount
    */
@@ -214,7 +214,7 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       }
     };
   }, []);
-  
+
   /**
    * Cache cleanup on route change
    */
@@ -227,7 +227,7 @@ export function usePerformanceOptimization(options: PerformanceOptions = {}) {
       }
     }
   }, [pathname]);
-  
+
   return {
     cache,
     preloadResource,
@@ -249,13 +249,13 @@ function getApiEndpointForRoute(route: string): string | null {
     '/review': '/api/brain-web/review',
     '/ingest': '/api/brain-web/sources'
   };
-  
+
   // Handle parameterized routes
   if (route.startsWith('/concepts/')) {
     const conceptId = route.split('/')[2];
     return `/api/brain-web/concept?node_id=${conceptId}`;
   }
-  
+
   return routeMap[route] || null;
 }
 
@@ -268,13 +268,13 @@ export function withPerformanceOptimization<T extends object>(
 ) {
   return function PerformanceOptimizedComponent(props: T) {
     const perf = usePerformanceOptimization(options);
-    
+
     // Add performance utilities to props if component expects them
     const enhancedProps = {
       ...props,
       performanceUtils: perf
     } as T & { performanceUtils?: ReturnType<typeof usePerformanceOptimization> };
-    
+
     return <Component {...enhancedProps} />;
   };
 }

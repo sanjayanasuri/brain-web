@@ -85,93 +85,104 @@ export default function SourceManagementPage() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* Notion Database Configuration */}
-        <section className="control-card">
-          <div className="control-header" style={{ marginBottom: 16 }}>
-            <div>
-              <span>Notion Database Configuration</span>
-              <p className="subtitle" style={{ marginTop: 4 }}>
-                Specify which Notion databases should be synced. Leave empty to sync all databases.
-              </p>
-            </div>
-          </div>
-
-          {notionConfig ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label className="field-label">
-                Database IDs (one per line)
-                <textarea
-                  className="chat-input"
-                  rows={6}
-                  value={notionConfig.database_ids.join('\n')}
-                  onChange={e =>
-                    setNotionConfig(prev =>
-                      prev
-                        ? {
-                            ...prev,
-                            database_ids: e.target.value
-                              .split('\n')
-                              .map(s => s.trim())
-                              .filter(Boolean),
-                          }
-                        : prev,
-                    )
-                  }
-                  placeholder="Enter Notion database IDs, one per line&#10;Example:&#10;abc123def456&#10;ghi789jkl012"
-                />
-              </label>
-              <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginTop: '-8px' }}>
-                Tip: Leave empty to automatically discover and sync all databases you have access to.
-              </div>
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 13,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={notionConfig.enable_auto_sync}
-                  onChange={e =>
-                    setNotionConfig(prev =>
-                      prev
-                        ? {
-                            ...prev,
-                            enable_auto_sync: e.target.checked,
-                          }
-                        : prev,
-                    )
-                  }
-                />
-                Enable auto-sync in the background (runs every 5 minutes)
-              </label>
-              <button
-                className="send-btn"
-                style={{ alignSelf: 'flex-start', marginTop: 4 }}
-                onClick={handleSaveNotion}
-                disabled={savingNotion}
-              >
-                {savingNotion ? 'Saving…' : 'Save Database Configuration'}
-              </button>
-            </div>
-          ) : (
+        {process.env.NEXT_PUBLIC_DEMO_MODE === 'true' ? (
+          <section className="control-card" style={{ textAlign: 'center', padding: '40px' }}>
+            <h3 style={{ marginBottom: 12 }}>Demo Mode Enabled</h3>
             <p className="subtitle">
-              Notion configuration is not available. Please check backend connection.
+              Source management and database configurations are disabled in this public demo to protect privacy.
             </p>
-          )}
-        </section>
+          </section>
+        ) : (
+          <>
+            {/* Notion Database Configuration */}
+            <section className="control-card">
+              <div className="control-header" style={{ marginBottom: 16 }}>
+                <div>
+                  <span>Notion Database Configuration</span>
+                  <p className="subtitle" style={{ marginTop: 4 }}>
+                    Specify which Notion databases should be synced. Leave empty to sync all databases.
+                  </p>
+                </div>
+              </div>
 
-        {/* Notion Sync & Indexing */}
-        <section className="control-card">
-          <NotionSyncManager />
-        </section>
+              {notionConfig ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <label className="field-label">
+                    Database IDs (one per line)
+                    <textarea
+                      className="chat-input"
+                      rows={6}
+                      value={notionConfig.database_ids.join('\n')}
+                      onChange={e =>
+                        setNotionConfig(prev =>
+                          prev
+                            ? {
+                              ...prev,
+                              database_ids: e.target.value
+                                .split('\n')
+                                .map(s => s.trim())
+                                .filter(Boolean),
+                            }
+                            : prev,
+                        )
+                      }
+                      placeholder="Enter Notion database IDs, one per line&#10;Example:&#10;abc123def456&#10;ghi789jkl012"
+                    />
+                  </label>
+                  <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginTop: '-8px' }}>
+                    Tip: Leave empty to automatically discover and sync all databases you have access to.
+                  </div>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: 13,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={notionConfig.enable_auto_sync}
+                      onChange={e =>
+                        setNotionConfig(prev =>
+                          prev
+                            ? {
+                              ...prev,
+                              enable_auto_sync: e.target.checked,
+                            }
+                            : prev,
+                        )
+                      }
+                    />
+                    Enable auto-sync in the background (runs every 5 minutes)
+                  </label>
+                  <button
+                    className="send-btn"
+                    style={{ alignSelf: 'flex-start', marginTop: 4 }}
+                    onClick={handleSaveNotion}
+                    disabled={savingNotion}
+                  >
+                    {savingNotion ? 'Saving…' : 'Save Database Configuration'}
+                  </button>
+                </div>
+              ) : (
+                <p className="subtitle">
+                  Notion configuration is not available. Please check backend connection.
+                </p>
+              )}
+            </section>
 
-        {/* Graph Data Files */}
-        <section className="control-card">
-          <GraphFilesViewer />
-        </section>
+            {/* Notion Sync & Indexing */}
+            <section className="control-card">
+              <NotionSyncManager />
+            </section>
+
+            {/* Graph Data Files */}
+            <section className="control-card">
+              <GraphFilesViewer />
+            </section>
+          </>
+        )}
       </div>
     </div>
   );

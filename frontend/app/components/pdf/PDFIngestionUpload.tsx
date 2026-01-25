@@ -162,7 +162,7 @@ export default function PDFIngestionUpload({
         if (evt.type === 'complete') {
           setProgress(100);
           finalResult = {
-            status: evt.status || 'COMPLETED',
+            status: (evt.status as 'COMPLETED' | 'PARTIAL' | 'FAILED') || 'COMPLETED',
             artifact_id: evt.artifact_id || null,
             run_id: evt.run_id || null,
             concepts_created: evt.concepts_created || 0,
@@ -175,9 +175,9 @@ export default function PDFIngestionUpload({
             warnings: evt.warnings || [],
             errors: evt.errors || [],
           };
-          
+
           onIngestionComplete?.(finalResult);
-          
+
           // Reset form after success
           setTimeout(() => {
             setFile(null);

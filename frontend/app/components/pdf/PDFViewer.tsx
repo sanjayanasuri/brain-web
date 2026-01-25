@@ -133,7 +133,7 @@ export default function PDFViewer({
               page: evt.page,
             };
             setExtractions(prev => [...prev, extractionItem]);
-            
+
             // Highlight page if page number is available
             if (evt.page) {
               setHighlightedPages(prev => new Set([...prev, evt.page!]));
@@ -144,9 +144,9 @@ export default function PDFViewer({
             setProgress(100);
             setIsProcessing(false);
             setIsComplete(true);
-            
+
             const result: PDFIngestResponse = {
-              status: evt.status || 'COMPLETED',
+              status: (evt.status as 'COMPLETED' | 'PARTIAL' | 'FAILED') || 'COMPLETED',
               artifact_id: evt.artifact_id || null,
               run_id: evt.run_id || null,
               concepts_created: evt.concepts_created || 0,
@@ -159,7 +159,7 @@ export default function PDFViewer({
               warnings: evt.warnings || [],
               errors: evt.errors || [],
             };
-            
+
             setFinalResult(result);
             setShowConfirmDialog(true);
           }
@@ -319,7 +319,7 @@ export default function PDFViewer({
                   </a>
                 </div>
               </object>
-              
+
               {/* Highlight overlay for processing pages */}
               {highlightedPages.size > 0 && (
                 <div style={{

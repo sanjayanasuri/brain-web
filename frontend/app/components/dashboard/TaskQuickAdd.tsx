@@ -2,6 +2,10 @@
 
 import React, { useState } from 'react';
 import { createTask, type TaskCreate } from '../../api-client';
+import Button from '../ui/Button';
+import GlassCard from '../ui/GlassCard';
+import { Input, Select } from '../ui/Input';
+import Textarea from '../ui/Textarea';
 
 interface TaskQuickAddProps {
   onTaskCreated?: () => void;
@@ -23,7 +27,7 @@ export default function TaskQuickAdd({ onTaskCreated }: TaskQuickAddProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!formData.title || !formData.title.trim()) {
       alert('Please enter a task title');
       return;
@@ -45,10 +49,9 @@ export default function TaskQuickAdd({ onTaskCreated }: TaskQuickAddProps) {
         location_lat: formData.location_lat || null,
         location_lon: formData.location_lon || null,
       };
-      
+
       await createTask(payload);
-      
-      // Reset form
+
       setFormData({
         title: '',
         estimated_minutes: 60,
@@ -60,7 +63,7 @@ export default function TaskQuickAdd({ onTaskCreated }: TaskQuickAddProps) {
         location_lon: undefined,
       });
       setIsOpen(false);
-      
+
       if (onTaskCreated) {
         onTaskCreated();
       }
@@ -76,16 +79,13 @@ export default function TaskQuickAdd({ onTaskCreated }: TaskQuickAddProps) {
     if (!query || query.length < 2) {
       return;
     }
-    
-    // Use the calendar location suggestions API
+
     try {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/calendar/locations/suggestions?query=${encodeURIComponent(query)}`
       );
       if (response.ok) {
         const data = await response.json();
-        // For now, just set the location string
-        // In a full implementation, you'd show a dropdown and let user select
         if (data.suggestions && data.suggestions.length > 0) {
           const first = data.suggestions[0];
           setFormData(prev => ({
@@ -103,162 +103,110 @@ export default function TaskQuickAdd({ onTaskCreated }: TaskQuickAddProps) {
 
   if (!isOpen) {
     return (
-      <button
+      <Button
+        variant="primary"
         onClick={() => setIsOpen(true)}
         style={{
           padding: '12px 24px',
-          background: '#3b82f6',
-          color: 'white',
-          border: 'none',
-          borderRadius: '6px',
-          cursor: 'pointer',
-          fontSize: '14px',
-          fontWeight: 500,
+          fontWeight: 600,
         }}
       >
-        + Add Task
-      </button>
+        + Add New Task
+      </Button>
     );
   }
 
   return (
-    <div style={{
-      padding: '20px',
-      background: 'var(--card-bg, #ffffff)',
-      borderRadius: '8px',
-      border: '1px solid var(--border-color, #e5e7eb)',
-      marginBottom: '16px',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Add New Task</h3>
-        <button
+    <GlassCard style={{ padding: '24px', marginBottom: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }}>Quick Add Task</h3>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setIsOpen(false)}
-          style={{
-            background: 'none',
-            border: 'none',
-            fontSize: '20px',
-            cursor: 'pointer',
-            color: '#6b7280',
-            padding: '0',
-            width: '24px',
-            height: '24px',
-          }}
+          style={{ width: '32px', height: '32px', padding: 0 }}
         >
           ×
-        </button>
+        </Button>
       </div>
 
       <form onSubmit={handleSubmit}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <div>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
-              Title *
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+              Task Title
             </label>
-            <input
+            <Input
               type="text"
               value={formData.title || ''}
-              onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData(prev => ({ ...prev, title: e.target.value }))}
               required
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                fontSize: '14px',
-              }}
-              placeholder="e.g., Review calculus notes"
+              placeholder="What needs to be done?"
             />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
-                Estimated Minutes
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                Estimated Duration
               </label>
-              <input
+              <Input
                 type="number"
                 value={formData.estimated_minutes || 60}
-                onChange={(e) => setFormData(prev => ({ ...prev, estimated_minutes: parseInt(e.target.value) || 60 }))}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData(prev => ({ ...prev, estimated_minutes: parseInt(e.target.value) || 60 }))}
                 min="5"
                 step="5"
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
+                placeholder="Minutes"
               />
             </div>
 
             <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
                 Priority
               </label>
-              <select
+              <Select
                 value={formData.priority || 'medium'}
-                onChange={(e) => setFormData(prev => ({ ...prev, priority: e.target.value }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData(prev => ({ ...prev, priority: e.target.value as any }))}
               >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
+                <option value="low">Low Priority</option>
+                <option value="medium">Medium Priority</option>
+                <option value="high">High Priority</option>
+              </Select>
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
-                Energy Level
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                Energy Requirement
               </label>
-              <select
+              <Select
                 value={formData.energy || 'med'}
-                onChange={(e) => setFormData(prev => ({ ...prev, energy: e.target.value }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFormData(prev => ({ ...prev, energy: e.target.value as any }))}
               >
-                <option value="low">Low</option>
-                <option value="med">Medium</option>
-                <option value="high">High</option>
-              </select>
+                <option value="low">Chill (Low)</option>
+                <option value="med">Focused (Med)</option>
+                <option value="high">Intense (High)</option>
+              </Select>
             </div>
 
             <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
-                Due Date (optional)
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                Due Date
               </label>
-              <input
+              <Input
                 type="date"
                 value={formData.due_date || ''}
-                onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value || null }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData(prev => ({ ...prev, due_date: e.target.value || null }))}
               />
             </div>
           </div>
 
           <div>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
-              Location (optional)
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+              Location
             </label>
-            <input
+            <Input
               type="text"
               value={formData.location || ''}
               onChange={(e) => {
@@ -267,74 +215,33 @@ export default function TaskQuickAdd({ onTaskCreated }: TaskQuickAddProps) {
                   handleLocationSearch(e.target.value);
                 }
               }}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                fontSize: '14px',
-              }}
-              placeholder="e.g., WALC, Library"
+              placeholder="e.g., Campus Library, Office"
             />
           </div>
 
           <div>
-            <label style={{ display: 'block', marginBottom: '4px', fontSize: '14px', fontWeight: 500 }}>
-              Notes (optional)
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+              Additional Notes
             </label>
-            <textarea
+            <Textarea
               value={formData.notes || ''}
               onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value || null }))}
               rows={3}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                border: '1px solid #d1d5db',
-                borderRadius: '4px',
-                fontSize: '14px',
-                fontFamily: 'inherit',
-                resize: 'vertical',
-              }}
-              placeholder="Additional details..."
+              placeholder="Context or specific instructions..."
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '8px' }}>
-            <button
-              type="button"
-              onClick={() => setIsOpen(false)}
-              disabled={loading}
-              style={{
-                padding: '8px 16px',
-                background: '#f3f4f6',
-                color: '#374151',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-              }}
-            >
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px' }}>
+            <Button variant="ghost" onClick={() => setIsOpen(false)} disabled={loading}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              style={{
-                padding: '8px 16px',
-                background: loading ? '#9ca3af' : '#3b82f6',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                fontWeight: 500,
-              }}
-            >
+            </Button>
+            <Button variant="primary" type="submit" isLoading={loading}>
               {loading ? 'Creating...' : 'Create Task'}
-            </button>
+            </Button>
           </div>
         </div>
       </form>
-    </div>
+    </GlassCard>
   );
 }
+
