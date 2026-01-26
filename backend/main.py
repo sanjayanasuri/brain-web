@@ -213,23 +213,53 @@ origins = [
     os.getenv("RAILWAY_PUBLIC_DOMAIN", ""),
     os.getenv("RAILWAY_STATIC_URL", ""),
 ]
+
+# Allow additional origins via env (comma-separated)
+extra_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+    if origin.strip()
+]
+origins.extend(extra_origins)
 origins = [origin for origin in origins if origin]  # Remove empty strings
 
 # CORS configuration
 cors_kwargs = {
     "allow_origins": origins,
     "allow_credentials": True,
-    "allow_methods": ["*"],
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     "allow_headers": ["*"],
+    "expose_headers": ["x-request-id", "x-session-id"],
+    "max_age": 600,  # Cache preflight requests for 10 minutes
 }
 
-# Add regex patterns for Chrome extensions, localhost, and local network IPs
+# Add regex patterns for Chrome extensions, localhost, local network IPs,
+# and production frontend domains (to avoid brittle allowlists).
 from config import ENABLE_EXTENSION_DEV
+origin_regexes = [
+    # Prod frontends (allow optional ports)
+    r"https://.*\.sanjayanasuri\.com(?::\d+)?",
+    r"https://.*\.vercel\.app(?::\d+)?",
+    r"https://.*\.up\.railway\.app(?::\d+)?",
+]
+
 if ENABLE_EXTENSION_DEV:
-    cors_kwargs["allow_origin_regex"] = r"(chrome-extension://.*|http://localhost:\d+|http://127\.0\.0\.1:\d+|http://192\.168\.\d+\.\d+:\d+)"
+    origin_regexes.append(r"chrome-extension://.*")
+    origin_regexes.append(r"http://localhost:\d+")
+    origin_regexes.append(r"http://127\.0\.0\.1:\d+")
+    origin_regexes.append(r"http://192\.168\.\d+\.\d+:\d+")
 else:
     # Always allow local network IPs for mobile development
-    cors_kwargs["allow_origin_regex"] = r"(http://192\.168\.\d+\.\d+:\d+|http://10\.\d+\.\d+\.\d+:\d+|http://172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+)"
+    origin_regexes.append(r"http://192\.168\.\d+\.\d+:\d+")
+    origin_regexes.append(r"http://10\.\d+\.\d+\.\d+:\d+")
+    origin_regexes.append(r"http://172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+")
+
+extra_origin_regex = os.getenv("CORS_ALLOW_ORIGIN_REGEX", "").strip()
+if extra_origin_regex:
+    origin_regexes.append(extra_origin_regex)
+
+if origin_regexes:
+    cors_kwargs["allow_origin_regex"] = "(" + "|".join(origin_regexes) + ")"
 
 app.add_middleware(
     CORSMiddleware,
