@@ -63,3 +63,4 @@ The frontend connects to your FastAPI backend:
 
 Make sure your backend is running and CORS is configured (already done in `main.py`).
 
+# Force rebuild
