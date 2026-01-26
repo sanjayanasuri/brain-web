@@ -37,7 +37,7 @@ const nextConfig = {
       ...config.resolve.fallback,
       fs: false,
     };
-    
+
     // Optimize for faster dev compilation
     if (dev && !isServer) {
       // Reduce chunk size for faster compilation
@@ -83,8 +83,18 @@ const nextConfig = {
         },
       };
     }
-    
+
     return config;
+  },
+  // Redirects
+  async redirects() {
+    return [
+      {
+        source: '/',
+        destination: '/home',
+        permanent: false,
+      },
+    ];
   },
 };
 
