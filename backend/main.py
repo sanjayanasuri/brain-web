@@ -520,8 +520,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """
     Handle request validation errors (422).
     """
-    logger.warning(f"Validation error on {request.method} {request.url.path}")
-    response = JSONResponse(status_code=422, content={"detail": exc.errors()})
+    logger.warning(f"Validation error on {request.method} {request.url.path}: {exc.errors()}")
+    from fastapi.encoders import jsonable_encoder
+    response = JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
     
     origin = request.headers.get("origin")
     if origin:
