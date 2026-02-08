@@ -64,6 +64,7 @@ from api_claims_from_quotes import router as claims_from_quotes_router
 from api_signals import router as signals_router
 from api_voice import router as voice_router
 from api_voice_agent import router as voice_agent_router
+from api_note_images import router as note_images_router
 from api_extend import router as extend_router
 from api_trails import router as trails_router
 from api_offline import router as offline_router
@@ -289,6 +290,8 @@ app.include_router(pdf_ingestion_router)
 # Phase 2: Evidence Graph endpoints
 app.include_router(quotes_router)
 app.include_router(claims_from_quotes_router)
+# Phase D: Whiteboard/photo note images
+app.include_router(note_images_router)
 # Learning State Engine: Signals and Voice
 app.include_router(signals_router)
 app.include_router(voice_router)
@@ -629,5 +632,4 @@ app.add_middleware(
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "Brain Web backend is running"}
-
 

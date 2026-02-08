@@ -29,7 +29,6 @@ def _get_driver():
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
-            notifications_min_severity="OFF",  # Suppress schema warnings
         )
 
     try:
@@ -46,7 +45,6 @@ def _get_driver():
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
-            notifications_min_severity="OFF",
         )
     return _driver
 
