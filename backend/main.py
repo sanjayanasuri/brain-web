@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 
 from api_auth import router as auth_router
+from api_health import router as health_router
 from services_user import init_user_db
 from api_concepts import router as concepts_router
 from api_ai import router as ai_router
