@@ -9,6 +9,7 @@ from models import VoiceSession, VoiceSessionCreate, UsageLog, MemorySyncEvent
 from services_voice_agent import VoiceAgentOrchestrator
 from services_supermemory import get_sync_history
 from services_usage_tracker import get_daily_usage
+from services_voice_transcripts import list_voice_learning_signals, list_voice_transcript_chunks
 
 router = APIRouter(prefix="/voice-agent", tags=["voice-agent"])
 
@@ -73,16 +74,54 @@ async def get_interaction_context(
     request: Request,
     session_id: Optional[str] = Query(None),
     is_scribe_mode: bool = Query(False),
+    client_start_ms: Optional[int] = Query(None, description="Client epoch ms when user started speaking"),
+    client_end_ms: Optional[int] = Query(None, description="Client epoch ms when user ended speaking"),
     orchestrator: VoiceAgentOrchestrator = Depends(get_orchestrator)
 ):
     """Get context for a voice interaction (GraphRAG + Supermemory + Commands + Fog Clearing + Continuity)."""
-    result = await orchestrator.get_interaction_context(graph_id, branch_id, transcript, is_scribe_mode, session_id)
+    result = await orchestrator.get_interaction_context(
+        graph_id,
+        branch_id,
+        transcript,
+        is_scribe_mode,
+        session_id,
+        client_start_ms=client_start_ms,
+        client_end_ms=client_end_ms,
+    )
     
     return {
         "agent_response": result["agent_response"],
+        "should_speak": result.get("should_speak", True),
+        "speech_rate": result.get("speech_rate", 1.0),
+        "learning_signals": result.get("learning_signals", []),
+        "policy": result.get("policy", {}),
+        "user_transcript_chunk": result.get("user_transcript_chunk"),
+        "assistant_transcript_chunk": result.get("assistant_transcript_chunk"),
         "is_eureka": result.get("is_eureka", False),
         "is_fog_clearing": result.get("is_fog_clearing", False),
         "fog_node_id": result.get("fog_node_id"),
         "actions": result.get("actions", []),
         "action_summaries": result.get("action_summaries", [])
     }
+
+
+@router.get("/session/{session_id}/transcript")
+async def get_voice_session_transcript(session_id: str, request: Request):
+    """List transcript chunks for a voice session (as artifacts + anchors)."""
+    user_id = getattr(request.state, "user_id", None) or "demo"
+    try:
+        chunks = list_voice_transcript_chunks(voice_session_id=session_id, user_id=user_id)
+        return {"session_id": session_id, "chunks": chunks}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch transcript: {str(e)}")
+
+
+@router.get("/session/{session_id}/signals")
+async def get_voice_session_signals(session_id: str, request: Request):
+    """List extracted learning signals for a voice session."""
+    user_id = getattr(request.state, "user_id", None) or "demo"
+    try:
+        signals = list_voice_learning_signals(voice_session_id=session_id, user_id=user_id)
+        return {"session_id": session_id, "signals": signals}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch signals: {str(e)}")

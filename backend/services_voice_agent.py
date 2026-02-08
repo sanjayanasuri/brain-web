@@ -15,6 +15,16 @@ from db_postgres import execute_update, execute_query
 from config import VOICE_AGENT_NAME, OPENAI_API_KEY
 from services_graph import create_concept, create_relationship
 from models import ConceptCreate, RelationshipCreate
+from services_voice_learning_signals import (
+    apply_signals_to_policy,
+    extract_learning_signals,
+    is_yield_turn,
+)
+from services_voice_transcripts import (
+    get_voice_session_started_at_ms,
+    record_voice_learning_signals,
+    record_voice_transcript_chunk,
+)
 
 import json
 import re
@@ -214,6 +224,33 @@ class VoiceAgentOrchestrator:
             logger.error(f"Failed to retrieve session history: {e}")
             return []
 
+    async def get_session_policy(self, session_id: str) -> Dict[str, Any]:
+        """Retrieve turn-taking/pacing policy from voice session metadata."""
+        query = "SELECT metadata FROM voice_sessions WHERE id = %s AND user_id = %s"
+        try:
+            res = execute_query(query, (session_id, self.user_id))
+            metadata = res[0].get("metadata") if res else None
+            if isinstance(metadata, dict):
+                return metadata.get("policy", {}) or {}
+            return {}
+        except Exception as e:
+            logger.error(f"Failed to retrieve session policy: {e}")
+            return {}
+
+    async def set_session_policy(self, session_id: str, policy: Dict[str, Any]) -> None:
+        """Persist policy into voice session metadata (jsonb)."""
+        try:
+            execute_update(
+                """
+                UPDATE voice_sessions
+                SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{policy}', %s::jsonb, true)
+                WHERE id = %s AND user_id = %s
+                """,
+                (json.dumps(policy), session_id, self.user_id),
+            )
+        except Exception as e:
+            logger.error(f"Failed to set session policy: {e}")
+
     async def save_interaction(self, session_id: str, transcript: str, agent_response: str):
         """Persist interaction to session metadata for continuity."""
         history = await self.get_session_history(session_id)
@@ -226,13 +263,26 @@ class VoiceAgentOrchestrator:
         # Keep only last 20 for storage sanity
         history = history[-20:]
         
-        query = "UPDATE voice_sessions SET metadata = jsonb_set(metadata, '{history}', %s) WHERE id = %s"
+        query = """
+        UPDATE voice_sessions
+        SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{history}', %s::jsonb, true)
+        WHERE id = %s AND user_id = %s
+        """
         try:
-            execute_update(query, (history, session_id))
+            execute_update(query, (json.dumps(history), session_id, self.user_id))
         except Exception as e:
             logger.error(f"Failed to save interaction history: {e}")
 
-    async def get_interaction_context(self, graph_id: str, branch_id: str, last_transcript: str, is_scribe_mode: bool = False, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def get_interaction_context(
+        self,
+        graph_id: str,
+        branch_id: str,
+        last_transcript: str,
+        is_scribe_mode: bool = False,
+        session_id: Optional[str] = None,
+        client_start_ms: Optional[int] = None,
+        client_end_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Gather context, process commands, and generate a conversational reply.
         Now includes Fog-Clearing and Session Continuity (Interaction History).
@@ -242,6 +292,16 @@ class VoiceAgentOrchestrator:
             history = []
             if session_id:
                 history = await self.get_session_history(session_id)
+
+            # 1b. Load session policy (turn-taking/pacing)
+            policy: Dict[str, Any] = {}
+            if session_id:
+                policy = await self.get_session_policy(session_id)
+            if not isinstance(policy, dict):
+                policy = {}
+
+            extracted_signals = extract_learning_signals(last_transcript)
+            policy, policy_changed = apply_signals_to_policy(policy, extracted_signals)
 
             # 2. Detect Intent
             is_confused = await self.detect_confusion(last_transcript)
@@ -291,19 +351,109 @@ class VoiceAgentOrchestrator:
 
             Instructions:
             - Keep responses concise and conversational.
+            - Be direct: if the user asks whether something is correct, say yes/no and correct it if needed (no glazing).
+            - If policy says no interruption, only speak when the user yields (asks a question or requests a response).
+            - If policy says slow pacing, use short sentences and a slower cadence.
             - If the user has a "EUREKA" moment, acknowledge it warmly.
             - If they were confused, present the simplified explanation as yours. Mention you've saved this "Insight" to their graph.
             - Do not use markdown (bold/bullets) for voice.
             """
 
-            agent_reply = await self.generate_agent_reply(system_prompt, history, last_transcript)
+            # Turn-taking gate: optionally wait silently unless user yields
+            should_speak = True
+            if policy.get("turn_taking") == "no_interrupt":
+                yield_turn = is_yield_turn(last_transcript) or any(
+                    s.get("kind") in {"verification_question", "confusion", "restart_request"} for s in extracted_signals
+                )
+                # One-time acknowledgements still count as a "speak" even if no yield
+                ack_turn = any(s.get("kind") in {"turn_taking_request", "pacing_request"} for s in extracted_signals)
+                should_speak = bool(yield_turn or ack_turn)
+
+            agent_reply = ""
+            if should_speak:
+                # Provide immediate acknowledgements if user is setting policy
+                if any(s.get("kind") == "turn_taking_request" for s in extracted_signals):
+                    agent_reply = "Got it. I won’t interrupt — just ask when you want me to jump in."
+                elif any(s.get("kind") == "pacing_request" for s in extracted_signals):
+                    agent_reply = "Okay. I’ll slow down."
+                else:
+                    agent_reply = await self.generate_agent_reply(system_prompt, history, last_transcript)
 
             # 8. Save Interaction if session_id provided
+            user_transcript_chunk = None
+            assistant_transcript_chunk = None
             if session_id:
                 await self.save_interaction(session_id, last_transcript, agent_reply)
+                if policy_changed:
+                    await self.set_session_policy(session_id, policy)
+
+                # Persist transcript chunks + extracted learning signals as artifacts (additive)
+                try:
+                    started_at_ms = get_voice_session_started_at_ms(voice_session_id=session_id, user_id=self.user_id)
+                    now_ms = int(datetime.utcnow().timestamp() * 1000)
+                    session_offset_now = max(0, now_ms - started_at_ms) if started_at_ms else 0
+
+                    # Convert client epoch ms to session-relative ms
+                    if started_at_ms and client_start_ms is not None:
+                        user_start = max(0, int(client_start_ms) - started_at_ms)
+                    else:
+                        user_start = session_offset_now
+                    if started_at_ms and client_end_ms is not None:
+                        user_end = max(user_start + 1, int(client_end_ms) - started_at_ms)
+                    else:
+                        user_end = user_start + 1
+
+                    user_chunk = record_voice_transcript_chunk(
+                        voice_session_id=session_id,
+                        user_id=self.user_id,
+                        tenant_id=self.tenant_id,
+                        graph_id=graph_id,
+                        branch_id=branch_id,
+                        role="user",
+                        content=last_transcript,
+                        start_ms=user_start,
+                        end_ms=user_end,
+                    )
+                    user_transcript_chunk = user_chunk
+
+                    assistant_chunk = None
+                    if agent_reply:
+                        assist_start = max(user_end + 1, session_offset_now)
+                        # rough estimate: 55ms/char + a floor
+                        est_duration = max(800, int(len(agent_reply) * 55))
+                        assistant_chunk = record_voice_transcript_chunk(
+                            voice_session_id=session_id,
+                            user_id=self.user_id,
+                            tenant_id=self.tenant_id,
+                            graph_id=graph_id,
+                            branch_id=branch_id,
+                            role="assistant",
+                            content=agent_reply,
+                            start_ms=assist_start,
+                            end_ms=assist_start + est_duration,
+                        )
+                        assistant_transcript_chunk = assistant_chunk
+
+                    record_voice_learning_signals(
+                        voice_session_id=session_id,
+                        chunk_id=user_chunk.get("chunk_id"),
+                        user_id=self.user_id,
+                        tenant_id=self.tenant_id,
+                        graph_id=graph_id,
+                        branch_id=branch_id,
+                        signals=extracted_signals,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to persist voice transcript artifacts: {e}")
 
             return {
                 "agent_response": agent_reply,
+                "should_speak": should_speak,
+                "speech_rate": 0.9 if policy.get("pacing") == "slow" else 1.0,
+                "learning_signals": extracted_signals,
+                "policy": policy,
+                "user_transcript_chunk": user_transcript_chunk,
+                "assistant_transcript_chunk": assistant_transcript_chunk,
                 "actions": actions,
                 "action_summaries": action_summaries,
                 "is_eureka": is_eureka,
@@ -316,6 +466,9 @@ class VoiceAgentOrchestrator:
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {
                 "agent_response": "I'm sorry, I'm having a bit of trouble connecting to my central knowledge hub right now. Could you repeat that?",
+                "should_speak": True,
+                "speech_rate": 1.0,
+                "learning_signals": [],
                 "actions": [],
                 "action_summaries": [],
                 "is_eureka": False,

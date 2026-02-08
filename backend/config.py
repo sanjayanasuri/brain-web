@@ -109,7 +109,10 @@ if DATABASE_URL:
     POSTGRES_USER = parsed.username or os.getenv("POSTGRES_USER", "brainweb")
     POSTGRES_PASSWORD = parsed.password or os.getenv("POSTGRES_PASSWORD", "brainweb")
     POSTGRES_CONNECTION_STRING = DATABASE_URL
+    print(f"DEBUG: DATABASE_URL found. Host: {POSTGRES_HOST}, Port: {POSTGRES_PORT}")
+    print(f"DEBUG: Connection string: {POSTGRES_CONNECTION_STRING}")
 else:
+    print("DEBUG: DATABASE_URL not found, using individual vars")
     # Fallback to individual env vars
     POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
     POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))

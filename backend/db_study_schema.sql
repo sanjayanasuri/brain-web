@@ -78,6 +78,42 @@ CREATE TABLE IF NOT EXISTS voice_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions(user_id, started_at DESC);
 
+-- Voice Transcript Chunks (Artifact Store)
+CREATE TABLE IF NOT EXISTS voice_transcript_chunks (
+  id TEXT PRIMARY KEY,
+  voice_session_id TEXT NOT NULL,
+  user_id VARCHAR(255) NOT NULL,
+  tenant_id VARCHAR(255) NOT NULL,
+  graph_id VARCHAR(255) NOT NULL,
+  branch_id VARCHAR(255) NOT NULL,
+  role VARCHAR(32) NOT NULL, -- 'user' | 'assistant'
+  content TEXT NOT NULL,
+  start_ms INTEGER,
+  end_ms INTEGER,
+  anchor_id TEXT,
+  anchor_json TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_session ON voice_transcript_chunks(voice_session_id, start_ms, created_at);
+
+-- Voice Learning Signals (Extracted)
+CREATE TABLE IF NOT EXISTS voice_learning_signals (
+  id TEXT PRIMARY KEY,
+  voice_session_id TEXT NOT NULL,
+  chunk_id TEXT,
+  user_id VARCHAR(255) NOT NULL,
+  tenant_id VARCHAR(255) NOT NULL,
+  graph_id VARCHAR(255) NOT NULL,
+  branch_id VARCHAR(255) NOT NULL,
+  kind VARCHAR(64) NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_learning_signals_session ON voice_learning_signals(voice_session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_voice_learning_signals_kind ON voice_learning_signals(kind);
+
 -- Usage Logs Table
 CREATE TABLE IF NOT EXISTS usage_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
