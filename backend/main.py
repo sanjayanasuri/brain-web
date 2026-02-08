@@ -131,12 +131,15 @@ async def lifespan(app: FastAPI):
             # This prevents duplicate nodes when CSV files contain old data from different graphs
             print("[SYNC] ⚠ Skipping CSV auto-import on startup (use /admin/import to import manually)")
             logger.info("Skipping CSV auto-import on startup - use /admin/import for manual imports")
-    except FileNotFoundError as e:
-        print(f"[SYNC] ⚠ CSV files not found, skipping import: {e}")
-        logger.warning(f"CSV files not found, skipping import: {e}")
-        init_user_db()
-        # Don't crash the app if import fails
     except Exception as e:
+        print(f"[SYNC] ✗ Error during startup: {e}")
+        logger.error(f"Error during startup: {e}", exc_info=True)
+    
+    # Always try to initialize user database
+    try:
+        init_user_db()
+    except Exception as e:
+        print(f"Warning: Failed to initialize user database: {e}")
     
     # Start Notion auto-sync background loop if enabled
     from config import ENABLE_NOTION_AUTO_SYNC
