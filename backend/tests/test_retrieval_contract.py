@@ -226,6 +226,8 @@ class TestRetrievalSummaryContract:
             # Should default to summary mode
             assert "context" in data
             assert "retrieval_meta" in data["context"]
+            assert "citations" in data
+            assert isinstance(data["citations"], list)
     
     def test_summary_focus_entities_cap(self, client, setup_mock_neo4j_for_retrieval):
         """Test that focus_entities.length <= 5 in summary mode."""
@@ -475,6 +477,8 @@ class TestRetrievalSummaryContract:
             # Check topClaims exists and is capped
             top_claims = retrieval_meta.get("topClaims", [])
             assert len(top_claims) <= 5, f"topClaims should be capped at 5, got {len(top_claims)}"
+            assert "citations" in data
+            assert isinstance(data["citations"], list)
 
 
 class TestRetrievalFullContract:
@@ -514,6 +518,8 @@ class TestRetrievalFullContract:
             
             chunks = context.get("chunks", [])
             assert len(chunks) <= 10, f"Full mode chunks should be capped at 10, got {len(chunks)}"
+            assert "citations" in data
+            assert isinstance(data["citations"], list)
     
     def test_full_mode_deterministic_ordering(self, client, setup_mock_neo4j_for_retrieval):
         """Test that full mode returns deterministic ordering (run twice, compare IDs)."""
@@ -867,4 +873,3 @@ class TestPayloadSizeGuardrail:
             
             # Log for monitoring
             print(f"\n[Payload Size Test] Summary mode payload: {payload_size_kb:.2f} KB")
-

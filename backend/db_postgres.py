@@ -29,7 +29,7 @@ def get_db_cursor(conn):
     """Get a cursor that returns rows as dictionaries."""
     return conn.cursor(cursor_factory=RealDictCursor)
 
-def execute_query(query: str, params: Optional[tuple] = None, fetch: bool = True):
+def execute_query(query: str, params: Optional[tuple] = None, fetch: bool = True, commit: bool = False):
     """Execute a query and return results."""
     conn = get_db_connection()
     try:
@@ -38,8 +38,11 @@ def execute_query(query: str, params: Optional[tuple] = None, fetch: bool = True
             if fetch:
                 result = cur.fetchall()
             else:
-                conn.commit()
                 result = None
+            
+            if commit or not fetch:
+                conn.commit()
+                
             return result
     except Exception as e:
         logger.error(f"Postgres query failed: {e}")

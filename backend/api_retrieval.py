@@ -7,6 +7,7 @@ from db_neo4j import get_neo4j_session
 from services_intent_router import classify_intent
 from services_retrieval_plans import run_plan
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
+from services_unified_citations import build_retrieval_citations
 from services_logging import log_graphrag_event
 from cache_utils import get_cached, set_cached
 from typing import Dict, Any, List, Optional
@@ -293,6 +294,17 @@ def retrieve_endpoint(
         limit=payload.limit,
         detail_level=payload.detail_level
     )
+
+    # Phase C: Build AnchorRef-based citations (do this BEFORE summary transform removes chunks).
+    try:
+        result.citations = build_retrieval_citations(
+            context=result.context,
+            graph_id=graph_id,
+            branch_id=branch_id,
+        )
+    except Exception as e:
+        print(f"[Retrieval API] WARNING: Failed to build unified citations: {e}")
+        result.citations = []
     
     # Transform to summary mode if requested
     if payload.detail_level == "summary":
@@ -374,6 +386,7 @@ def retrieve_endpoint(
                 "intent": result.intent,
                 "trace": [step.dict() if hasattr(step, 'dict') else step for step in result.trace],
                 "context": result.context,
+                "citations": result.citations,
                 "plan_version": result.plan_version,
             }
             set_cached(*cache_key, result_dict, ttl_seconds=120)

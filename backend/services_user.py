@@ -50,7 +50,7 @@ def create_user(email: str, password_hash: str, full_name: str = "") -> Dict[str
     """
     params = (user_id, tenant_id, email, password_hash, full_name, datetime.utcnow())
     
-    results = execute_query(query, params)
+    results = execute_query(query, params, commit=True)
     return results[0]
 
 def init_user_db():
