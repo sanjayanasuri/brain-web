@@ -20,6 +20,7 @@ os.environ.setdefault("POSTGRES_CONNECTION_STRING", "postgresql://test:test@loca
 
 from services_contextual_branches import (
     create_branch,
+    create_anchor_branch,
     get_branch,
     add_branch_message,
     get_message_branches,
@@ -168,6 +169,112 @@ class TestGetBranch:
         assert len(branch.messages) == 2
         assert branch.messages[0].role == 'user'
         assert branch.messages[1].role == 'assistant'
+
+
+class TestCreateAnchorBranch:
+    """Tests for create_anchor_branch service function."""
+
+    @patch('services_contextual_branches._ensure_db_initialized')
+    @patch('services_contextual_branches.store_parent_message_version')
+    @patch('services_contextual_branches.get_branch_by_hash')
+    @patch('services_contextual_branches._get_pool')
+    @patch('services_contextual_branches.log_event')
+    def test_create_anchor_branch_success(
+        self,
+        mock_log,
+        mock_pool,
+        mock_get_by_hash,
+        mock_store_parent,
+        mock_ensure_db,
+    ):
+        """Test successful anchor branch creation."""
+        mock_ensure_db.return_value = None
+        mock_store_parent.return_value = 2
+        mock_get_by_hash.return_value = None
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_pool_instance = MagicMock()
+        mock_pool_instance.getconn.return_value = mock_conn
+        mock_pool_instance.putconn = MagicMock()
+        mock_pool.return_value = mock_pool_instance
+
+        anchor_ref = {
+            "anchor_id": "anchor-abc123",
+            "artifact": {"namespace": "neo4j", "type": "concept", "id": "concept-123"},
+            "selector": {
+                "kind": "bbox",
+                "x": 0.1,
+                "y": 0.2,
+                "w": 0.3,
+                "h": 0.4,
+                "unit": "pct",
+                "image_width": 1000,
+                "image_height": 800,
+            },
+            "preview": "Handwritten selection: Cell cycle",
+        }
+
+        branch = create_anchor_branch(
+            anchor_ref=anchor_ref,
+            snippet_image_data_url="data:image/png;base64,AAA",
+            context="Some parent context",
+            chat_id="chat-123",
+            user_id="user-123",
+        )
+
+        assert branch.anchor_kind == "anchor_ref"
+        assert branch.anchor_ref == anchor_ref
+        assert branch.anchor_snippet_data_url == "data:image/png;base64,AAA"
+        assert branch.chat_id == "chat-123"
+        assert branch.parent_message_id == "anchor:neo4j:concept:concept-123"
+        assert branch.parent_message_version == 2
+        assert branch.anchor.selected_text == "Handwritten selection: Cell cycle"
+        assert branch.anchor.parent_message_id == "anchor:neo4j:concept:concept-123"
+
+        assert mock_cursor.execute.called
+
+    @patch('services_contextual_branches._ensure_db_initialized')
+    @patch('services_contextual_branches.store_parent_message_version')
+    @patch('services_contextual_branches.get_branch_by_hash')
+    def test_create_anchor_branch_idempotency(self, mock_get_by_hash, mock_store_parent, mock_ensure_db):
+        """Test that creating same anchor branch returns existing one."""
+        from models_contextual_branches import BranchThread, AnchorSpan
+
+        mock_ensure_db.return_value = None
+        mock_store_parent.return_value = 1
+
+        existing_branch = BranchThread(
+            id="branch-existing",
+            anchor=AnchorSpan.create(0, 1, "Selected region", "anchor:neo4j:concept:concept-123"),
+            anchor_kind="anchor_ref",
+            anchor_ref={"anchor_id": "anchor-abc123"},
+            anchor_snippet_data_url=None,
+            messages=[],
+            bridging_hints=None,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            parent_message_id="anchor:neo4j:concept:concept-123",
+        )
+
+        mock_get_by_hash.return_value = existing_branch
+
+        anchor_ref = {
+            "anchor_id": "anchor-abc123",
+            "artifact": {"namespace": "neo4j", "type": "concept", "id": "concept-123"},
+            "selector": {"kind": "bbox", "x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4, "unit": "pct"},
+        }
+
+        branch = create_anchor_branch(
+            anchor_ref=anchor_ref,
+            snippet_image_data_url=None,
+            context=None,
+            chat_id=None,
+            user_id="user-123",
+        )
+
+        assert branch.id == "branch-existing"
 
 
 class TestAddBranchMessage:
