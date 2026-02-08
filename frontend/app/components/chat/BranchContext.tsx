@@ -5,6 +5,7 @@ import BranchPanel from './BranchPanel';
 
 interface BranchContextType {
   openBranch: (branchId: string, parentMessageId: string, startOffset: number, endOffset: number) => void;
+  openAnchorBranch: (branchId: string) => void;
   closeBranch: () => void;
   currentBranchId: string | null;
   currentParentMessageId: string | null;
@@ -42,6 +43,13 @@ export function BranchProvider({ children }: BranchProviderProps) {
     setCurrentBranchId(branchId);
     setCurrentParentMessageId(parentMessageId);
     setHighlightSpan({ messageId: parentMessageId, start: startOffset, end: endOffset });
+    setLastBranchUpdate(Date.now());
+  }, []);
+
+  const openAnchorBranch = useCallback((branchId: string) => {
+    setCurrentBranchId(branchId);
+    setCurrentParentMessageId(null);
+    setHighlightSpan(null);
     setLastBranchUpdate(Date.now());
   }, []);
 
@@ -161,6 +169,7 @@ export function BranchProvider({ children }: BranchProviderProps) {
     <BranchContext.Provider
       value={{
         openBranch,
+        openAnchorBranch,
         closeBranch,
         currentBranchId,
         currentParentMessageId,
@@ -171,7 +180,7 @@ export function BranchProvider({ children }: BranchProviderProps) {
       }}
     >
       {children}
-      {currentBranchId && currentParentMessageId && (
+      {currentBranchId && (
         <div style={{
           position: 'fixed',
           right: 0,

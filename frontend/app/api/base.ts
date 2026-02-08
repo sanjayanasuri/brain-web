@@ -1,6 +1,4 @@
-/**
- * Base configuration and authentication for the Brain Web API client
- */
+import { getSession } from 'next-auth/react';
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
@@ -12,27 +10,20 @@ let authTokenCache: { token: string; expiresAt: number } | null = null;
  * Caches the token to avoid repeated requests.
  */
 export async function getAuthToken(): Promise<string | null> {
-    // Check cache first
-    if (authTokenCache && authTokenCache.expiresAt > Date.now()) {
-        return authTokenCache.token;
-    }
-
     try {
-        const response = await fetch('/api/auth/token');
-        if (!response.ok) {
-            console.warn('[API Client] Failed to get auth token, continuing without auth');
-            return null;
+        const session = await getSession();
+        if (session && (session as any).accessToken) {
+            return (session as any).accessToken;
         }
-        const data = await response.json();
-        const token = data.token;
 
-        // Cache token (expires in 30 days, but refresh after 25 days to be safe)
-        authTokenCache = {
-            token,
-            expiresAt: Date.now() + (25 * 24 * 60 * 60 * 1000), // 25 days
-        };
+        // Fallback for local development if endpoint exists
+        const response = await fetch('/api/auth/token');
+        if (response.ok) {
+            const data = await response.json();
+            return data.token;
+        }
 
-        return token;
+        return null;
     } catch (error) {
         console.warn('[API Client] Error getting auth token:', error);
         return null;

@@ -104,6 +104,9 @@ def _init_db():
                     end_offset INTEGER NOT NULL,
                     selected_text TEXT NOT NULL,
                     selected_text_hash TEXT NOT NULL,
+                    anchor_kind TEXT NOT NULL DEFAULT 'text_span',
+                    anchor_json TEXT,
+                    anchor_snippet_data_url TEXT,
                     chat_id TEXT,
                     is_archived BOOLEAN DEFAULT FALSE,
                     archived_at TIMESTAMPTZ,
@@ -114,6 +117,18 @@ def _init_db():
             cur.execute("""
                 ALTER TABLE contextual_branches
                 ADD COLUMN IF NOT EXISTS chat_id TEXT;
+            """)
+            cur.execute("""
+                ALTER TABLE contextual_branches
+                ADD COLUMN IF NOT EXISTS anchor_kind TEXT NOT NULL DEFAULT 'text_span';
+            """)
+            cur.execute("""
+                ALTER TABLE contextual_branches
+                ADD COLUMN IF NOT EXISTS anchor_json TEXT;
+            """)
+            cur.execute("""
+                ALTER TABLE contextual_branches
+                ADD COLUMN IF NOT EXISTS anchor_snippet_data_url TEXT;
             """)
             
             # Create branch_messages table
@@ -173,6 +188,10 @@ def _init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_branches_archived 
                 ON contextual_branches (is_archived, updated_at DESC);
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_branches_anchor_kind
+                ON contextual_branches (anchor_kind);
             """)
             
             conn.commit()
@@ -414,6 +433,9 @@ def create_branch(request: BranchCreateRequest, user_id: str) -> BranchThread:
     return BranchThread(
         id=branch_id,
         anchor=anchor,
+        anchor_kind="text_span",
+        anchor_ref=None,
+        anchor_snippet_data_url=None,
         messages=[],
         bridging_hints=None,
         created_at=now,
@@ -423,6 +445,160 @@ def create_branch(request: BranchCreateRequest, user_id: str) -> BranchThread:
         is_archived=False,
         archived_at=None,
         chat_id=request.chat_id,
+    )
+
+
+def create_anchor_branch(
+    *,
+    anchor_ref: Dict[str, Any],
+    snippet_image_data_url: Optional[str],
+    context: Optional[str],
+    chat_id: Optional[str],
+    user_id: str,
+) -> BranchThread:
+    """
+    Create a new contextual branch from a non-text anchor (e.g., bbox lasso).
+
+    This is additive: the existing text-span branch model remains unchanged.
+    We store:
+      - anchor_kind='anchor_ref'
+      - anchor_json: serialized AnchorRef (unified_primitives)
+      - optional snippet_image_data_url for vision grounding
+
+    Idempotency is enforced by (parent_message_id, selected_text_hash) using:
+      parent_message_id := stable key for the anchor's artifact
+      selected_text_hash := sha256(anchor_id)
+    """
+    import uuid
+
+    if not PSYCOPG2_AVAILABLE:
+        raise ImportError("psycopg2-binary is required for contextual branching")
+
+    _ensure_db_initialized()
+
+    # Validate anchor_ref minimally
+    artifact = anchor_ref.get("artifact") or {}
+    selector = anchor_ref.get("selector") or {}
+    anchor_id = anchor_ref.get("anchor_id")
+    if not anchor_id:
+        raise ValueError("anchor_ref.anchor_id is required")
+    if not isinstance(artifact, dict) or not artifact.get("id"):
+        raise ValueError("anchor_ref.artifact.id is required")
+    if not isinstance(selector, dict) or not selector.get("kind"):
+        raise ValueError("anchor_ref.selector.kind is required")
+
+    # Stable parent key groups branches by the anchored artifact
+    parent_message_id = f"anchor:{artifact.get('namespace')}:{artifact.get('type')}:{artifact.get('id')}"
+
+    # Store context (optional) as "parent message content" for reuse in prompts
+    parent_version = store_parent_message_version(parent_message_id, context or "")
+
+    # Idempotency hash
+    text_hash = hashlib.sha256(anchor_id.encode("utf-8")).hexdigest()
+    existing = get_branch_by_hash(parent_message_id, text_hash)
+    if existing:
+        return existing
+
+    branch_id = f"branch-{uuid.uuid4().hex[:12]}"
+    now = datetime.utcnow()
+
+    # Keep legacy AnchorSpan populated for backward-compatible clients.
+    # This is a dummy span; the real anchor is in branch.anchor_ref.
+    preview = anchor_ref.get("preview") or "Selected region"
+    anchor = AnchorSpan.create(
+        start_offset=0,
+        end_offset=1,
+        selected_text=str(preview),
+        parent_message_id=parent_message_id,
+    )
+
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO contextual_branches
+                (id, parent_message_id, parent_message_version, start_offset, end_offset, selected_text, selected_text_hash, chat_id, anchor_kind, anchor_json, anchor_snippet_data_url, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    branch_id,
+                    parent_message_id,
+                    parent_version,
+                    0,
+                    1,
+                    str(preview),
+                    text_hash,
+                    chat_id,
+                    "anchor_ref",
+                    json.dumps(anchor_ref),
+                    snippet_image_data_url,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+    except pg_errors.UndefinedTable:
+        global _db_initialized
+        _db_initialized = False
+        _init_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO contextual_branches
+                (id, parent_message_id, parent_message_version, start_offset, end_offset, selected_text, selected_text_hash, chat_id, anchor_kind, anchor_json, anchor_snippet_data_url, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    branch_id,
+                    parent_message_id,
+                    parent_version,
+                    0,
+                    1,
+                    str(preview),
+                    text_hash,
+                    chat_id,
+                    "anchor_ref",
+                    json.dumps(anchor_ref),
+                    snippet_image_data_url,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+    finally:
+        pool.putconn(conn)
+
+    log_event(
+        "branch_created",
+        {
+            "branch_id": branch_id,
+            "parent_message_id": parent_message_id,
+            "parent_message_version": parent_version,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "anchor_kind": "anchor_ref",
+            "anchor_id": anchor_id,
+            "selector_kind": selector.get("kind"),
+        },
+    )
+
+    return BranchThread(
+        id=branch_id,
+        anchor=anchor,
+        anchor_kind="anchor_ref",
+        anchor_ref=anchor_ref,
+        anchor_snippet_data_url=snippet_image_data_url,
+        messages=[],
+        bridging_hints=None,
+        created_at=now,
+        updated_at=now,
+        parent_message_id=parent_message_id,
+        parent_message_version=parent_version,
+        is_archived=False,
+        archived_at=None,
+        chat_id=chat_id,
     )
 
 
@@ -526,9 +702,20 @@ def _row_to_branch(row: Dict[str, Any]) -> BranchThread:
         parent_message_id=row['parent_message_id']
     )
     
+    anchor_kind = row.get("anchor_kind") or "text_span"
+    anchor_ref = None
+    if row.get("anchor_json"):
+        try:
+            anchor_ref = json.loads(row["anchor_json"]) if isinstance(row["anchor_json"], str) else row["anchor_json"]
+        except Exception:
+            anchor_ref = None
+
     return BranchThread(
         id=row['id'],
         anchor=anchor,
+        anchor_kind=anchor_kind,
+        anchor_ref=anchor_ref,
+        anchor_snippet_data_url=row.get("anchor_snippet_data_url"),
         messages=[],
         bridging_hints=None,
         created_at=row['created_at'],

@@ -18,7 +18,8 @@ from fastapi.staticfiles import StaticFiles
 
 
 
-from api_health import router as health_router
+from api_auth import router as auth_router
+from services_user import init_user_db
 from api_concepts import router as concepts_router
 from api_ai import router as ai_router
 from api_retrieval import router as retrieval_router
@@ -133,10 +134,9 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError as e:
         print(f"[SYNC] ⚠ CSV files not found, skipping import: {e}")
         logger.warning(f"CSV files not found, skipping import: {e}")
-    except Exception as e:
-        print(f"[SYNC] ✗ Error during CSV auto-import: {e}")
-        logger.error(f"Error during CSV auto-import: {e}", exc_info=True)
+        init_user_db()
         # Don't crash the app if import fails
+    except Exception as e:
     
     # Start Notion auto-sync background loop if enabled
     from config import ENABLE_NOTION_AUTO_SYNC
@@ -251,6 +251,7 @@ if "*" in origins:
 # Add timeout middleware (after CORS, before auth)
 app.add_middleware(TimeoutMiddleware)
 
+app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(concepts_router)
 app.include_router(ai_router)

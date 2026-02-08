@@ -7,6 +7,7 @@ import QueryProvider from './components/context-providers/QueryProvider';
 import { ThemeProvider } from './components/context-providers/ThemeProvider';
 import RouteTransition from './components/ui/RouteTransition';
 import OfflineSyncInitializer from './components/offline/OfflineSyncInitializer';
+import SessionProvider from './components/auth/SessionProvider';
 
 export const metadata: Metadata = {
   title: 'Brain Web - AI Study Assistant',
@@ -39,17 +40,19 @@ export default function RootLayout({
         <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&display=swap" rel="stylesheet" />
       </head>
       <body>
-        <ThemeProvider>
-          <QueryProvider>
-            <Suspense fallback={null}>
-              <RouteTransition />
-              <SidebarProvider>
-                <OfflineSyncInitializer />
-                <TopBarWrapper>{children}</TopBarWrapper>
-              </SidebarProvider>
-            </Suspense>
-          </QueryProvider>
-        </ThemeProvider>
+        <SessionProvider>
+          <ThemeProvider>
+            <QueryProvider>
+              <Suspense fallback={null}>
+                <RouteTransition />
+                <SidebarProvider>
+                  <OfflineSyncInitializer />
+                  <TopBarWrapper>{children}</TopBarWrapper>
+                </SidebarProvider>
+              </Suspense>
+            </QueryProvider>
+          </ThemeProvider>
+        </SessionProvider>
       </body>
     </html>
   );

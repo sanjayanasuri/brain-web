@@ -30,7 +30,7 @@ def get_api_token_secret() -> str:
     """Get API token secret from environment or generate a default for dev."""
     secret = os.getenv("API_TOKEN_SECRET")
     if not secret:
-        # In production, this should be set via environment variable
+        # In production, this MUST be set via environment variable
         # For dev, we'll use a default (not secure, but allows local testing)
         return "dev-secret-key-change-in-production"
     return secret

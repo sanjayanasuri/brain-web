@@ -89,7 +89,7 @@ export default function PencilCanvas({
     const [isDrawing, setIsDrawing] = useState(false);
     const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
     const currentStrokeRef = useRef<Point[]>([]);
-    const [pendingLasso, setPendingLasso] = useState<{ bounds: any, snippetUrl: string } | null>(null);
+    const [pendingLasso, setPendingLasso] = useState<{ bounds: any, snippetUrl: string, canvas: { width: number; height: number; dpr: number } } | null>(null);
     const [toolbarPosition, setToolbarPosition] = useState({ x: 20, y: 50 });
     const [activePointers, setActivePointers] = useState<Set<number>>(new Set());
     const [isGesturing, setIsGesturing] = useState(false);
@@ -404,7 +404,15 @@ export default function PencilCanvas({
                             0, 0, bounds.w * dpr, bounds.h * dpr
                         );
                         snippetUrl = tempCanvas.toDataURL('image/png');
-                        setPendingLasso({ bounds, snippetUrl });
+                        setPendingLasso({
+                            bounds,
+                            snippetUrl,
+                            canvas: {
+                                width: canvas.width / dpr,
+                                height: canvas.height / dpr,
+                                dpr
+                            }
+                        });
                     }
                 }
             }
@@ -587,7 +595,7 @@ export default function PencilCanvas({
                 }}>
                     <button
                         onClick={() => {
-                            onIntent?.({ type: 'lasso', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl });
+                            onIntent?.({ type: 'lasso', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl, canvas: pendingLasso.canvas });
                             setPendingLasso(null);
                         }}
                         style={{
@@ -600,7 +608,20 @@ export default function PencilCanvas({
                     </button>
                     <button
                         onClick={() => {
-                            onIntent?.({ type: 'search', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl });
+                            onIntent?.({ type: 'explain', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl, canvas: pendingLasso.canvas });
+                            setPendingLasso(null);
+                        }}
+                        style={{
+                            padding: '8px 16px', borderRadius: '12px', border: 'none',
+                            background: '#7c3aed', color: '#fff', fontWeight: '600',
+                            cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px'
+                        }}
+                    >
+                        Explain
+                    </button>
+                    <button
+                        onClick={() => {
+                            onIntent?.({ type: 'search', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl, canvas: pendingLasso.canvas });
                             setPendingLasso(null);
                         }}
                         style={{

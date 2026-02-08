@@ -56,6 +56,10 @@ class BranchThread(BaseModel):
     """A contextual branch thread anchored to a span in a parent message."""
     id: str
     anchor: AnchorSpan
+    # Optional: non-text anchors (e.g., bbox lasso on ink canvas). Additive only.
+    anchor_kind: str = Field(default="text_span", description="'text_span' (default) or 'anchor_ref'")
+    anchor_ref: Optional[Dict[str, Any]] = Field(default=None, description="Unified AnchorRef JSON (if anchor_kind='anchor_ref')")
+    anchor_snippet_data_url: Optional[str] = Field(default=None, description="Optional data URL preview for bbox anchors")
     messages: List[BranchMessage]
     bridging_hints: Optional[BridgingHintSet] = None
     created_at: datetime

@@ -1,6 +1,8 @@
 """API endpoints for contextual branching (span-anchored clarification threads)."""
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from typing import List
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from auth import require_auth
 from models_contextual_branches import (
@@ -12,6 +14,7 @@ from models_contextual_branches import (
 )
 from services_contextual_branches import (
     create_branch,
+    create_anchor_branch,
     get_branch,
     add_branch_message,
     get_message_branches,
@@ -21,6 +24,7 @@ from services_contextual_branches import (
     archive_branch,
     delete_branch,
 )
+from unified_primitives import AnchorRef, ArtifactRef, BBoxSelector
 try:
     from services_logging import log_event
 except ImportError:
@@ -29,6 +33,61 @@ except ImportError:
         print(f"[Event] {event_type}: {data}")
 
 router = APIRouter(prefix="/contextual-branches", tags=["contextual-branches"])
+
+
+class AnchorBranchCreateRequest(BaseModel):
+    """
+    Create a branch from a non-text anchor (currently bbox lasso).
+
+    This is additive; the existing POST /contextual-branches span endpoint remains unchanged.
+    """
+
+    artifact: ArtifactRef
+    bbox: BBoxSelector
+    snippet_image_data_url: Optional[str] = Field(default=None, description="Optional data URL preview for vision grounding")
+    preview: Optional[str] = Field(default=None, description="Short preview label for the selection")
+    context: Optional[str] = Field(default=None, description="Optional parent context text (e.g., concept title)")
+    chat_id: Optional[str] = Field(default=None, description="Optional chat session id for downstream linkage")
+
+
+@router.post("/anchor", response_model=BranchResponse)
+def create_anchor_branch_endpoint(
+    payload: AnchorBranchCreateRequest,
+    req: Request,
+    auth: dict = Depends(require_auth),
+):
+    """Create a new contextual branch from a bbox anchor selection."""
+    user_id = auth.get("user_id", "anonymous")
+
+    # Phase A: only bbox anchors
+    if payload.bbox.kind != "bbox":
+        raise HTTPException(status_code=400, detail="Only bbox anchors are supported for /contextual-branches/anchor")
+
+    try:
+        if not payload.chat_id:
+            payload.chat_id = getattr(req.state, "session_id", None)
+
+        anchor = AnchorRef.create(
+            artifact=payload.artifact,
+            selector=payload.bbox,
+            preview=payload.preview,
+        )
+
+        branch = create_anchor_branch(
+            anchor_ref=anchor.model_dump(mode="json"),
+            snippet_image_data_url=payload.snippet_image_data_url,
+            context=payload.context,
+            chat_id=payload.chat_id,
+            user_id=user_id,
+        )
+
+        return BranchResponse(branch=branch, messages=branch.messages)
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create anchor branch: {str(e)}")
 
 
 @router.post("", response_model=BranchResponse)
@@ -137,7 +196,7 @@ def send_branch_message_endpoint(
         branch.parent_message_version
     )
     
-    if not parent_message_content:
+    if parent_message_content is None:
         raise HTTPException(status_code=404, detail="Parent message content not found")
     
     selected_text = branch.anchor.selected_text
@@ -155,16 +214,32 @@ def send_branch_message_endpoint(
     })
     
     # Generate explanation using LLM
-    system_prompt = _build_span_explanation_prompt(parent_message_content, selected_text)
+    anchor_kind = getattr(branch, "anchor_kind", "text_span") or "text_span"
+    anchor_ref = getattr(branch, "anchor_ref", None)
+    anchor_snippet = getattr(branch, "anchor_snippet_data_url", None)
+    is_anchor_ref = anchor_kind == "anchor_ref" and isinstance(anchor_ref, dict)
+
+    if is_anchor_ref:
+        system_prompt = _build_anchor_ref_explanation_prompt(parent_message_content or "", anchor_ref)
+    else:
+        system_prompt = _build_span_explanation_prompt(parent_message_content or "", selected_text)
     
     try:
         client = openai.OpenAI(api_key=api_key)
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        if is_anchor_ref and anchor_snippet:
+            # Provide the selected region as a stable context message for every turn.
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Selected region (image):"},
+                    {"type": "image_url", "image_url": {"url": anchor_snippet}},
+                ],
+            })
+
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                *conversation_history
-            ],
+            messages=[*messages, *conversation_history],
             temperature=0.7,
             max_tokens=1000,
         )
@@ -214,7 +289,10 @@ def generate_bridging_hints_endpoint(
     branch = get_branch(branch_id)
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
-    
+
+    if getattr(branch, "anchor_kind", "text_span") != "text_span":
+        raise HTTPException(status_code=400, detail="Bridging hints are only supported for text span branches")
+
     if not branch.messages:
         raise HTTPException(status_code=400, detail="Branch has no messages yet")
     
@@ -224,7 +302,7 @@ def generate_bridging_hints_endpoint(
         branch.parent_message_version
     )
     
-    if not parent_content:
+    if parent_content is None:
         raise HTTPException(status_code=404, detail="Parent message content not found")
     
     selected_text = branch.anchor.selected_text
@@ -409,6 +487,36 @@ def create_message_version_endpoint(
 # Store parent message content in memory for branch context
 # Parent message content is now stored in database via services_contextual_branches
 # Functions removed - use get_parent_message_content() from services instead
+
+
+def _build_anchor_ref_explanation_prompt(parent_context: str, anchor_ref: Dict[str, Any]) -> str:
+    """Build prompt for explaining a bbox-anchored selection (e.g., ink lasso)."""
+    artifact = anchor_ref.get("artifact") or {}
+    selector = anchor_ref.get("selector") or {}
+    preview = anchor_ref.get("preview") or ""
+
+    artifact_label = f"{artifact.get('namespace')}:{artifact.get('type')}:{artifact.get('id')}"
+    selector_kind = selector.get("kind") or "unknown"
+
+    return f"""You are a learning companion helping the user with a specific anchored region from their notes.
+
+ANCHOR CONTEXT:
+- Artifact: {artifact_label}
+- Selector: {selector_kind}
+- Preview: {preview}
+
+PARENT CONTEXT (may be empty):
+{parent_context}
+
+You may receive an image of the selected region in the conversation. If so:
+- Read/interpret the handwriting or sketch directly.
+- If the region is ambiguous, ask ONE clarifying question before assuming.
+
+Response rules:
+1) Address what the user asked about the selected region.
+2) Be direct about correctness (no glazing).
+3) Keep it concise and step-by-step.
+4) Prefer concrete next actions (e.g., “label this arrow as X”, “rewrite this line as …”)."""
 
 
 def _build_span_explanation_prompt(parent_content: str, selected_text: str) -> str:

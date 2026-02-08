@@ -1,4 +1,5 @@
 import { getAuthHeaders } from './authToken';
+import type { ArtifactRef, BBoxSelector } from '../types/unified';
 
 /**
  * Utilities for contextual branching operations.
@@ -24,6 +25,9 @@ export interface BranchResponse {
       selected_text: string;
       parent_message_id: string;
     };
+    anchor_kind?: string;
+    anchor_ref?: any;
+    anchor_snippet_data_url?: string | null;
     messages: Array<{
       id: string;
       role: 'user' | 'assistant';
@@ -38,6 +42,15 @@ export interface BranchResponse {
     content: string;
     timestamp: string;
   }>;
+}
+
+export interface CreateAnchorBranchRequest {
+  artifact: ArtifactRef;
+  bbox: BBoxSelector;
+  snippet_image_data_url?: string | null;
+  preview?: string | null;
+  context?: string | null;
+  chat_id?: string | null;
 }
 
 export async function createBranch(request: CreateBranchRequest): Promise<BranchResponse> {
@@ -60,6 +73,31 @@ export async function createBranch(request: CreateBranchRequest): Promise<Branch
       url: `${API_BASE_URL}/contextual-branches`,
     });
     throw new Error(`Failed to create branch: ${error}`);
+  }
+
+  return response.json();
+}
+
+export async function createAnchorBranch(request: CreateAnchorBranchRequest): Promise<BranchResponse> {
+  const authHeaders = await getAuthHeaders();
+  const response = await fetch(`${API_BASE_URL}/contextual-branches/anchor`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('[createAnchorBranch] Request failed:', {
+      status: response.status,
+      statusText: response.statusText,
+      error,
+      url: `${API_BASE_URL}/contextual-branches/anchor`,
+    });
+    throw new Error(`Failed to create anchor branch: ${error}`);
   }
 
   return response.json();
