@@ -23,6 +23,7 @@ PUBLIC_ENDPOINTS = {
     "/openapi.json",
     "/redoc",
     "/health",
+    "/auth",
 }
 
 
