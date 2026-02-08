@@ -459,6 +459,7 @@ class RetrievalResult(BaseModel):
     intent: str
     trace: List[RetrievalTraceStep]
     context: Dict[str, Any]  # Structured payload with focus_entities, claims, chunks, etc.
+    citations: Optional[List[Dict[str, Any]]] = None  # Phase C: AnchorRef-based citations for UI evidence tray
     plan_version: str = "intent_plans_v1"
 
 

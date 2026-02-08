@@ -21,6 +21,7 @@ ArtifactType = Literal[
     # Neo4j graph objects
     "artifact",
     "source_document",
+    "source_chunk",
     "quote",
     "claim",
     "concept",
@@ -145,4 +146,3 @@ def compute_anchor_id(*, artifact: ArtifactRef, selector: AnchorSelector) -> str
     }
     digest = sha256(_stable_json(key_payload).encode("utf-8")).hexdigest()[:16].upper()
     return f"ANCH_{digest}"
-

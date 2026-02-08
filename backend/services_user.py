@@ -13,7 +13,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hashed one."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        print(f"DEBUG: Verifying password for hash starting with {hashed_password[:10]}...")
+        result = pwd_context.verify(plain_password, hashed_password)
+        print(f"DEBUG: Verification result: {result}")
+        return result
+    except Exception as e:
+        print(f"DEBUG: Verify error: {e}")
+        return False
 
 def get_password_hash(password: str) -> str:
     """Generate a hash for a password."""
@@ -21,9 +28,14 @@ def get_password_hash(password: str) -> str:
 
 def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     """Fetch a user from the database by email."""
+    print(f"DEBUG: Fetching user by email: {email}")
     query = "SELECT * FROM users WHERE email = %s"
     results = execute_query(query, (email,))
-    return results[0] if results else None
+    if results:
+        print("DEBUG: User found")
+        return results[0]
+    print("DEBUG: User not found")
+    return None
 
 def create_user(email: str, password_hash: str, full_name: str = "") -> Dict[str, Any]:
     """Create a new user and return the user object."""
