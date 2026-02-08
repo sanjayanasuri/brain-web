@@ -160,9 +160,11 @@ def get_graph_overview_endpoint(
             import sys
             graph_id_actual, branch_id_actual = get_active_graph_context(session)
             print(f"[DEBUG] Graph {graph_id} overview returned 0 nodes (active context: graph_id={graph_id_actual}, branch_id={branch_id_actual})", file=sys.stderr)
+            # DO NOT CACHE empty results to avoid sticking in a bad state if data is loading/ingesting
+        else:
+            # Cache the result only if nodes successfully retrieved
+            set_cached(cache_key[0], response, *cache_key[1:], ttl_seconds=120)
         
-        # Cache the result
-        set_cached(cache_key[0], response, *cache_key[1:], ttl_seconds=120)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -266,6 +268,11 @@ def list_graph_concepts_endpoint(
     
     Returns a paginated list of concepts with optional filters and sorting.
     """
+    cache_key = ("graphs", "concepts", graph_id, query, domain, type, sort, limit, offset)
+    cached = get_cached(*cache_key)
+    if cached:
+        return cached
+        
     try:
         # Set the active graph context
         set_active_graph(session, graph_id)
@@ -419,10 +426,12 @@ def list_graph_concepts_endpoint(
                 item["degree"] = record["degree"]
             items.append(item)
         
-        return {
+        response = {
             "items": items,
             "total": total,
         }
+        set_cached(cache_key[0], response, *cache_key[1:], ttl_seconds=120)
+        return response
     except HTTPException:
         raise
     except Exception as e:

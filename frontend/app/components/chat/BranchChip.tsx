@@ -7,7 +7,7 @@ interface BranchChipProps {
 }
 
 export default function BranchChip({ branchId, selectedText, onClick }: BranchChipProps) {
-  const preview = selectedText.length > 30 
+  const preview = selectedText.length > 30
     ? selectedText.substring(0, 30) + '...'
     : selectedText;
 
@@ -39,7 +39,6 @@ export default function BranchChip({ branchId, selectedText, onClick }: BranchCh
         e.currentTarget.style.borderColor = 'var(--border)';
       }}
     >
-      <span style={{ fontSize: '10px' }}>↗</span>
       <span>{preview}</span>
     </button>
   );

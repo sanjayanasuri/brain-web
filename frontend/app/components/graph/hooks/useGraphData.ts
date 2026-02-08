@@ -13,7 +13,7 @@ import {
 import { useGraph } from '../GraphContext';
 import { VisualNode, VisualLink, VisualGraph, TempNode } from '../GraphTypes';
 import { useGraphFilters } from './useGraphFilters';
-import { useUIState } from './useUIState';
+import { useUI } from './useUIState';
 import { DOMAIN_PALETTE } from '../GraphUtils';
 import { getLastSession } from '../../../lib/sessionState';
 
@@ -38,7 +38,7 @@ export function useGraphData() {
     } = graph;
 
     const filters = useGraphFilters();
-    const ui = useUIState();
+    const ui = useUI();
 
     const neighborCacheRef = useRef<Map<string, { nodes: Concept[]; edges: any[] }>>(new Map());
 
@@ -294,7 +294,7 @@ export function useGraphData() {
         return { displayGraph: { nodes: keptNodes, links: keptLinks }, hiddenCounts: counts };
     }, [filteredGraph, collapsedGroups]);
 
-    return {
+    return useMemo(() => ({
         loadGraph,
         refreshGraphs,
         refreshBranches,
@@ -305,5 +305,16 @@ export function useGraphData() {
         uniqueDomains,
         domainColors,
         neighborCacheRef
-    };
+    }), [
+        loadGraph,
+        refreshGraphs,
+        refreshBranches,
+        refreshFocusAreas,
+        displayGraph,
+        filteredGraph,
+        hiddenCounts,
+        uniqueDomains,
+        domainColors,
+        neighborCacheRef
+    ]);
 }

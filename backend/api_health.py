@@ -91,3 +91,13 @@ async def detailed_health_check(session: Session = Depends(get_neo4j_session)):
             "error": str(e),
             "connectivity": "failed"
         }
+
+@router.get("/cache")
+async def cache_stats():
+    """Get statistics for the multi-level cache."""
+    try:
+        from cache_utils import get_cache_stats
+        return get_cache_stats()
+    except Exception as e:
+        logger.error(f"Failed to fetch cache stats: {e}")
+        return {"error": str(e)}

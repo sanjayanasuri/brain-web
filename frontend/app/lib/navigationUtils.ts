@@ -22,28 +22,28 @@ export interface NavigationOptions {
  */
 export function useOptimizedNavigation() {
   const router = useRouter();
-  
+
   const navigateWithOptimization = useCallback(async (
     url: string,
     options: NavigationOptions = {}
   ) => {
     const { optimistic = true, prefetch, onSuccess, onError } = options;
-    
+
     try {
       // Start prefetch if provided
       const prefetchPromise = prefetch ? prefetch() : Promise.resolve();
-      
+
       // Show optimistic loading state
       if (optimistic && typeof document !== 'undefined') {
         document.body.classList.add('page-transitioning');
       }
-      
+
       // Wait for prefetch to complete before navigation
       await prefetchPromise;
-      
+
       // Perform navigation
       router.push(url);
-      
+
       // Clean up loading state after a brief delay to allow route transition
       setTimeout(() => {
         if (typeof document !== 'undefined') {
@@ -51,7 +51,7 @@ export function useOptimizedNavigation() {
         }
         onSuccess?.();
       }, 100);
-      
+
     } catch (error) {
       if (typeof document !== 'undefined') {
         document.body.classList.remove('page-transitioning');
@@ -60,7 +60,7 @@ export function useOptimizedNavigation() {
       console.error('Navigation failed:', error);
     }
   }, [router]);
-  
+
   return { navigateWithOptimization };
 }
 
@@ -83,7 +83,7 @@ export const routePrefetchers = {
       }
     }
   },
-  
+
   chat: async (sessionId?: string) => {
     // Prefetch chat session if provided
     if (sessionId) {
@@ -105,14 +105,14 @@ export const routePrefetchers = {
       }
     }
   },
-  
+
   concept: async (conceptId: string, graphId?: string) => {
     // Prefetch concept details
     try {
       const params = new URLSearchParams();
       params.set('node_id', conceptId);
       if (graphId) params.set('graph_id', graphId);
-      
+
       const response = await fetch(`/api/brain-web/concept?${params}`);
       if (response.ok) {
         const data = await response.json();
@@ -120,6 +120,23 @@ export const routePrefetchers = {
       }
     } catch (error) {
       console.warn('Failed to prefetch concept:', error);
+    }
+  },
+
+  lectureStudio: async (lectureId?: string) => {
+    try {
+      if (lectureId) {
+        // Prefetch specific lecture and its segments
+        await Promise.all([
+          fetch(`/api/lectures/${lectureId}`).then(r => r.ok && r.json()),
+          fetch(`/api/lectures/${lectureId}/segments`).then(r => r.ok && r.json())
+        ]);
+      } else {
+        // Prefetch lecture list
+        await fetch('/api/lectures').then(r => r.ok && r.json());
+      }
+    } catch (error) {
+      console.warn('Failed to prefetch lecture data:', error);
     }
   }
 };
@@ -135,13 +152,13 @@ export const quickNav = {
     if (chatId) params.set('chat', chatId);
     return `/${params.toString() ? `?${params.toString()}` : ''}`;
   },
-  
+
   toConcept: (conceptId: string, graphId?: string) => {
     const params = new URLSearchParams();
     if (graphId) params.set('graph_id', graphId);
     return `/concepts/${conceptId}${params.toString() ? `?${params.toString()}` : ''}`;
   },
-  
+
   toChat: (graphId?: string, chatId?: string) => {
     const params = new URLSearchParams();
     if (graphId) params.set('graph_id', graphId);
@@ -157,7 +174,7 @@ export function useNavigationShortcuts(graphId?: string) {
   useEffect(() => {
     // Skip on server-side
     if (typeof window === 'undefined') return;
-    
+
     const handleKeydown = (e: KeyboardEvent) => {
       // Only handle shortcuts when not in input/textarea/contenteditable
       const activeElement = document.activeElement;
@@ -168,7 +185,7 @@ export function useNavigationShortcuts(graphId?: string) {
       ) {
         return;
       }
-      
+
       // Cmd/Ctrl + key combinations
       if (e.metaKey || e.ctrlKey) {
         switch (e.key) {
@@ -188,7 +205,7 @@ export function useNavigationShortcuts(graphId?: string) {
             break;
         }
       }
-      
+
       // Single key shortcuts (when not in input)
       switch (e.key) {
         case 'g':
@@ -211,7 +228,7 @@ export function useNavigationShortcuts(graphId?: string) {
           break;
       }
     };
-    
+
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
   }, [graphId]);
@@ -223,17 +240,17 @@ export function useNavigationShortcuts(graphId?: string) {
 export const optimizedStorage = {
   // Debounced localStorage writes to avoid blocking UI
   debounceMap: new Map<string, NodeJS.Timeout>(),
-  
+
   setItem: (key: string, value: any, delay = 100) => {
     // Skip on server-side
     if (typeof window === 'undefined') return;
-    
+
     // Clear existing timeout
     const existingTimeout = optimizedStorage.debounceMap.get(key);
     if (existingTimeout) {
       clearTimeout(existingTimeout);
     }
-    
+
     // Set new timeout
     const timeout = setTimeout(() => {
       try {
@@ -243,16 +260,36 @@ export const optimizedStorage = {
         console.warn(`Failed to save to localStorage: ${key}`, error);
       }
     }, delay);
-    
+
     optimizedStorage.debounceMap.set(key, timeout);
   },
-  
+
   getItem: (key: string, defaultValue: any = null) => {
     try {
       const item = localStorage.getItem(key);
       return item ? JSON.parse(item) : defaultValue;
     } catch (error) {
       console.warn(`Failed to read from localStorage: ${key}`, error);
+      return defaultValue;
+    }
+  },
+
+  setSessionItem: (key: string, value: any) => {
+    if (typeof window === 'undefined') return;
+    try {
+      sessionStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      console.warn(`Failed to save to sessionStorage: ${key}`, error);
+    }
+  },
+
+  getSessionItem: (key: string, defaultValue: any = null) => {
+    if (typeof window === 'undefined') return defaultValue;
+    try {
+      const item = sessionStorage.getItem(key);
+      return item ? JSON.parse(item) : defaultValue;
+    } catch (error) {
+      console.warn(`Failed to read from sessionStorage: ${key}`, error);
       return defaultValue;
     }
   }

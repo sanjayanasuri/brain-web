@@ -355,6 +355,7 @@ export async function createConcept(concept: {
     name: string;
     domain: string;
     type?: string;
+    description?: string | null;
     notes_key?: string | null;
     lecture_key?: string | null;
     url_slug?: string | null;
@@ -376,6 +377,7 @@ export async function createConcept(concept: {
             name: concept.name,
             domain: concept.domain,
             type: concept.type,
+            description: concept.description,
             notes_key: concept.notes_key,
             lecture_key: concept.lecture_key,
             url_slug: concept.url_slug,

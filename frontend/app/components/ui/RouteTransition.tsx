@@ -13,22 +13,30 @@ export default function RouteTransition() {
 
   useEffect(() => {
     setActive(true);
+    document.body.classList.add('page-transitioning');
+
     if (timeoutRef.current) {
       window.clearTimeout(timeoutRef.current);
     }
     timeoutRef.current = window.setTimeout(() => {
       setActive(false);
+      document.body.classList.remove('page-transitioning');
     }, TRANSITION_MS);
+
     return () => {
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current);
       }
+      document.body.classList.remove('page-transitioning');
     };
   }, [pathname, searchParams]);
 
   return (
     <>
       <div className={`route-progress${active ? ' is-active' : ''}`} aria-hidden="true" />
+      <div className="transition-overlay" aria-hidden="true">
+        <div className="transition-spinner" />
+      </div>
       <style jsx global>{`
         .route-progress {
           position: fixed;

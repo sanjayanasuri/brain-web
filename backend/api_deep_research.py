@@ -30,6 +30,7 @@ async def run_deep_research(
     Trigger a Deep Research run.
     This performs live search, ingestion, and analysis.
     """
+    logger.info(f"[Deep Research] Received request for topic: '{payload.topic}' (depth={payload.depth}, breadth={payload.breadth})")
     try:
         result = await perform_deep_research(
             topic=payload.topic,

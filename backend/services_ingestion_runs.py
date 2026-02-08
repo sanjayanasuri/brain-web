@@ -129,7 +129,7 @@ def update_ingestion_run_status(
     summary_counts: Optional[Dict[str, int]] = None,
     error_count: Optional[int] = None,
     errors: Optional[List[str]] = None,
-    trigger_community_build: bool = True,
+    trigger_community_build: bool = False,
 ) -> None:
     """
     Update an ingestion run's status and summary.

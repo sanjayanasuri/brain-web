@@ -43,12 +43,12 @@ export const MODEL_STRATEGY = {
   DRAFT: 'gpt-4o-mini',
   INTENT: 'gpt-4o-mini',
   ROUTING: 'gpt-4o-mini',
-  
+
   // High-quality models for critical validation
   FACT_CHECK: 'gpt-4o',
   VALIDATION: 'gpt-4o',
   COHERENCE: 'gpt-4o',
-  
+
   // Medium quality for refinement
   REFINEMENT: 'gpt-4o-mini',
   SUMMARIZATION: 'gpt-4o-mini',
@@ -119,7 +119,7 @@ Rules:
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
-    
+
     return {
       success: result.score >= 0.7,
       score: result.score,
@@ -204,7 +204,7 @@ Check for:
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
-    
+
     return {
       success: result.score >= 0.7,
       score: result.score,
@@ -298,7 +298,7 @@ Check:
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
-    
+
     return {
       success: result.score >= 0.7,
       score: result.score,
@@ -385,7 +385,7 @@ ${modeInstructions[preferences.mode]}`;
 
     const data = await response.json();
     const result = JSON.parse(data.choices[0].message.content);
-    
+
     return {
       success: true,
       score: result.score || 0.9,
@@ -418,35 +418,32 @@ export async function queryRouterAgent(
 ): Promise<{
   complexity: 'simple' | 'medium' | 'complex';
   needsRetrieval: boolean;
-  intent: string;
+  intent: 'conversational' | 'question' | 'task_creation' | 'itinerary' | 'exploration' | 'self_knowledge' | 'other';
+  needsWebSearch: boolean;
+  searchQuery: string;
   estimatedProcessingTime: number;
+  requiresSelfKnowledge: boolean;
 }> {
-  const prompt = `Analyze this query and determine its complexity and processing requirements.
+  const prompt = `Analyze query: "${message}"
+History: ${JSON.stringify(chatHistory.slice(-2))}
 
-QUERY: ${message}
-
-RECENT HISTORY: ${JSON.stringify(chatHistory.slice(-3), null, 2)}
-
-Return ONLY a JSON object:
+Return JSON:
 {
   "complexity": "simple|medium|complex",
-  "needsRetrieval": true/false,
-  "intent": "conversational|question|task_creation|itinerary|exploration|other",
-  "estimatedProcessingTime": number in milliseconds
+  "needsRetrieval": boolean,
+  "intent": "conversational|question|task_creation|itinerary|exploration|self_knowledge|other",
+  "needsWebSearch": boolean,
+  "searchQuery": "string",
+  "estimatedProcessingTime": number,
+  "requiresSelfKnowledge": boolean
 }
 
-Complexity:
-- simple: greetings, thanks, simple acknowledgments (needsRetrieval: false)
-- medium: straightforward questions, definitions (needsRetrieval: true)
-- complex: multi-part questions, analysis, synthesis (needsRetrieval: true)
-
-Intent examples:
-- conversational: "hi", "thanks", "ok"
-- question: "what is X", "explain Y"
-- task_creation: "create task", "remind me"
-- itinerary: "what's my plan", "schedule"
-- exploration: "what should I learn", "gaps in knowledge"
-- other: anything else`;
+Rules:
+- simple: conversational/thanks
+- medium: status/definitions
+- complex: analysis/planning
+- needsWebSearch: current events/news/real-time data (2024-2026)
+- requiresSelfKnowledge: User is asking about their own knowledge, notes, or history (e.g., "What do I know about X?")`;
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -480,7 +477,10 @@ Intent examples:
       complexity: 'medium',
       needsRetrieval: true,
       intent: 'question',
+      needsWebSearch: false,
+      searchQuery: '',
       estimatedProcessingTime: 1000,
+      requiresSelfKnowledge: false,
     };
   }
 }
@@ -500,7 +500,7 @@ export async function refinementAgent(
   apiKey: string
 ): Promise<string> {
   const feedbackSummary = [];
-  
+
   if (feedback.factCheck && !feedback.factCheck.success) {
     feedbackSummary.push(`FACT CHECK ISSUES: ${feedback.factCheck.feedback.join('; ')}`);
     if (feedback.factCheck.unverifiedClaims.length > 0) {
@@ -510,14 +510,14 @@ export async function refinementAgent(
       feedbackSummary.push(`Contradictions: ${feedback.factCheck.contradictions.map(c => c.claim).join(', ')}`);
     }
   }
-  
+
   if (feedback.coherence && !feedback.coherence.success) {
     feedbackSummary.push(`COHERENCE ISSUES: ${feedback.coherence.feedback.join('; ')}`);
     if (feedback.coherence.issues.length > 0) {
       feedbackSummary.push(`Flow issues: ${feedback.coherence.issues.map(i => i.issue).join(', ')}`);
     }
   }
-  
+
   if (feedback.validation && !feedback.validation.success) {
     feedbackSummary.push(`VALIDATION ISSUES: ${feedback.validation.feedback.join('; ')}`);
     if (feedback.validation.citationIssues.length > 0) {
@@ -600,4 +600,84 @@ export async function runQualityAgentsInParallel(
   }
 
   return { factCheck, coherence, validation, summarization };
+}
+
+/**
+ * Profile Update Agent
+ * Extracts personal details from the conversation to update the user's permanent profile.
+ */
+export async function profileUpdateAgent(
+  message: string,
+  chatHistory: Array<{ role: string; content: string }>,
+  currentProfile: any,
+  apiKey: string
+): Promise<{
+  updates: {
+    background?: string[];
+    interests?: string[];
+    weak_spots?: string[];
+    static_profile?: Record<string, any>;
+    focus_areas?: string[];
+  };
+  confidence: number;
+}> {
+  const prompt = `Analyze the current message and chat history for any NEW personal details about the user that should be saved to their permanent profile.
+
+USER MESSAGE: "${message}"
+CHAT HISTORY (LAST 2): ${JSON.stringify(chatHistory.slice(-2))}
+
+CURRENT PROFILE:
+${JSON.stringify(currentProfile, null, 2)}
+
+Look for:
+- Occupation or school (e.g., "I'm a student at Purdue")
+- Skills or expertise (e.g., "I know a lot about CUDA")
+- Learning goals or interests
+- Weak spots or things they find difficult
+- Focus areas (current specific topics they are working on)
+
+Return ONLY a JSON object with any NEW information found. If nothing new, return an empty updates object.
+{
+  "updates": {
+    "background": ["new item"],
+    "interests": ["new item"],
+    "weak_spots": ["new item"],
+    "focus_areas": ["new item"],
+    "static_profile": { "occupation": "...", "core_skills": ["..."] }
+  },
+  "confidence": 0.0-1.0
+}
+
+IMPORTANT: Only include information the user explicitly stated or strongly implied. Do not guess.`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: MODEL_STRATEGY.ROUTING, // Use mini for extraction
+        messages: [
+          { role: 'system', content: 'You are a personal profile extractor. Return only valid JSON.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 500,
+        response_format: { type: 'json_object' },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Profile extraction failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const result = JSON.parse(data.choices[0].message.content);
+    return result;
+  } catch (error) {
+    console.error('[ProfileUpdateAgent] Error:', error);
+    return { updates: {}, confidence: 0 };
+  }
 }

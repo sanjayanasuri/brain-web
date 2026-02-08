@@ -132,13 +132,14 @@ export default function LectureViewerPage() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--background)', color: 'var(--ink)' }}>
-      <div style={{
-        padding: '24px 32px 16px',
+      <div className="content-padding" style={{
         borderBottom: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: '16px',
+        paddingTop: '24px',
+        paddingBottom: '16px',
       }}>
         <div>
           <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
@@ -162,7 +163,7 @@ export default function LectureViewerPage() {
           Back to chat
         </button>
       </div>
-      <div style={{ padding: '24px 32px' }}>
+      <div className="content-padding">
         <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.7', fontSize: '15px' }}>
           {renderHighlightedText(section.raw_text, startOffset, endOffset)}
         </div>

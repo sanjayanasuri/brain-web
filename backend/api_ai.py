@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 import hashlib
 from models import (
@@ -16,6 +16,13 @@ from verticals.base import RetrievalRequest
 from cache_utils import get_cached, set_cached
 from typing import List, Optional
 from auth import require_auth
+from fastapi.responses import StreamingResponse
+from openai import OpenAI
+from config import OPENAI_API_KEY
+import json
+import logging
+
+logger = logging.getLogger("brain_web")
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -39,6 +46,66 @@ def ai_chat(payload: AIChatRequest, auth: dict = Depends(require_auth)):
     """
     # For now, just echo back
     return AIChatResponse(reply=f"You said: {payload.message}")
+
+
+    return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
+
+@router.post("/chat/stream")
+async def chat_stream_endpoint(
+    payload: AIChatRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Streaming AI chat endpoint using Server-Sent Events (SSE).
+    """
+    # Trigger notes digest update in background
+    if payload.chat_id:
+        try:
+            from services_notes_digest import update_notes_digest
+            background_tasks.add_task(
+                update_notes_digest,
+                chat_id=payload.chat_id,
+                trigger_source="chat_message"
+            )
+        except Exception as e:
+            logger.error(f"Failed to queue notes digest update: {e}")
+
+    async def generate_stream():
+        try:
+            if not OPENAI_API_KEY:
+                error_msg = {"type": "error", "content": "OpenAI API Key not missing"}
+                yield f"data: {json.dumps(error_msg)}\n\n"
+                return
+
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            
+            # Simple prompt for now - in future, retrieve context here using graphrag
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant for Brain Web."},
+                    {"role": "user", "content": payload.message}
+                ],
+                stream=True
+            )
+            
+            for chunk in response:
+                content = chunk.choices[0].delta.content
+                if content:
+                    data = {"type": "chunk", "content": content}
+                    yield f"data: {json.dumps(data)}\n\n"
+            
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            error_data = {"type": "error", "content": str(e)}
+            yield f"data: {json.dumps(error_data)}\n\n"
+
+    return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
 
 @router.post("/semantic-search", response_model=SemanticSearchResponse)
@@ -208,3 +275,114 @@ def evidence_subgraph_endpoint(
         "concepts": subgraph.get("concepts", [])[:payload.limit_nodes],
         "edges": edges,
     }
+
+
+class AssessmentRequest(BaseModel):
+    action: str  # "probe", "evaluate", "contextual_probe"
+    concept_name: Optional[str] = None
+    concept_id: Optional[str] = None
+    current_mastery: Optional[int] = 0
+    graph_id: str
+    # specific to evaluate
+    question: Optional[str] = None
+    user_answer: Optional[str] = None
+    # specific to probe
+    history: Optional[List[dict]] = []
+    # specific to contextual_probe
+    text_selection: Optional[str] = None
+    context: Optional[str] = None
+
+class AssessmentResponse(BaseModel):
+    mastery_score: int
+    feedback: str
+    next_question: Optional[str] = None
+    concepts_discussed: List[str] = []
+
+@router.post("/assess", response_model=AssessmentResponse)
+def assess_endpoint(
+    payload: AssessmentRequest,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Assessment Agent Endpoint.
+    - action="probe": Generate a probing question.
+    - action="evaluate": Grade answer and update mastery.
+    - action="contextual_probe": Socratic questioning based on highlighted text.
+    """
+    from agents.assessment import AssessmentAgent
+    from services_graph import update_concept_mastery, get_concept_mastery
+    
+    agent = AssessmentAgent()
+    
+    if payload.action == "probe":
+        if not payload.concept_name:
+            raise ValueError("concept_name required for probe")
+        
+        # Fetch real mastery if not explicitly provided (or trusted)
+        real_mastery = get_concept_mastery(session, payload.graph_id, payload.concept_name)
+            
+        question = agent.generate_probe(
+            payload.concept_name, 
+            real_mastery, 
+            payload.history or []
+        )
+        return AssessmentResponse(
+            mastery_score=real_mastery,
+            feedback="",
+            next_question=question
+        )
+        
+    elif payload.action == "contextual_probe":
+        if not payload.text_selection:
+            raise ValueError("text_selection required for contextual_probe")
+        
+        # We try to use the selection as a proxy for concept name lookup
+        # Ideally we'd use entity extraction, but for now exact match or 0
+        real_mastery = get_concept_mastery(session, payload.graph_id, payload.text_selection)
+            
+        question = agent.contextual_probe(
+            payload.text_selection,
+            payload.context or "",
+            real_mastery
+        )
+        return AssessmentResponse(
+            mastery_score=real_mastery,
+            feedback="",
+            next_question=question
+        )
+        
+    elif payload.action == "evaluate":
+        if not payload.concept_name:
+             # Try to infer concept name if missing? For now require it or default.
+             # In a real flow, evaluate comes after probe, so we should know the concept.
+             pass
+
+        if not payload.question or not payload.user_answer:
+            raise ValueError("question and user_answer required for evaluation")
+            
+        result = agent.evaluate_response(
+            payload.concept_name or "Unknown Concept",
+            payload.question,
+            payload.user_answer,
+            payload.current_mastery or 0
+        )
+        
+        # Persist new mastery
+        if payload.concept_id:
+            update_concept_mastery(
+                session, 
+                payload.graph_id, 
+                payload.concept_id, 
+                result.mastery_score
+            )
+        
+        return AssessmentResponse(
+            mastery_score=result.mastery_score,
+            feedback=result.feedback,
+            next_question=result.next_question,
+            concepts_discussed=result.concepts_discussed
+        )
+    
+    else:
+        raise ValueError(f"Unknown action: {payload.action}")

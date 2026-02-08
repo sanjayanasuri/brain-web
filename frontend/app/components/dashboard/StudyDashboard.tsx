@@ -433,37 +433,36 @@ export default function StudyDashboard() {
 
         {/* Empty State */}
         {data.study_time_by_domain.length === 0 &&
-         data.upcoming_exams.length === 0 &&
-         data.study_recommendations.length === 0 &&
-         data.resume_points.length === 0 && (
-          <div style={{
-            textAlign: 'center',
-            padding: '60px 24px',
-            color: 'var(--muted)',
-          }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>📚</div>
-            <div style={{ fontSize: '20px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
-              Start studying to see your dashboard
+          data.upcoming_exams.length === 0 &&
+          data.study_recommendations.length === 0 &&
+          data.resume_points.length === 0 && (
+            <div style={{
+              textAlign: 'center',
+              padding: '60px 24px',
+              color: 'var(--muted)',
+            }}>
+              <div style={{ fontSize: '20px', fontWeight: '600', marginBottom: '8px', color: 'var(--ink)' }}>
+                Start studying to see your dashboard
+              </div>
+              <div style={{ fontSize: '14px', marginBottom: '24px' }}>
+                View documents, take notes, and add exams to get personalized recommendations
+              </div>
+              <Link
+                href="/lecture-studio"
+                style={{
+                  display: 'inline-block',
+                  padding: '12px 24px',
+                  background: 'var(--accent)',
+                  color: 'white',
+                  borderRadius: '8px',
+                  textDecoration: 'none',
+                  fontWeight: '600',
+                }}
+              >
+                Create Your First Lecture
+              </Link>
             </div>
-            <div style={{ fontSize: '14px', marginBottom: '24px' }}>
-              View documents, take notes, and add exams to get personalized recommendations
-            </div>
-            <Link
-              href="/lecture-studio"
-              style={{
-                display: 'inline-block',
-                padding: '12px 24px',
-                background: 'var(--accent)',
-                color: 'white',
-                borderRadius: '8px',
-                textDecoration: 'none',
-                fontWeight: '600',
-              }}
-            >
-              Create Your First Lecture
-            </Link>
-          </div>
-        )}
+          )}
       </div>
     </div>
   );

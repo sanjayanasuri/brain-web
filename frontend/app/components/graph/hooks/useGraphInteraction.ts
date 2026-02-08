@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useGraph } from '../GraphContext';
 import { VisualNode, VisualGraph } from '../GraphTypes';
-import { useUIState } from './useUIState';
+import { useUI } from './useUIState';
 import { Concept, getGraphNeighbors, selectGraph, createConcept } from '../../../api-client';
 
 export function useGraphInteraction(
@@ -24,7 +24,7 @@ export function useGraphInteraction(
         setDomainBubbles
     } = graph;
 
-    const ui = useUIState();
+    const ui = useUI();
 
     const normalize = useCallback((name: string) => name.trim().toLowerCase(), []);
 
@@ -190,7 +190,7 @@ export function useGraphInteraction(
 
         const adjustedX = nodeX - graphOffset;
 
-        graphRef.current.centerAt(adjustedX, nodeY, duration);
+        graphRef.current.centerAt?.(adjustedX, nodeY, duration);
     }, [selectedNode, ui.state.focusMode, graphRef, graphCanvasRef]);
 
     const updateSelectedPosition = useCallback(
@@ -205,7 +205,11 @@ export function useGraphInteraction(
                 }
                 return;
             }
-            const data = graphRef.current.graphData();
+            const data = typeof graphRef.current.graphData === 'function'
+                ? graphRef.current.graphData()
+                : (graphRef.current.graphData || graphData);
+
+            if (!data || !data.nodes) return;
             const actualNode = data.nodes.find((n: any) => n.node_id === target.node_id);
             if (!actualNode || typeof actualNode.x !== 'number' || typeof actualNode.y !== 'number') {
                 if (typeof window !== 'undefined') {
@@ -237,7 +241,7 @@ export function useGraphInteraction(
                 }
             }
         },
-        [selectedNode, ui.actions, graphRef],
+        [selectedNode, ui.actions, graphRef, graphData],
     );
 
     const ensureConcept = useCallback(
@@ -294,10 +298,39 @@ export function useGraphInteraction(
         [],
     );
 
+    const findNodeAtScreenPos = useCallback((screenX: number, screenY: number) => {
+        if (!graphRef.current) return null;
+        const fg = graphRef.current;
+
+        // Convert screen to graph
+        const gPos = fg.screen2GraphCoords?.(screenX, screenY);
+        if (!gPos) return null;
+
+        const data = typeof fg.graphData === 'function' ? fg.graphData() : (fg.graphData || graphData);
+        const nodes: any[] = data?.nodes || [];
+
+        // Find nearest node within threshold
+        let nearestNode = null;
+        let minDist = Infinity;
+        const threshold = 15; // Graph distance threshold
+
+        nodes.forEach((n) => {
+            const dx = n.x - gPos.x;
+            const dy = n.y - gPos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < threshold && dist < minDist) {
+                minDist = dist;
+                nearestNode = n;
+            }
+        });
+
+        return nearestNode;
+    }, [graphRef, graphData]);
+
     const recomputeDomainBubbles = useCallback(() => {
         const fg = graphRef.current;
         if (!fg) return;
-        const data = fg.getGraphData ? fg.getGraphData() : fg.graphData();
+        const data = typeof fg.graphData === 'function' ? fg.graphData() : (fg.graphData || graphData);
         const nodes: any[] = data?.nodes || [];
         const groups = new Map<string, { sumX: number; sumY: number; count: number }>();
 
@@ -322,9 +355,9 @@ export function useGraphInteraction(
         });
 
         setDomainBubbles(bubbles);
-    }, [domainColors, setDomainBubbles, graphRef]);
+    }, [domainColors, setDomainBubbles, graphRef, graphData]);
 
-    return {
+    return useMemo(() => ({
         normalize,
         findLocalConcept,
         resolveConceptByName,
@@ -334,6 +367,19 @@ export function useGraphInteraction(
         updateSelectedPosition,
         ensureConcept,
         computeCollapseIds,
-        recomputeDomainBubbles
-    };
+        recomputeDomainBubbles,
+        findNodeAtScreenPos
+    }), [
+        normalize,
+        findLocalConcept,
+        resolveConceptByName,
+        revealDomain,
+        expandNeighbors,
+        centerNodeInVisibleArea,
+        updateSelectedPosition,
+        ensureConcept,
+        computeCollapseIds,
+        recomputeDomainBubbles,
+        findNodeAtScreenPos
+    ]);
 }

@@ -178,15 +178,20 @@ def link_resource_to_concept(
 
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
-    MATCH (c:Concept {{node_id: $concept_id, graph_id: $graph_id}})-[:BELONGS_TO]->(g)
+    MERGE (c:Concept {{node_id: $concept_id, graph_id: $graph_id}})
+    MERGE (c)-[:BELONGS_TO]->(g)
     MATCH (r:{RESOURCE_LABEL} {{resource_id: $resource_id, graph_id: $graph_id}})-[:BELONGS_TO]->(g)
-    WHERE $branch_id IN COALESCE(c.on_branches, [])
-      AND $branch_id IN COALESCE(r.on_branches, [])
+    WHERE $branch_id IN COALESCE(r.on_branches, [])
     MERGE (c)-[rel:HAS_RESOURCE {{graph_id: $graph_id}}]->(r)
     SET rel.on_branches = CASE
       WHEN rel.on_branches IS NULL THEN [$branch_id]
       WHEN $branch_id IN rel.on_branches THEN rel.on_branches
       ELSE rel.on_branches + $branch_id
+    END
+    SET c.on_branches = CASE
+      WHEN c.on_branches IS NULL THEN [$branch_id]
+      WHEN $branch_id IN c.on_branches THEN c.on_branches
+      ELSE c.on_branches + $branch_id
     END
     """
     session.run(

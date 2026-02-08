@@ -1,1 +1,6 @@
 node_id,name,domain,type,notes_key,lecture_key,url_slug,graph_id
+N366FBD70,Grad-CAM,Machine Learning,tool,,LECTURE_3029917B,grad-cam,demo
+N515EA562,CNN (Convolutional Neural Network),Machine Learning,concept,,LECTURE_3029917B,cnn-convolutional-neural-network,demo
+N63614D69,FastAPI,Web Development,tool,,LECTURE_D7E37430,fastapi,demo
+NBC09F9FD,Sanjay Anasuri,General,concept,,LECTURE_3029917B,sanjay-anasuri,demo
+NC992F2A7,Power BI,Business Intelligence,tool,,LECTURE_D7E37430,power-bi,demo

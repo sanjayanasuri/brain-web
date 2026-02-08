@@ -30,8 +30,6 @@ from services_resource_ai import (
     summarize_pdf_text,
 )
 from services_pdf_enhanced import extract_pdf_enhanced
-from services_browser_use import execute_skill, BrowserUseAPIError
-from config import BROWSER_USE_CONFUSION_SKILL_ID
 from pydantic import BaseModel
 from fastapi import Query
 
@@ -241,42 +239,67 @@ def _caption_from_confusion_output(out: Dict[str, Any]) -> str:
 
 
 @router.post("/fetch/confusions", response_model=Resource)
-def fetch_confusions(
+async def fetch_confusions(
     req: ConfusionSkillRequest,
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    if not BROWSER_USE_CONFUSION_SKILL_ID:
-        raise HTTPException(
-            status_code=500,
-            detail="BROWSER_USE_CONFUSION_SKILL_ID not configured. Please set it in .env.local and restart backend."
-        )
+    """
+    Fetch confusions and pitfalls using local web search (SearXNG).
+    Replaces the external Browser Use skill with internal search_and_fetch.
+    """
+    from services_web_search import search_and_fetch
 
+    # 1. search for combined query
+    # We append terms to find specific "confusion" type content
+    search_query = f"{req.query} common confusions pitfalls mistakes differences"
+    
     try:
-        skill_out = execute_skill(
-            BROWSER_USE_CONFUSION_SKILL_ID,
-            parameters={
-                "query": req.query,
-                "sources": req.sources,
-                "limit": req.limit,
-            },
+        # returns dict with keys: query, results (list), ...
+        # each result has 'search_result' and 'fetched_content'
+        search_out = await search_and_fetch(
+            query=search_query,
+            num_results=req.limit, 
+            # We can use specific engines if configured, or default
+            rerank=True,  # usage of AI reranker if available
         )
-    except BrowserUseAPIError as e:
-        if e.status_code and 400 <= e.status_code < 500:
-            raise HTTPException(status_code=400, detail=f"Browser Use error: {str(e)}")
-        if e.status_code and 500 <= e.status_code < 600:
-            raise HTTPException(status_code=502, detail=f"Browser Use error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Browser Use error: {str(e)}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to execute Browser Use skill: {str(e)}")
+        # Fallback if search service fails
+        raise HTTPException(status_code=500, detail=f"Web search failed: {str(e)}")
+
+    results = search_out.get("results", [])
+    
+    # 2. Format results to match the expected schema for the frontend (confusions/pitfalls)
+    # The frontend expects 'confusions' and 'pitfalls' lists in metadata
+    formatted_confusions = []
+    
+    for item in results:
+        # access the snippet/title
+        s_res = item.get("search_result", {})
+        
+        formatted_confusions.append({
+            "title": s_res.get("title", "Untitled"),
+            "summary": s_res.get("snippet", ""),
+            "url": s_res.get("url", ""),
+            "source": s_res.get("engine", "web")
+        })
+
+    # We categorize all as 'confusions' for now, as semantic classification would require an LLM step
+    # which we can add later if needed.
+    skill_out = {
+        "confusions": formatted_confusions,
+        "pitfalls": [], # Empty list to satisfy schema if strict
+        "query": req.query
+    }
 
     resource = create_resource(
         session=session,
         kind="web_link",
-        url=f"browseruse://skills/{BROWSER_USE_CONFUSION_SKILL_ID}?q={req.query}",
-        title=f"Confusions & pitfalls: {req.query}",
+        # Use a dummy URL scheme to indicate this is a search aggregation
+        url=f"brainweb://search?q={req.query}",
+        title=f"Research: {req.query}",
         caption=_caption_from_confusion_output(skill_out),
-        source="browser_use",
+        source="web_search",
         metadata=skill_out,
     )
 

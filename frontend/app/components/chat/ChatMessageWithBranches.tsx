@@ -9,6 +9,7 @@ import { resolveLectureLinks } from '../../api-client';
 import { getChatSession, getCurrentSessionId } from '../../lib/chatSessions';
 import { storeLectureLinkReturn } from '../../lib/lectureLinkNavigation';
 import { getAuthHeaders } from '../../lib/authToken';
+import { useBranchContext } from './BranchContext';
 
 interface Branch {
   id: string;
@@ -65,6 +66,8 @@ export default function ChatMessageWithBranches({
   }, [searchParams]);
 
   // Load branches for this message
+  const { lastBranchUpdate } = useBranchContext();
+
   useEffect(() => {
     if (role !== 'assistant') return;
 
@@ -90,7 +93,7 @@ export default function ChatMessageWithBranches({
     }
 
     loadBranches();
-  }, [messageId, role]);
+  }, [messageId, role, lastBranchUpdate]);
 
   const handleExplain = useCallback((startOffset: number, endOffset: number, selectedText: string) => {
     onExplain(messageId, startOffset, endOffset, selectedText, content);
@@ -165,7 +168,7 @@ export default function ChatMessageWithBranches({
   }, [chatSessionId, messageId, router]);
 
   // Find bridging hints for this message
-  const allHints = branches.flatMap(branch => 
+  const allHints = branches.flatMap(branch =>
     branch.bridging_hints?.hints || []
   );
 
@@ -175,8 +178,8 @@ export default function ChatMessageWithBranches({
         maxWidth: 'min(80%, 600px)',
         padding: 'var(--spacing-md) var(--spacing-md)',
         borderRadius: '16px',
-        background: role === 'user' 
-          ? 'var(--accent)' 
+        background: role === 'user'
+          ? 'var(--accent)'
           : 'var(--panel)',
         color: role === 'user' ? 'white' : 'var(--ink)',
         border: role === 'assistant' ? '1px solid var(--border)' : 'none',

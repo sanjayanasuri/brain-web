@@ -16,10 +16,13 @@ import { ConceptMention } from './ConceptMention';
 import { CodeBlock } from './CodeBlock';
 import { ConceptHover } from './ConceptHover';
 import { WikipediaHover } from './WikipediaHover';
+import PencilCanvas, { type Stroke } from '../ui/PencilCanvas';
 import { searchConcepts, getAllGraphData, getLectureMentions, createLectureMention, deleteLectureMention, upsertLectureBlocks, type Concept, type LectureMention } from '../../api-client';
 import { FloatingToolbar } from './FloatingToolbar';
+import FloatingSearchBubble from '../ui/FloatingSearchBubble';
 import { fetchWikipediaSummary } from '../../../lib/wikipedia';
 import { BlockId } from './BlockId';
+import { BlockInk } from './BlockInk';
 import { ConceptLink } from './ConceptLink';
 import { ConceptLinkModal } from './ConceptLinkModal';
 import { extractBlocksFromEditor } from './blockUtils';
@@ -36,6 +39,12 @@ interface LectureEditorProps {
   onEditorReady?: (editor: any) => void;
   wikipediaHoverEnabled?: boolean;
   onToggleWikipediaHover?: () => void;
+  isPencilMode?: boolean;
+  onTogglePencilMode?: () => void;
+  onChatTrigger?: (message: string, image?: string, context?: { blockId?: string; blockText?: string }) => void;
+  annotations?: string | null;
+  onAnnotationsChange?: (annotations: string) => void;
+  paperType?: string;
 }
 
 type SelectionInfo = {
@@ -57,12 +66,21 @@ export function LectureEditor({
   onEditorReady,
   wikipediaHoverEnabled: propWikipediaHoverEnabled = true,
   onToggleWikipediaHover,
+  isPencilMode = false,
+  onTogglePencilMode,
+  onChatTrigger,
+  annotations,
+  onAnnotationsChange,
+  paperType,
 }: LectureEditorProps) {
   const [isMounted, setIsMounted] = useState(false);
   const [conceptMap, setConceptMap] = useState<Map<string, Concept>>(new Map());
   const [wikipediaHoverEnabled, setWikipediaHoverEnabled] = useState(propWikipediaHoverEnabled);
   const [mentions, setMentions] = useState<LectureMention[]>([]);
-  const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchPosition, setSearchPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null);
   const [pendingLinkSelection, setPendingLinkSelection] = useState<SelectionInfo | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
@@ -128,10 +146,9 @@ export function LectureEditor({
 
         // Load concepts from the backend knowledge graph
         const graphData = await getAllGraphData();
-        console.log(`[LectureEditor] Loaded ${graphData.nodes.length} concepts from backend graph`);
-        
+
         const concepts = new Map<string, Concept>();
-        
+
         graphData.nodes.forEach((node: Concept) => {
           // Map by name (case-insensitive)
           const nameLower = node.name.toLowerCase();
@@ -141,8 +158,7 @@ export function LectureEditor({
           // Also map by exact name
           concepts.set(node.name, node);
         });
-        
-        console.log(`[LectureEditor] Mapped ${concepts.size} unique concept names for hover detection`);
+
         setConceptMap(concepts);
       } catch (error) {
         console.error('[LectureEditor] Failed to load concepts for hover:', error);
@@ -166,6 +182,7 @@ export function LectureEditor({
     editable: true,
     extensions: [
       BlockId,
+      BlockInk,
       StarterKit.configure({
         heading: {
           levels: [1, 2, 3],
@@ -200,21 +217,21 @@ export function LectureEditor({
       }),
       ...(isMounted
         ? [
-            ConceptMention.configure({
-              onSearch: async (query: string) => {
-                if (!query || query.length < 1) {
-                  return [];
-                }
-                try {
-                  const result = await searchConcepts(query, graphId, 10);
-                  return result.results;
-                } catch (error) {
-                  console.error('Failed to search concepts:', error);
-                  return [];
-                }
-              },
-            }),
-          ]
+          ConceptMention.configure({
+            onSearch: async (query: string) => {
+              if (!query || query.length < 1) {
+                return [];
+              }
+              try {
+                const result = await searchConcepts(query, graphId, 10);
+                return result.results;
+              } catch (error) {
+                console.error('Failed to search concepts:', error);
+                return [];
+              }
+            },
+          }),
+        ]
         : []),
       ConceptLink.configure({
         mentions,
@@ -432,26 +449,15 @@ export function LectureEditor({
     }
   }, [editor, onEditorReady]);
 
-  // Update concept map in extension when it changes
   useEffect(() => {
-    if (!editor) {
-      console.log('[LectureEditor] Editor not ready yet');
+    if (!editor || conceptMap.size === 0) {
       return;
     }
-    
-    if (conceptMap.size === 0) {
-      console.log('[LectureEditor] Concept map is empty - no concepts loaded yet');
-      return;
-    }
-    
-    console.log(`[LectureEditor] Updating concept hover extension with ${conceptMap.size} concepts`);
-    
-    // Update extension options
+
     const extension = editor.extensionManager.extensions.find(ext => ext.name === 'conceptHover');
     if (extension) {
       extension.options.conceptNames = conceptMap;
-      console.log('[LectureEditor] Extension options updated, triggering re-evaluation');
-      
+
       // Trigger a transaction to force plugin re-evaluation
       const { state, dispatch } = editor.view;
       const tr = state.tr.setMeta('forceConceptHoverUpdate', true);
@@ -478,18 +484,18 @@ export function LectureEditor({
   // Update Wikipedia hover extension when toggle changes
   useEffect(() => {
     if (!editor) return;
-    
+
     const extension = editor.extensionManager.extensions.find(ext => ext.name === 'wikipediaHover');
     if (extension) {
       // Update the extension options
       extension.options.enabled = wikipediaHoverEnabled;
-      
+
       // Force editor to re-render decorations by dispatching a transaction with meta
       // This will trigger the plugin's apply function which checks the enabled option
       const { state, dispatch } = editor.view;
       const tr = state.tr.setMeta('forceWikipediaHoverUpdate', true);
       dispatch(tr);
-      
+
       // Also clean up any existing tippy instances if disabling
       if (!wikipediaHoverEnabled) {
         const editorElement = editor.view.dom;
@@ -505,15 +511,8 @@ export function LectureEditor({
     }
   }, [editor, wikipediaHoverEnabled]);
 
-  // Set up concept hover previews when editor is ready
   useEffect(() => {
-    if (!editor) {
-      console.log('[LectureEditor] Editor not ready for tippy setup');
-      return;
-    }
-    
-    if (conceptMap.size === 0) {
-      console.log('[LectureEditor] Concept map empty, skipping tippy setup');
+    if (!editor || conceptMap.size === 0) {
       return;
     }
 
@@ -522,17 +521,17 @@ export function LectureEditor({
     const setupTippyForElement = (target: HTMLElement) => {
       const conceptId = target.getAttribute('data-concept-id');
       const conceptName = target.getAttribute('data-concept-name');
-      
+
       if (!conceptId) {
         console.warn('[LectureEditor] Element missing data-concept-id:', target);
         return;
       }
-      
+
       if ((target as any)._tippy) {
         // Already has tippy instance
         return;
       }
-      
+
       console.log(`[LectureEditor] Setting up tippy for concept: ${conceptName} (${conceptId})`);
 
       const loadingContent = document.createElement('div');
@@ -554,321 +553,320 @@ export function LectureEditor({
         offset: [0, 8],
         onShow: () => {
           void (async () => {
-          try {
-            const { getConcept, getNeighborsWithRelationships } = await import('../../api-client');
-            const [concept, neighborsData] = await Promise.all([
-              getConcept(conceptId),
-              getNeighborsWithRelationships(conceptId).catch(() => []),
-            ]);
-            
-            // Use the graphId prop if available
-            const currentGraphId: string | undefined = graphId;
-            
-            const container = document.createElement('div');
-            container.style.maxWidth = '480px';
-            container.style.padding = '0';
-            container.style.background = 'var(--surface)';
-            container.style.borderRadius = '8px';
-            container.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
+            try {
+              const { getConcept, getNeighborsWithRelationships } = await import('../../api-client');
+              const [concept, neighborsData] = await Promise.all([
+                getConcept(conceptId),
+                getNeighborsWithRelationships(conceptId).catch(() => []),
+              ]);
 
-            // Header section
-            const header = document.createElement('div');
-            header.style.padding = '16px';
-            header.style.borderBottom = '1px solid var(--border)';
-            header.style.background = 'var(--panel)';
-            header.style.borderRadius = '8px 8px 0 0';
+              // Use the graphId prop if available
+              const currentGraphId: string | undefined = graphId;
 
-            const title = document.createElement('div');
-            title.style.fontSize = '18px';
-            title.style.fontWeight = '600';
-            title.style.color = 'var(--ink)';
-            title.style.marginBottom = '4px';
-            title.style.lineHeight = '1.3';
-            title.textContent = concept.name;
-            header.appendChild(title);
+              const container = document.createElement('div');
+              container.style.maxWidth = '480px';
+              container.style.padding = '0';
+              container.style.background = 'var(--surface)';
+              container.style.borderRadius = '8px';
+              container.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
 
-            if (concept.domain) {
-              const domain = document.createElement('div');
-              domain.style.fontSize = '12px';
-              domain.style.color = 'var(--muted)';
-              domain.style.textTransform = 'uppercase';
-              domain.style.letterSpacing = '0.5px';
-              domain.textContent = concept.domain;
-              header.appendChild(domain);
-            }
-            container.appendChild(header);
+              // Header section
+              const header = document.createElement('div');
+              header.style.padding = '16px';
+              header.style.borderBottom = '1px solid var(--border)';
+              header.style.background = 'var(--panel)';
+              header.style.borderRadius = '8px 8px 0 0';
 
-            // Content section
-            const content = document.createElement('div');
-            content.style.padding = '16px';
+              const title = document.createElement('div');
+              title.style.fontSize = '18px';
+              title.style.fontWeight = '600';
+              title.style.color = 'var(--ink)';
+              title.style.marginBottom = '4px';
+              title.style.lineHeight = '1.3';
+              title.textContent = concept.name;
+              header.appendChild(title);
 
-            // Definition from your graph (most important)
-            if (concept.description) {
-              const descSection = document.createElement('div');
-              descSection.style.marginBottom = '16px';
-              
-              const descLabel = document.createElement('div');
-              descLabel.style.fontSize = '11px';
-              descLabel.style.color = 'var(--muted)';
-              descLabel.style.textTransform = 'uppercase';
-              descLabel.style.letterSpacing = '0.5px';
-              descLabel.style.marginBottom = '6px';
-              descLabel.textContent = 'Definition (from your graph)';
-              descSection.appendChild(descLabel);
-              
-              const desc = document.createElement('div');
-              desc.style.fontSize = '14px';
-              desc.style.color = 'var(--ink)';
-              desc.style.lineHeight = '1.6';
-              desc.textContent = concept.description.length > 300
-                ? `${concept.description.substring(0, 300)}...`
-                : concept.description;
-              descSection.appendChild(desc);
-              content.appendChild(descSection);
-            } else {
-              const noDesc = document.createElement('div');
-              noDesc.style.fontSize = '13px';
-              noDesc.style.color = 'var(--muted)';
-              noDesc.style.fontStyle = 'italic';
-              noDesc.style.marginBottom = '12px';
-              noDesc.textContent = 'No definition in your graph yet';
-              content.appendChild(noDesc);
-            }
-
-            // Related concepts (how it's used in your graph)
-            if (neighborsData && neighborsData.length > 0) {
-              const relatedSection = document.createElement('div');
-              relatedSection.style.marginBottom = '16px';
-              
-              const relatedLabel = document.createElement('div');
-              relatedLabel.style.fontSize = '11px';
-              relatedLabel.style.color = 'var(--muted)';
-              relatedLabel.style.textTransform = 'uppercase';
-              relatedLabel.style.letterSpacing = '0.5px';
-              relatedLabel.style.marginBottom = '8px';
-              relatedLabel.textContent = `Connected to ${neighborsData.length} concept${neighborsData.length !== 1 ? 's' : ''}`;
-              relatedSection.appendChild(relatedLabel);
-              
-              const relatedList = document.createElement('div');
-              relatedList.style.display = 'flex';
-              relatedList.style.flexWrap = 'wrap';
-              relatedList.style.gap = '6px';
-              
-              // Show top 5 related concepts with their relationship type
-              neighborsData.slice(0, 5).forEach(({ concept: neighbor, predicate, is_outgoing }) => {
-                const relatedItem = document.createElement('div');
-                relatedItem.style.display = 'flex';
-                relatedItem.style.alignItems = 'center';
-                relatedItem.style.gap = '4px';
-                relatedItem.style.fontSize = '12px';
-                relatedItem.style.color = 'var(--ink)';
-                relatedItem.style.padding = '4px 8px';
-                relatedItem.style.background = 'var(--panel)';
-                relatedItem.style.borderRadius = '4px';
-                relatedItem.style.border = '1px solid var(--border)';
-                
-                const relIcon = document.createElement('span');
-                relIcon.textContent = is_outgoing ? '→' : '←';
-                relIcon.style.color = 'var(--accent)';
-                relIcon.style.fontWeight = '600';
-                relatedItem.appendChild(relIcon);
-                
-                const relText = document.createElement('span');
-                relText.textContent = neighbor.name;
-                relatedItem.appendChild(relText);
-                
-                if (predicate) {
-                  const predicateBadge = document.createElement('span');
-                  predicateBadge.textContent = predicate;
-                  predicateBadge.style.fontSize = '10px';
-                  predicateBadge.style.color = 'var(--muted)';
-                  predicateBadge.style.marginLeft = '4px';
-                  relatedItem.appendChild(predicateBadge);
-                }
-                
-                relatedList.appendChild(relatedItem);
-              });
-              
-              if (neighborsData.length > 5) {
-                const moreText = document.createElement('div');
-                moreText.style.fontSize = '11px';
-                moreText.style.color = 'var(--muted)';
-                moreText.style.marginTop = '4px';
-                moreText.textContent = `+${neighborsData.length - 5} more`;
-                relatedList.appendChild(moreText);
+              if (concept.domain) {
+                const domain = document.createElement('div');
+                domain.style.fontSize = '12px';
+                domain.style.color = 'var(--muted)';
+                domain.style.textTransform = 'uppercase';
+                domain.style.letterSpacing = '0.5px';
+                domain.textContent = concept.domain;
+                header.appendChild(domain);
               }
-              
-              relatedSection.appendChild(relatedList);
-              content.appendChild(relatedSection);
-            }
+              container.appendChild(header);
 
-            if (concept.tags && concept.tags.length > 0) {
-              const tagsContainer = document.createElement('div');
-              tagsContainer.style.display = 'flex';
-              tagsContainer.style.flexWrap = 'wrap';
-              tagsContainer.style.gap = '6px';
-              tagsContainer.style.marginBottom = '16px';
-              concept.tags.slice(0, 6).forEach((tag) => {
-                const tagEl = document.createElement('span');
-                tagEl.style.background = 'rgba(17, 138, 178, 0.1)';
-                tagEl.style.color = 'var(--accent)';
-                tagEl.style.fontSize = '11px';
-                tagEl.style.padding = '4px 8px';
-                tagEl.style.borderRadius = '4px';
-                tagEl.style.fontWeight = '500';
-                tagEl.textContent = tag;
-                tagsContainer.appendChild(tagEl);
-              });
-              content.appendChild(tagsContainer);
-            }
-            
-            // Add Wikipedia info as supplementary (fetch in background)
-            fetchWikipediaSummary(concept.name).then((wikiSummary) => {
-              if (wikiSummary) {
-                const wikiSection = document.createElement('div');
-                wikiSection.style.marginTop = '16px';
-                wikiSection.style.paddingTop = '16px';
-                wikiSection.style.borderTop = '1px solid var(--border)';
-                
-                const wikiLabel = document.createElement('div');
-                wikiLabel.style.fontSize = '11px';
-                wikiLabel.style.color = 'var(--muted)';
-                wikiLabel.style.textTransform = 'uppercase';
-                wikiLabel.style.letterSpacing = '0.5px';
-                wikiLabel.style.marginBottom = '8px';
-                wikiLabel.style.display = 'flex';
-                wikiLabel.style.alignItems = 'center';
-                wikiLabel.style.gap = '6px';
-                
-                const wikiIcon = document.createElement('span');
-                wikiIcon.textContent = '📚';
-                wikiIcon.style.fontSize = '12px';
-                wikiLabel.appendChild(wikiIcon);
-                
-                const wikiLabelText = document.createElement('span');
-                wikiLabelText.textContent = 'Wikipedia (supplementary)';
-                wikiLabel.appendChild(wikiLabelText);
-                wikiSection.appendChild(wikiLabel);
-                
-                const wikiExtract = document.createElement('div');
-                wikiExtract.style.fontSize = '13px';
-                wikiExtract.style.color = 'var(--ink)';
-                wikiExtract.style.lineHeight = '1.5';
-                wikiExtract.style.opacity = '0.85';
-                wikiExtract.style.marginBottom = '8px';
-                const extractText = wikiSummary.extract.length > 200
-                  ? `${wikiSummary.extract.substring(0, 200)}...`
-                  : wikiSummary.extract;
-                wikiExtract.textContent = extractText;
-                wikiSection.appendChild(wikiExtract);
-                
-                if (wikiSummary.fullurl) {
-                  const wikiLink = document.createElement('a');
-                  wikiLink.href = wikiSummary.fullurl;
-                  wikiLink.target = '_blank';
-                  wikiLink.rel = 'noopener noreferrer';
-                  wikiLink.style.fontSize = '12px';
-                  wikiLink.style.color = 'var(--accent)';
-                  wikiLink.style.textDecoration = 'none';
-                  wikiLink.textContent = 'Read more on Wikipedia →';
-                  wikiLink.onmouseenter = () => {
-                    wikiLink.style.textDecoration = 'underline';
-                  };
-                  wikiLink.onmouseleave = () => {
+              // Content section
+              const content = document.createElement('div');
+              content.style.padding = '16px';
+
+              // Definition from your graph (most important)
+              if (concept.description) {
+                const descSection = document.createElement('div');
+                descSection.style.marginBottom = '16px';
+
+                const descLabel = document.createElement('div');
+                descLabel.style.fontSize = '11px';
+                descLabel.style.color = 'var(--muted)';
+                descLabel.style.textTransform = 'uppercase';
+                descLabel.style.letterSpacing = '0.5px';
+                descLabel.style.marginBottom = '6px';
+                descLabel.textContent = 'Definition (from your graph)';
+                descSection.appendChild(descLabel);
+
+                const desc = document.createElement('div');
+                desc.style.fontSize = '14px';
+                desc.style.color = 'var(--ink)';
+                desc.style.lineHeight = '1.6';
+                desc.textContent = concept.description.length > 300
+                  ? `${concept.description.substring(0, 300)}...`
+                  : concept.description;
+                descSection.appendChild(desc);
+                content.appendChild(descSection);
+              } else {
+                const noDesc = document.createElement('div');
+                noDesc.style.fontSize = '13px';
+                noDesc.style.color = 'var(--muted)';
+                noDesc.style.fontStyle = 'italic';
+                noDesc.style.marginBottom = '12px';
+                noDesc.textContent = 'No definition in your graph yet';
+                content.appendChild(noDesc);
+              }
+
+              // Related concepts (how it's used in your graph)
+              if (neighborsData && neighborsData.length > 0) {
+                const relatedSection = document.createElement('div');
+                relatedSection.style.marginBottom = '16px';
+
+                const relatedLabel = document.createElement('div');
+                relatedLabel.style.fontSize = '11px';
+                relatedLabel.style.color = 'var(--muted)';
+                relatedLabel.style.textTransform = 'uppercase';
+                relatedLabel.style.letterSpacing = '0.5px';
+                relatedLabel.style.marginBottom = '8px';
+                relatedLabel.textContent = `Connected to ${neighborsData.length} concept${neighborsData.length !== 1 ? 's' : ''}`;
+                relatedSection.appendChild(relatedLabel);
+
+                const relatedList = document.createElement('div');
+                relatedList.style.display = 'flex';
+                relatedList.style.flexWrap = 'wrap';
+                relatedList.style.gap = '6px';
+
+                // Show top 5 related concepts with their relationship type
+                neighborsData.slice(0, 5).forEach(({ concept: neighbor, predicate, is_outgoing }) => {
+                  const relatedItem = document.createElement('div');
+                  relatedItem.style.display = 'flex';
+                  relatedItem.style.alignItems = 'center';
+                  relatedItem.style.gap = '4px';
+                  relatedItem.style.fontSize = '12px';
+                  relatedItem.style.color = 'var(--ink)';
+                  relatedItem.style.padding = '4px 8px';
+                  relatedItem.style.background = 'var(--panel)';
+                  relatedItem.style.borderRadius = '4px';
+                  relatedItem.style.border = '1px solid var(--border)';
+
+                  const relIcon = document.createElement('span');
+                  relIcon.textContent = is_outgoing ? '→' : '←';
+                  relIcon.style.color = 'var(--accent)';
+                  relIcon.style.fontWeight = '600';
+                  relatedItem.appendChild(relIcon);
+
+                  const relText = document.createElement('span');
+                  relText.textContent = neighbor.name;
+                  relatedItem.appendChild(relText);
+
+                  if (predicate) {
+                    const predicateBadge = document.createElement('span');
+                    predicateBadge.textContent = predicate;
+                    predicateBadge.style.fontSize = '10px';
+                    predicateBadge.style.color = 'var(--muted)';
+                    predicateBadge.style.marginLeft = '4px';
+                    relatedItem.appendChild(predicateBadge);
+                  }
+
+                  relatedList.appendChild(relatedItem);
+                });
+
+                if (neighborsData.length > 5) {
+                  const moreText = document.createElement('div');
+                  moreText.style.fontSize = '11px';
+                  moreText.style.color = 'var(--muted)';
+                  moreText.style.marginTop = '4px';
+                  moreText.textContent = `+${neighborsData.length - 5} more`;
+                  relatedList.appendChild(moreText);
+                }
+
+                relatedSection.appendChild(relatedList);
+                content.appendChild(relatedSection);
+              }
+
+              if (concept.tags && concept.tags.length > 0) {
+                const tagsContainer = document.createElement('div');
+                tagsContainer.style.display = 'flex';
+                tagsContainer.style.flexWrap = 'wrap';
+                tagsContainer.style.gap = '6px';
+                tagsContainer.style.marginBottom = '16px';
+                concept.tags.slice(0, 6).forEach((tag) => {
+                  const tagEl = document.createElement('span');
+                  tagEl.style.background = 'rgba(17, 138, 178, 0.1)';
+                  tagEl.style.color = 'var(--accent)';
+                  tagEl.style.fontSize = '11px';
+                  tagEl.style.padding = '4px 8px';
+                  tagEl.style.borderRadius = '4px';
+                  tagEl.style.fontWeight = '500';
+                  tagEl.textContent = tag;
+                  tagsContainer.appendChild(tagEl);
+                });
+                content.appendChild(tagsContainer);
+              }
+
+              // Add Wikipedia info as supplementary (fetch in background)
+              fetchWikipediaSummary(concept.name).then((wikiSummary) => {
+                if (wikiSummary) {
+                  const wikiSection = document.createElement('div');
+                  wikiSection.style.marginTop = '16px';
+                  wikiSection.style.paddingTop = '16px';
+                  wikiSection.style.borderTop = '1px solid var(--border)';
+
+                  const wikiLabel = document.createElement('div');
+                  wikiLabel.style.fontSize = '11px';
+                  wikiLabel.style.color = 'var(--muted)';
+                  wikiLabel.style.textTransform = 'uppercase';
+                  wikiLabel.style.letterSpacing = '0.5px';
+                  wikiLabel.style.marginBottom = '8px';
+                  wikiLabel.style.display = 'flex';
+                  wikiLabel.style.alignItems = 'center';
+                  wikiLabel.style.gap = '6px';
+
+                  const wikiIcon = document.createElement('span');
+                  wikiIcon.textContent = '';
+                  wikiLabel.appendChild(wikiIcon);
+
+                  const wikiLabelText = document.createElement('span');
+                  wikiLabelText.textContent = 'Wikipedia (supplementary)';
+                  wikiLabel.appendChild(wikiLabelText);
+                  wikiSection.appendChild(wikiLabel);
+
+                  const wikiExtract = document.createElement('div');
+                  wikiExtract.style.fontSize = '13px';
+                  wikiExtract.style.color = 'var(--ink)';
+                  wikiExtract.style.lineHeight = '1.5';
+                  wikiExtract.style.opacity = '0.85';
+                  wikiExtract.style.marginBottom = '8px';
+                  const extractText = wikiSummary.extract.length > 200
+                    ? `${wikiSummary.extract.substring(0, 200)}...`
+                    : wikiSummary.extract;
+                  wikiExtract.textContent = extractText;
+                  wikiSection.appendChild(wikiExtract);
+
+                  if (wikiSummary.fullurl) {
+                    const wikiLink = document.createElement('a');
+                    wikiLink.href = wikiSummary.fullurl;
+                    wikiLink.target = '_blank';
+                    wikiLink.rel = 'noopener noreferrer';
+                    wikiLink.style.fontSize = '12px';
+                    wikiLink.style.color = 'var(--accent)';
                     wikiLink.style.textDecoration = 'none';
-                  };
-                  wikiSection.appendChild(wikiLink);
+                    wikiLink.textContent = 'Read more on Wikipedia →';
+                    wikiLink.onmouseenter = () => {
+                      wikiLink.style.textDecoration = 'underline';
+                    };
+                    wikiLink.onmouseleave = () => {
+                      wikiLink.style.textDecoration = 'none';
+                    };
+                    wikiSection.appendChild(wikiLink);
+                  }
+
+                  content.appendChild(wikiSection);
+                  // Update tippy content
+                  tippyInstance.setContent(container);
                 }
-                
-                content.appendChild(wikiSection);
-                // Update tippy content
-                tippyInstance.setContent(container);
-              }
-            }).catch(() => {
-              // Silently fail - Wikipedia is optional
-            });
-            
-            container.appendChild(content);
+              }).catch(() => {
+                // Silently fail - Wikipedia is optional
+              });
 
-            // Actions section
-            const actions = document.createElement('div');
-            actions.style.padding = '12px 16px';
-            actions.style.borderTop = '1px solid var(--border)';
-            actions.style.background = 'var(--panel)';
-            actions.style.borderRadius = '0 0 8px 8px';
-            actions.style.display = 'flex';
-            actions.style.gap = '8px';
+              container.appendChild(content);
 
-            // View in graph button
-            const graphButton = document.createElement('button');
-            graphButton.style.flex = '1';
-            graphButton.style.padding = '8px 12px';
-            graphButton.style.background = 'var(--accent)';
-            graphButton.style.color = 'white';
-            graphButton.style.border = 'none';
-            graphButton.style.borderRadius = '6px';
-            graphButton.style.fontSize = '13px';
-            graphButton.style.fontWeight = '500';
-            graphButton.style.cursor = 'pointer';
-            graphButton.style.transition = 'background 0.2s';
-            graphButton.textContent = 'View in Graph';
-            graphButton.onmouseenter = () => {
-              graphButton.style.background = 'var(--accent-2)';
-            };
-            graphButton.onmouseleave = () => {
+              // Actions section
+              const actions = document.createElement('div');
+              actions.style.padding = '12px 16px';
+              actions.style.borderTop = '1px solid var(--border)';
+              actions.style.background = 'var(--panel)';
+              actions.style.borderRadius = '0 0 8px 8px';
+              actions.style.display = 'flex';
+              actions.style.gap = '8px';
+
+              // View in graph button
+              const graphButton = document.createElement('button');
+              graphButton.style.flex = '1';
+              graphButton.style.padding = '8px 12px';
               graphButton.style.background = 'var(--accent)';
-            };
-            graphButton.onclick = (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const params = new URLSearchParams();
-              params.set('select', concept.node_id);
-              if (currentGraphId) {
-                params.set('graph_id', currentGraphId);
-              }
-              window.location.href = `/?${params.toString()}`;
-            };
-            actions.appendChild(graphButton);
+              graphButton.style.color = 'white';
+              graphButton.style.border = 'none';
+              graphButton.style.borderRadius = '6px';
+              graphButton.style.fontSize = '13px';
+              graphButton.style.fontWeight = '500';
+              graphButton.style.cursor = 'pointer';
+              graphButton.style.transition = 'background 0.2s';
+              graphButton.textContent = 'View in Graph';
+              graphButton.onmouseenter = () => {
+                graphButton.style.background = 'var(--accent-2)';
+              };
+              graphButton.onmouseleave = () => {
+                graphButton.style.background = 'var(--accent)';
+              };
+              graphButton.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const params = new URLSearchParams();
+                params.set('select', concept.node_id);
+                if (currentGraphId) {
+                  params.set('graph_id', currentGraphId);
+                }
+                window.location.href = `/?${params.toString()}`;
+              };
+              actions.appendChild(graphButton);
 
-            // View concept page button
-            const conceptButton = document.createElement('button');
-            conceptButton.style.flex = '1';
-            conceptButton.style.padding = '8px 12px';
-            conceptButton.style.background = 'transparent';
-            conceptButton.style.color = 'var(--accent)';
-            conceptButton.style.border = '1px solid var(--border)';
-            conceptButton.style.borderRadius = '6px';
-            conceptButton.style.fontSize = '13px';
-            conceptButton.style.fontWeight = '500';
-            conceptButton.style.cursor = 'pointer';
-            conceptButton.style.transition = 'background 0.2s';
-            conceptButton.textContent = 'View Details';
-            conceptButton.onmouseenter = () => {
-              conceptButton.style.background = 'rgba(17, 138, 178, 0.05)';
-            };
-            conceptButton.onmouseleave = () => {
+              // View concept page button
+              const conceptButton = document.createElement('button');
+              conceptButton.style.flex = '1';
+              conceptButton.style.padding = '8px 12px';
               conceptButton.style.background = 'transparent';
-            };
-            conceptButton.onclick = (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              window.open(`/concepts/${concept.node_id}`, '_blank');
-            };
-            actions.appendChild(conceptButton);
+              conceptButton.style.color = 'var(--accent)';
+              conceptButton.style.border = '1px solid var(--border)';
+              conceptButton.style.borderRadius = '6px';
+              conceptButton.style.fontSize = '13px';
+              conceptButton.style.fontWeight = '500';
+              conceptButton.style.cursor = 'pointer';
+              conceptButton.style.transition = 'background 0.2s';
+              conceptButton.textContent = 'View Details';
+              conceptButton.onmouseenter = () => {
+                conceptButton.style.background = 'rgba(17, 138, 178, 0.05)';
+              };
+              conceptButton.onmouseleave = () => {
+                conceptButton.style.background = 'transparent';
+              };
+              conceptButton.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                window.open(`/concepts/${concept.node_id}`, '_blank');
+              };
+              actions.appendChild(conceptButton);
 
-            container.appendChild(actions);
+              container.appendChild(actions);
 
-            tippyInstance.setContent(container);
-          } catch (error) {
-            console.error('Failed to load concept:', error);
-            const errorContent = document.createElement('div');
-            errorContent.style.padding = '16px';
-            errorContent.style.fontSize = '14px';
-            errorContent.style.color = 'var(--accent-2)';
-            errorContent.style.textAlign = 'center';
-            errorContent.textContent = 'Failed to load concept';
-            tippyInstance.setContent(errorContent);
-          }
+              tippyInstance.setContent(container);
+            } catch (error) {
+              console.error('Failed to load concept:', error);
+              const errorContent = document.createElement('div');
+              errorContent.style.padding = '16px';
+              errorContent.style.fontSize = '14px';
+              errorContent.style.color = 'var(--accent-2)';
+              errorContent.style.textAlign = 'center';
+              errorContent.textContent = 'Failed to load concept';
+              tippyInstance.setContent(errorContent);
+            }
           })();
         },
       });
@@ -877,12 +875,17 @@ export function LectureEditor({
     };
 
     // Set up tippy for all existing concept hover triggers
+    let rAF_setup: number | null = null;
     const setupAllTippies = () => {
-      const editorElement = editor.view.dom;
-      const triggers = editorElement.querySelectorAll('.concept-hover-trigger, .concept-link');
-      console.log(`[LectureEditor] Found ${triggers.length} concept hover triggers in editor`);
-      triggers.forEach((trigger) => {
-        setupTippyForElement(trigger as HTMLElement);
+      if (!editor || rAF_setup) return;
+      rAF_setup = requestAnimationFrame(() => {
+        if (!editor?.view?.dom) return;
+        const editorElement = editor.view.dom;
+        const triggers = editorElement.querySelectorAll('.concept-hover-trigger, .concept-link');
+        triggers.forEach((trigger) => {
+          setupTippyForElement(trigger as HTMLElement);
+        });
+        rAF_setup = null;
       });
     };
 
@@ -920,15 +923,13 @@ export function LectureEditor({
       return;
     }
 
-    console.log('[LectureEditor] Setting up Wikipedia hover tooltips');
-
     const setupWikipediaTippyForElement = (target: HTMLElement) => {
       const term = target.getAttribute('data-wikipedia-term');
-      
+
       if (!term) {
         return;
       }
-      
+
       if ((target as any)._wikipediaTippy) {
         // Already has tippy instance
         return;
@@ -975,131 +976,131 @@ export function LectureEditor({
                 // If search fails, continue to Wikipedia
                 console.log('Concept search failed, showing Wikipedia:', err);
               }
-              
+
               // Term doesn't exist in graph - show Wikipedia info
               const summary = await fetchWikipediaSummary(term);
-            
-            if (!summary) {
-              const noResult = document.createElement('div');
-              noResult.style.padding = '16px';
-              noResult.style.fontSize = '14px';
-              noResult.style.color = 'var(--muted)';
-              noResult.style.textAlign = 'center';
-              noResult.textContent = `No Wikipedia article found for "${term}"`;
-              tippyInstance.setContent(noResult);
-              return;
+
+              if (!summary) {
+                const noResult = document.createElement('div');
+                noResult.style.padding = '16px';
+                noResult.style.fontSize = '14px';
+                noResult.style.color = 'var(--muted)';
+                noResult.style.textAlign = 'center';
+                noResult.textContent = `No Wikipedia article found for "${term}"`;
+                tippyInstance.setContent(noResult);
+                return;
+              }
+
+              const container = document.createElement('div');
+              container.style.maxWidth = '450px';
+              container.style.padding = '0';
+              container.style.background = 'var(--surface)';
+              container.style.borderRadius = '8px';
+              container.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
+
+              // Header section
+              const header = document.createElement('div');
+              header.style.padding = '16px';
+              header.style.borderBottom = '1px solid var(--border)';
+              header.style.background = 'var(--panel)';
+              header.style.borderRadius = '8px 8px 0 0';
+              header.style.display = 'flex';
+              header.style.alignItems = 'center';
+              header.style.gap = '12px';
+
+              // Wikipedia icon/logo
+              const icon = document.createElement('div');
+              icon.style.width = '24px';
+              icon.style.height = '24px';
+              icon.style.background = 'url("https://en.wikipedia.org/static/favicon/wikipedia.ico") no-repeat center';
+              icon.style.backgroundSize = 'contain';
+              icon.style.flexShrink = '0';
+              header.appendChild(icon);
+
+              const titleContainer = document.createElement('div');
+              titleContainer.style.flex = '1';
+
+              const title = document.createElement('div');
+              title.style.fontSize = '18px';
+              title.style.fontWeight = '600';
+              title.style.color = 'var(--ink)';
+              title.style.marginBottom = '4px';
+              title.style.lineHeight = '1.3';
+              title.textContent = summary.title;
+              titleContainer.appendChild(title);
+
+              if (summary.description) {
+                const desc = document.createElement('div');
+                desc.style.fontSize = '12px';
+                desc.style.color = 'var(--muted)';
+                desc.style.textTransform = 'uppercase';
+                desc.style.letterSpacing = '0.5px';
+                desc.textContent = summary.description;
+                titleContainer.appendChild(desc);
+              }
+
+              header.appendChild(titleContainer);
+              container.appendChild(header);
+
+              // Content section
+              const content = document.createElement('div');
+              content.style.padding = '16px';
+
+              const extract = document.createElement('div');
+              extract.style.fontSize = '14px';
+              extract.style.color = 'var(--ink)';
+              extract.style.lineHeight = '1.6';
+              extract.style.marginBottom = '12px';
+              // Limit extract to first 300 characters
+              const extractText = summary.extract.length > 300
+                ? `${summary.extract.substring(0, 300)}...`
+                : summary.extract;
+              extract.textContent = extractText;
+              content.appendChild(extract);
+
+              container.appendChild(content);
+
+              // Actions section
+              const actions = document.createElement('div');
+              actions.style.padding = '12px 16px';
+              actions.style.borderTop = '1px solid var(--border)';
+              actions.style.background = 'var(--panel)';
+              actions.style.borderRadius = '0 0 8px 8px';
+              actions.style.display = 'flex';
+              actions.style.gap = '8px';
+
+              // Open in Wikipedia button
+              if (summary.fullurl) {
+                const openBtn = document.createElement('a');
+                openBtn.href = summary.fullurl;
+                openBtn.target = '_blank';
+                openBtn.rel = 'noopener noreferrer';
+                openBtn.style.padding = '8px 16px';
+                openBtn.style.background = 'var(--accent)';
+                openBtn.style.color = 'white';
+                openBtn.style.border = 'none';
+                openBtn.style.borderRadius = '6px';
+                openBtn.style.cursor = 'pointer';
+                openBtn.style.fontSize = '13px';
+                openBtn.style.fontWeight = '600';
+                openBtn.style.textDecoration = 'none';
+                openBtn.style.display = 'inline-block';
+                openBtn.textContent = 'Open in Wikipedia';
+                actions.appendChild(openBtn);
+              }
+
+              container.appendChild(actions);
+              tippyInstance.setContent(container);
+            } catch (error) {
+              console.error('Failed to load Wikipedia summary:', error);
+              const errorContent = document.createElement('div');
+              errorContent.style.padding = '16px';
+              errorContent.style.fontSize = '14px';
+              errorContent.style.color = 'var(--accent-2)';
+              errorContent.style.textAlign = 'center';
+              errorContent.textContent = 'Failed to load Wikipedia information';
+              tippyInstance.setContent(errorContent);
             }
-
-            const container = document.createElement('div');
-            container.style.maxWidth = '450px';
-            container.style.padding = '0';
-            container.style.background = 'var(--surface)';
-            container.style.borderRadius = '8px';
-            container.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-
-            // Header section
-            const header = document.createElement('div');
-            header.style.padding = '16px';
-            header.style.borderBottom = '1px solid var(--border)';
-            header.style.background = 'var(--panel)';
-            header.style.borderRadius = '8px 8px 0 0';
-            header.style.display = 'flex';
-            header.style.alignItems = 'center';
-            header.style.gap = '12px';
-
-            // Wikipedia icon/logo
-            const icon = document.createElement('div');
-            icon.style.width = '24px';
-            icon.style.height = '24px';
-            icon.style.background = 'url("https://en.wikipedia.org/static/favicon/wikipedia.ico") no-repeat center';
-            icon.style.backgroundSize = 'contain';
-            icon.style.flexShrink = '0';
-            header.appendChild(icon);
-
-            const titleContainer = document.createElement('div');
-            titleContainer.style.flex = '1';
-
-            const title = document.createElement('div');
-            title.style.fontSize = '18px';
-            title.style.fontWeight = '600';
-            title.style.color = 'var(--ink)';
-            title.style.marginBottom = '4px';
-            title.style.lineHeight = '1.3';
-            title.textContent = summary.title;
-            titleContainer.appendChild(title);
-
-            if (summary.description) {
-              const desc = document.createElement('div');
-              desc.style.fontSize = '12px';
-              desc.style.color = 'var(--muted)';
-              desc.style.textTransform = 'uppercase';
-              desc.style.letterSpacing = '0.5px';
-              desc.textContent = summary.description;
-              titleContainer.appendChild(desc);
-            }
-
-            header.appendChild(titleContainer);
-            container.appendChild(header);
-
-            // Content section
-            const content = document.createElement('div');
-            content.style.padding = '16px';
-
-            const extract = document.createElement('div');
-            extract.style.fontSize = '14px';
-            extract.style.color = 'var(--ink)';
-            extract.style.lineHeight = '1.6';
-            extract.style.marginBottom = '12px';
-            // Limit extract to first 300 characters
-            const extractText = summary.extract.length > 300
-              ? `${summary.extract.substring(0, 300)}...`
-              : summary.extract;
-            extract.textContent = extractText;
-            content.appendChild(extract);
-
-            container.appendChild(content);
-
-            // Actions section
-            const actions = document.createElement('div');
-            actions.style.padding = '12px 16px';
-            actions.style.borderTop = '1px solid var(--border)';
-            actions.style.background = 'var(--panel)';
-            actions.style.borderRadius = '0 0 8px 8px';
-            actions.style.display = 'flex';
-            actions.style.gap = '8px';
-
-            // Open in Wikipedia button
-            if (summary.fullurl) {
-              const openBtn = document.createElement('a');
-              openBtn.href = summary.fullurl;
-              openBtn.target = '_blank';
-              openBtn.rel = 'noopener noreferrer';
-              openBtn.style.padding = '8px 16px';
-              openBtn.style.background = 'var(--accent)';
-              openBtn.style.color = 'white';
-              openBtn.style.border = 'none';
-              openBtn.style.borderRadius = '6px';
-              openBtn.style.cursor = 'pointer';
-              openBtn.style.fontSize = '13px';
-              openBtn.style.fontWeight = '600';
-              openBtn.style.textDecoration = 'none';
-              openBtn.style.display = 'inline-block';
-              openBtn.textContent = 'Open in Wikipedia';
-              actions.appendChild(openBtn);
-            }
-
-            container.appendChild(actions);
-            tippyInstance.setContent(container);
-          } catch (error) {
-            console.error('Failed to load Wikipedia summary:', error);
-            const errorContent = document.createElement('div');
-            errorContent.style.padding = '16px';
-            errorContent.style.fontSize = '14px';
-            errorContent.style.color = 'var(--accent-2)';
-            errorContent.style.textAlign = 'center';
-            errorContent.textContent = 'Failed to load Wikipedia information';
-            tippyInstance.setContent(errorContent);
-          }
           })();
         },
       });
@@ -1108,11 +1109,17 @@ export function LectureEditor({
     };
 
     // Set up tippy for all existing Wikipedia hover triggers
+    let rAF_wiki: number | null = null;
     const setupAllWikipediaTippies = () => {
-      const editorElement = editor.view.dom;
-      const triggers = editorElement.querySelectorAll('.wikipedia-hover-trigger');
-      triggers.forEach((trigger) => {
-        setupWikipediaTippyForElement(trigger as HTMLElement);
+      if (!editor || rAF_wiki) return;
+      rAF_wiki = requestAnimationFrame(() => {
+        if (!editor?.view?.dom) return;
+        const editorElement = editor.view.dom;
+        const triggers = editorElement.querySelectorAll('.wikipedia-hover-trigger');
+        triggers.forEach((trigger) => {
+          setupWikipediaTippyForElement(trigger as HTMLElement);
+        });
+        rAF_wiki = null;
       });
     };
 
@@ -1161,12 +1168,12 @@ export function LectureEditor({
     }
     setMentionError(null);
     setPendingLinkSelection(selectionInfo);
-    setLinkModalOpen(true);
+    setIsLinkModalOpen(true);
   };
 
   const handleConfirmLink = async (concept: Concept, contextNote?: string) => {
     if (!lectureId || !pendingLinkSelection) {
-      setLinkModalOpen(false);
+      setIsLinkModalOpen(false);
       return;
     }
     try {
@@ -1182,7 +1189,7 @@ export function LectureEditor({
       });
       setMentions((prev) => [created, ...prev]);
       setMentionError(null);
-      setLinkModalOpen(false);
+      setIsLinkModalOpen(false);
       setPendingLinkSelection(null);
     } catch (error) {
       console.error('[LectureEditor] Failed to create mention:', error);
@@ -1244,7 +1251,164 @@ export function LectureEditor({
       }}
       ref={containerRef}
     >
-      <EditorContent editor={editor} />
+      <div style={{ pointerEvents: isPencilMode ? 'none' : 'auto' }}>
+        <EditorContent editor={editor} />
+      </div>
+
+      <PencilCanvas
+        overlay
+        transparent
+        readOnly={!isPencilMode}
+        initialStrokes={annotations ? JSON.parse(annotations) : []}
+        onStrokesChange={(strokes) => {
+          if (onAnnotationsChange) {
+            onAnnotationsChange(JSON.stringify(strokes));
+          }
+        }}
+        onClose={onTogglePencilMode}
+        title="Handwriting Mode"
+        paperType={paperType}
+        onIngest={async (data) => {
+          if (!editor) return;
+          // Anchor to current block
+          const { from } = editor.state.selection;
+          const resolvedPos = editor.state.doc.resolve(from);
+          let blockPos = -1;
+          let blockNode = null;
+          for (let d = resolvedPos.depth; d >= 0; d--) {
+            const node = resolvedPos.node(d);
+            if (node.isBlock) {
+              blockNode = node;
+              blockPos = resolvedPos.before(d);
+              break;
+            }
+          }
+          if (blockNode && blockPos !== -1) {
+            editor.view.dispatch(
+              editor.view.state.tr.setNodeMarkup(blockPos, undefined, {
+                ...blockNode.attrs,
+                ink: data.image_data
+              })
+            );
+          }
+
+          // Also ingest into graph knowledge
+          try {
+            await fetch('/api/lectures/ingest-ink', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                ...data,
+                lecture_title: lectureId ? `Lecture ${lectureId}` : "Handwritten Notes"
+              })
+            });
+          } catch (e) {
+            console.error("Knowledge ingestion fail:", e);
+          }
+        }}
+        onIntent={(intent) => {
+          if (intent.type === 'search') {
+            // Handle search intent
+            const bounds = intent.bounds || intent.boundingBox;
+            if (!bounds) return;
+
+            // Exit pencil mode so the search bubble is visible
+            if (onTogglePencilMode) onTogglePencilMode();
+
+            const { x, y, w, h } = bounds;
+            const centerX = x + w / 2;
+            const centerY = y + h / 2;
+
+            // Set search position for bubble
+            if (containerRef.current) {
+              const rect = containerRef.current.getBoundingClientRect();
+              setSearchPosition({ x: rect.left + centerX, y: rect.top + centerY });
+            }
+
+            // Perform search
+            setIsSearching(true);
+
+            // Call GPT-4o to extract text from image, then search
+            fetch('/api/brain-web/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: 'Extract the main term or concept from this handwritten text. Return only the term, nothing else.',
+                image: intent.snippetUrl,
+                mode: 'graphrag',
+                response_prefs: { mode: 'compact', max_output_tokens: 50 },
+              }),
+            })
+              .then(res => res.json())
+              .then(data => {
+                const extractedTerm = data.answer?.trim() || '';
+                if (!extractedTerm) {
+                  setIsSearching(false);
+                  return;
+                }
+
+                // Now search for this term
+                return fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/ai/semantic-search`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ message: extractedTerm, limit: 5 }),
+                });
+              })
+              .then(res => res?.json())
+              .then(data => {
+                if (data?.nodes) {
+                  setSearchResults(data.nodes.map((node: any, idx: number) => ({
+                    ...node,
+                    score: data.scores?.[idx] || 0,
+                  })));
+                }
+                setIsSearching(false);
+              })
+              .catch(err => {
+                console.error('Search failed:', err);
+                setIsSearching(false);
+              });
+          } else if (intent.type === 'lasso') {
+            const bounds = intent.bounds || intent.boundingBox;
+            if (!bounds) return;
+
+            // Exit pencil mode so the chat sidebar is visible
+            if (onTogglePencilMode) onTogglePencilMode();
+
+            const { x, y, w, h } = bounds;
+            const centerX = x + w / 2;
+            const centerY = y + h / 2;
+
+            if (editor && containerRef.current) {
+              const rect = containerRef.current.getBoundingClientRect();
+              const viewportX = rect.left + centerX;
+              const viewportY = rect.top + centerY;
+
+              const pos = editor.view.posAtCoords({ left: viewportX, top: viewportY });
+              let textContent = "";
+
+              if (pos) {
+                // Find if there's a concept or text here
+                const $pos = editor.state.doc.resolve(pos.pos);
+                const node = $pos.nodeAfter || $pos.nodeBefore;
+                textContent = node?.textContent || "";
+              }
+
+              const query = textContent
+                ? `Explain the significance of "${textContent}" in the context of this lecture.`
+                : `Explain this. (I've circled this part of my notes)`;
+
+              // Small delay to let the sidebar pull up smoothly before triggering chat
+              setTimeout(() => {
+                onChatTrigger?.(query, intent.snippetUrl);
+              }, 400);
+            }
+          } else if (intent.type === 'underline') {
+            alert("Priority assigned! Sentence marked as 'Important' for review.");
+          }
+        }}
+      />
+
       {editor && (
         <FloatingToolbar
           editor={editor}
@@ -1253,8 +1417,38 @@ export function LectureEditor({
           selectionError={selectionError}
           linkDisabledReason={linkDisabledReason}
           position={toolbarPosition}
+          onExplain={() => {
+            const selectedText = editor.state.doc.textBetween(
+              editor.state.selection.from,
+              editor.state.selection.to,
+              ' '
+            );
+            if (selectedText && onChatTrigger) {
+              onChatTrigger(`Explain: "${selectedText}"`);
+            }
+          }}
+          onAddToChat={() => {
+            const selectedText = editor.state.doc.textBetween(
+              editor.state.selection.from,
+              editor.state.selection.to,
+              ' '
+            );
+            if (selectedText && onChatTrigger) {
+              onChatTrigger(selectedText);
+            }
+          }}
+          onTutor={() => {
+            if (selectionInfo && onChatTrigger) {
+              onChatTrigger(
+                `Tutor me on this: "${selectionInfo.surfaceText}"`,
+                undefined,
+                { blockId: selectionInfo.blockId, blockText: selectionInfo.blockText }
+              );
+            }
+          }}
         />
       )}
+
       {mentionError && (
         <div
           style={{
@@ -1273,12 +1467,29 @@ export function LectureEditor({
           {mentionError}
         </div>
       )}
+
+      {searchPosition && (searchResults.length > 0 || isSearching) && (
+        <FloatingSearchBubble
+          results={searchResults}
+          position={searchPosition}
+          isLoading={isSearching}
+          onClose={() => {
+            setSearchPosition(null);
+            setSearchResults([]);
+          }}
+          onViewInGraph={(nodeId) => {
+            // Navigate to graph view with this node
+            window.location.href = `/graph?node=${nodeId}`;
+          }}
+        />
+      )}
+
       <ConceptLinkModal
-        isOpen={linkModalOpen}
+        isOpen={isLinkModalOpen}
         selectionText={pendingLinkSelection?.surfaceText || ''}
         graphId={graphId}
         onClose={() => {
-          setLinkModalOpen(false);
+          setIsLinkModalOpen(false);
           setPendingLinkSelection(null);
         }}
         onLink={handleConfirmLink}
@@ -1289,16 +1500,16 @@ export function LectureEditor({
           margin: 0 auto;
           padding: 40px 24px;
           line-height: 1.7;
-          color: #000000 !important;
+          color: ${paperType === 'dark' ? '#ffffff' : '#000000'} !important;
         }
 
         .lecture-editor-content .ProseMirror {
           outline: none;
-          color: #000000 !important;
+          color: ${paperType === 'dark' ? '#ffffff' : '#000000'} !important;
         }
 
         .lecture-editor-content .ProseMirror p {
-          color: #000000 !important;
+          color: ${paperType === 'dark' ? '#ffffff' : '#000000'} !important;
         }
 
         .lecture-editor-content .ProseMirror h1,
@@ -1307,7 +1518,7 @@ export function LectureEditor({
         .lecture-editor-content .ProseMirror h4,
         .lecture-editor-content .ProseMirror h5,
         .lecture-editor-content .ProseMirror h6 {
-          color: #000000 !important;
+          color: ${paperType === 'dark' ? '#ffffff' : '#000000'} !important;
         }
 
         .lecture-editor-content .ProseMirror p {
@@ -1408,6 +1619,26 @@ export function LectureEditor({
           text-decoration: none;
         }
 
+        .has-ink-annotation {
+          position: relative;
+        }
+
+        .has-ink-annotation::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background-image: var(--ink-url);
+          background-size: contain;
+          background-repeat: no-repeat;
+          background-position: center;
+          pointer-events: none;
+          z-index: 10;
+          opacity: 0.8;
+        }
+
         .concept-mention:hover {
           background: var(--panel);
           border: 1px solid var(--border);
@@ -1422,7 +1653,7 @@ export function LectureEditor({
         }
 
         .concept-hover-trigger {
-          cursor: help !important;
+          cursor: pointer !important;
           border-bottom: 1px dotted var(--accent) !important;
           transition: all 0.2s;
           position: relative;
@@ -1435,7 +1666,7 @@ export function LectureEditor({
         }
 
         .wikipedia-hover-trigger {
-          cursor: help !important;
+          cursor: pointer !important;
           border-bottom: 1px dotted rgba(255, 200, 0, 0.5) !important;
           transition: all 0.2s;
           position: relative;
@@ -1464,6 +1695,6 @@ export function LectureEditor({
           background: rgba(243, 156, 18, 0.12);
         }
       `}</style>
-    </div>
+    </div >
   );
 }

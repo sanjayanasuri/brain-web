@@ -25,3 +25,4 @@ export * from './api/research';
 export * from './api/admin';
 export * from './api/feedback';
 export * from './api/signals';
+export * from './api/web-search';

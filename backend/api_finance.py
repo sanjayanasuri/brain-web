@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from db_neo4j import get_neo4j_session
 from auth import require_auth
-from services_browser_use import execute_skill, BrowserUseAPIError
 from services_resources import create_resource, link_resource_to_concept
 from services_graph import create_concept, get_concept_by_name
 from models import ConceptCreate, Resource, FinanceSourceRun
@@ -18,10 +17,10 @@ from models import ConceptCreate, Resource, FinanceSourceRun
 router = APIRouter(prefix="/finance", tags=["finance"])
 logger = logging.getLogger("brain_web")
 
-DISCOVERY_SKILL_ID = os.environ.get("BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID")
-TRACKER_SKILL_ID = os.environ.get("BROWSER_USE_FINANCE_TRACKER_SKILL_ID")
-# Fallback to TRACKER_SKILL_ID if BROWSER_USE_FINANCE_SKILL_ID is not set
-FINANCE_SKILL_ID = os.environ.get("BROWSER_USE_FINANCE_SKILL_ID") or TRACKER_SKILL_ID
+# Skill IDs removed as browser_use service is deprecated
+DISCOVERY_SKILL_ID = None
+TRACKER_SKILL_ID = None
+FINANCE_SKILL_ID = None
 
 
 # -------------------- Models --------------------
@@ -162,7 +161,7 @@ def _validate_skill_output(skill_out: Dict[str, Any]) -> None:
     if missing_keys:
         raise HTTPException(
             status_code=502,
-            detail=f"Invalid skill output: missing keys {missing_keys}. Browser Use skill may have failed."
+            detail=f"Invalid skill output: missing keys {missing_keys}."
         )
 
 
@@ -276,16 +275,16 @@ def _list_all_tracked_tickers(session) -> List[FinanceTrackingResponse]:
 def _get_latest_snapshots_for_tickers(session, tickers: List[str]) -> List[LatestSnapshotMetadata]:
     """
     Get the latest snapshot metadata for each ticker.
-    Finds resources with source='browser_use' and metadata.identity.ticker matching.
+    Finds resources with source='web' and metadata.identity.ticker matching.
     """
     if not tickers:
         return []
     
-    # Query all browser_use resources and filter in Python
+    # Query all resources and filter in Python
     # This is simpler and more reliable than trying to parse JSON in Cypher
     query = """
     MATCH (r:Resource)
-    WHERE r.source = 'browser_use'
+    WHERE r.source = 'web'
       AND r.metadata_json IS NOT NULL
     RETURN r.resource_id AS resource_id,
            r.created_at AS snapshot_fetched_at,
@@ -396,57 +395,7 @@ def discover_companies(
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    if not DISCOVERY_SKILL_ID:
-        raise HTTPException(status_code=500, detail="BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID not configured")
-
-    try:
-        skill_out = execute_skill(
-            DISCOVERY_SKILL_ID,
-            parameters={
-                "domain_query": req.domain_query,
-                "limit": req.limit,
-                "filters": req.filters,
-            },
-        )
-    except BrowserUseAPIError as e:
-        # Preserve HTTP status code from Browser Use API
-        status_code = 502 if not e.status_code or e.status_code >= 500 else 400
-        raise HTTPException(
-            status_code=status_code,
-            detail=f"Failed to execute Browser Use skill: {str(e)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to execute Browser Use skill: {str(e)}"
-        )
-
-    resource = create_resource(
-        session=session,
-        kind="web_link",
-        url=f"browseruse://skills/{DISCOVERY_SKILL_ID}?domain={req.domain_query}",
-        title=f"Company discovery: {req.domain_query}",
-        caption=_caption_from_discovery(skill_out),
-        source="browser_use",
-        metadata={
-            "schema": "finance_discovery_v1",
-            "retrieved_at": _now_iso(),
-            "input": req.model_dump(),
-            "output": skill_out,
-        },
-    )
-
-    if req.concept_id:
-        link_resource_to_concept(
-            session=session,
-            concept_id=req.concept_id,
-            resource_id=resource.resource_id,
-        )
-
-    return {
-        "resource": resource.model_dump(),
-        "candidates": skill_out.get("companies", []),
-    }
+    raise HTTPException(status_code=501, detail="Finance discovery is currently disabled (Browser Use integration passed).")
 
 
 @router.post("/track", response_model=FinanceTrackResponse)
@@ -455,116 +404,7 @@ def track_company(
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    """
-    Track a company ticker using Browser Use finance tracker skill.
-    
-    Creates/upserts a Company concept and stores the finance snapshot as a Resource.
-    The Resource is linked to the Company concept and becomes retrievable by GraphRAG.
-    """
-    if not TRACKER_SKILL_ID:
-        raise HTTPException(
-            status_code=500,
-            detail="BROWSER_USE_FINANCE_TRACKER_SKILL_ID not configured. Please set the environment variable."
-        )
-
-    # Execute Browser Use skill with timing
-    start_time = time.time()
-    try:
-        skill_out = execute_skill(
-            TRACKER_SKILL_ID,
-            parameters={
-                "ticker": req.ticker,
-                "news_window_days": req.news_window_days,
-                "max_news_items": req.max_news_items,
-                "sources_profile": req.sources_profile,
-            },
-        )
-        latency_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Browser Use skill execution succeeded in {latency_ms}ms for ticker {req.ticker}")
-    except BrowserUseAPIError as e:
-        latency_ms = int((time.time() - start_time) * 1000)
-        error_msg = str(e)
-        logger.error(
-            f"Browser Use skill execution failed after {latency_ms}ms for ticker {req.ticker}: {error_msg}"
-        )
-        # Preserve HTTP status code from Browser Use API
-        status_code = 502 if not e.status_code or e.status_code >= 500 else 400
-        raise HTTPException(
-            status_code=status_code,
-            detail=f"Browser Use skill execution failed: {error_msg}"
-        )
-    except Exception as e:
-        latency_ms = int((time.time() - start_time) * 1000)
-        error_msg = str(e)
-        logger.error(
-            f"Browser Use skill execution failed after {latency_ms}ms for ticker {req.ticker}: {error_msg}"
-        )
-        # Return 502 with clear error message
-        raise HTTPException(
-            status_code=502,
-            detail=f"Browser Use skill execution failed: {error_msg}"
-        )
-
-    # Validate skill output structure
-    try:
-        _validate_skill_output(skill_out)
-    except HTTPException:
-        raise  # Re-raise validation errors
-    except Exception as e:
-        logger.error(f"Unexpected error validating skill output: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Invalid skill output format: {str(e)}"
-        )
-
-    # Extract company info from skill output
-    identity = skill_out.get("identity", {}) or {}
-    company_name = identity.get("name")
-    exchange = identity.get("exchange")
-    sector = identity.get("sector")
-    industry = identity.get("industry")
-
-    # Upsert Company concept (or use provided concept_id)
-    if req.concept_id:
-        concept_id = req.concept_id
-        logger.info(f"Using provided concept_id: {concept_id}")
-    else:
-        concept_id = _upsert_company_concept(
-            session=session,
-            ticker=req.ticker,
-            company_name=company_name,
-            exchange=exchange,
-            sector=sector,
-            industry=industry,
-        )
-
-    # Create Resource with full skill output in metadata
-    caption = _caption_from_tracker(skill_out)
-    resource = create_resource(
-        session=session,
-        kind="web_link",
-        url=f"browseruse://skills/{TRACKER_SKILL_ID}?ticker={req.ticker}",
-        title=f"Finance snapshot: {req.ticker}",
-        caption=caption,
-        source="browser_use",
-        metadata=skill_out,  # Full skill output stored here
-    )
-
-    # Link Resource to Concept
-    link_resource_to_concept(
-        session=session,
-        concept_id=concept_id,
-        resource_id=resource.resource_id,
-    )
-
-    logger.info(
-        f"Finance track completed: ticker={req.ticker}, concept_id={concept_id}, resource_id={resource.resource_id}"
-    )
-
-    return FinanceTrackResponse(
-        concept_id=concept_id,
-        resource=resource,
-    )
+    raise HTTPException(status_code=501, detail="Finance tracking is currently disabled (Browser Use integration passed).")
 
 
 @router.post("/snapshot", response_model=Resource)
@@ -573,100 +413,7 @@ def fetch_snapshot(
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    """
-    Fetch a finance snapshot for a ticker and store it as a Resource.
-    If concept_id is provided, link the resource to that concept.
-    """
-    skill_id = FINANCE_SKILL_ID or TRACKER_SKILL_ID
-    if not skill_id:
-        raise HTTPException(
-            status_code=500,
-            detail="BROWSER_USE_FINANCE_SKILL_ID or BROWSER_USE_FINANCE_TRACKER_SKILL_ID not configured. Please set the environment variable."
-        )
-
-    # Execute Browser Use skill
-    start_time = time.time()
-    try:
-        skill_out = execute_skill(
-            skill_id,
-            parameters={
-                "ticker": req.ticker,
-                "news_window_days": req.news_window_days,
-                "max_news_items": req.max_news_items,
-            },
-        )
-        latency_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Browser Use skill execution succeeded in {latency_ms}ms for ticker {req.ticker}")
-    except BrowserUseAPIError as e:
-        latency_ms = int((time.time() - start_time) * 1000)
-        error_msg = str(e)
-        logger.error(
-            f"Browser Use skill execution failed after {latency_ms}ms for ticker {req.ticker}: {error_msg}"
-        )
-        # Preserve HTTP status code from Browser Use API
-        status_code = 502 if not e.status_code or e.status_code >= 500 else 400
-        raise HTTPException(
-            status_code=status_code,
-            detail=f"Browser Use skill execution failed: {error_msg}"
-        )
-    except Exception as e:
-        latency_ms = int((time.time() - start_time) * 1000)
-        error_msg = str(e)
-        logger.error(
-            f"Browser Use skill execution failed after {latency_ms}ms for ticker {req.ticker}: {error_msg}"
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Browser Use skill execution failed: {error_msg}"
-        )
-
-    # Validate skill output structure
-    try:
-        _validate_skill_output(skill_out)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error validating skill output: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Invalid skill output format: {str(e)}"
-        )
-
-    # Extract company info for title
-    identity = skill_out.get("identity", {}) or {}
-    company_name = identity.get("name")
-    as_of = skill_out.get("price", {}).get("as_of") or skill_out.get("size", {}).get("as_of") or ""
-    
-    # Generate title with as_of date
-    title = f"Finance snapshot: {req.ticker}"
-    if as_of:
-        title += f" ({as_of})"
-    
-    # Generate caption
-    caption = _caption_from_tracker(skill_out)
-    
-    # Create Resource
-    resource = create_resource(
-        session=session,
-        kind="web_link",
-        url=f"browseruse://skills/{skill_id}?ticker={req.ticker}",
-        title=title,
-        caption=caption,
-        source="browser_use",
-        metadata=skill_out,  # Full skill output stored here
-    )
-
-    # Link Resource to Concept if concept_id provided
-    if req.concept_id:
-        link_resource_to_concept(
-            session=session,
-            concept_id=req.concept_id,
-            resource_id=resource.resource_id,
-        )
-        logger.info(f"Linked snapshot resource {resource.resource_id} to concept {req.concept_id}")
-
-    logger.info(f"Finance snapshot created: ticker={req.ticker}, resource_id={resource.resource_id}")
-    return resource
+    raise HTTPException(status_code=501, detail="Finance snapshot is currently disabled (Browser Use integration passed).")
 
 
 @router.get("/tracking", response_model=Optional[FinanceTrackingResponse])
@@ -993,9 +740,6 @@ def run_finance_acquisition(
             detail=f"Company concept not found for ticker {ticker_upper}. Please track the company first using POST /finance/track"
         )
     
-    # Get Browser Use IR skill ID from env
-    browser_use_ir_skill_id = os.environ.get("BROWSER_USE_FINANCE_IR_SKILL_ID")
-    
     # Run acquisition
     try:
         run = run_company_acquisition(
@@ -1005,7 +749,6 @@ def run_finance_acquisition(
             sources=req.sources,
             since_days=req.since_days,
             limit_per_source=req.limit_per_source,
-            browser_use_ir_skill_id=browser_use_ir_skill_id,
         )
         
         message = f"Acquisition completed: {run.snapshots_created} snapshots, {run.change_events_created} changes detected"

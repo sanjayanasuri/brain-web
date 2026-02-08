@@ -463,7 +463,7 @@ def retrieve(
         resources = get_resources_for_concept(session, anchor_node_id)
         finance_resources = [
             r for r in resources
-            if r.source == "browser_use" and r.metadata and isinstance(r.metadata, dict)
+            if r.source == "web" and r.metadata and isinstance(r.metadata, dict)
         ]
         if finance_resources:
             context_parts.append("## Finance Snapshots")

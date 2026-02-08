@@ -299,7 +299,7 @@ def explore_workflow(
 
 class SynthesizeRequest(BaseModel):
     """Request to synthesize information."""
-    synthesize_type: str = Field(..., description="Type: 'answer', 'memo', 'summary', 'claims'")
+    synthesize_type: str = Field(..., description="Type: 'answer', 'memo', 'summary', 'claims', 'mcq'")
     # For answer/summary
     query: Optional[str] = None
     context_ids: Optional[List[str]] = None
@@ -322,7 +322,7 @@ class SynthesizeResponse(BaseModel):
 
 
 @router.post("/synthesize", response_model=SynthesizeResponse)
-def synthesize_workflow(
+async def synthesize_workflow(
     request: SynthesizeRequest,
     auth: dict = Depends(require_auth),
     session: Session = Depends(get_neo4j_session),
@@ -439,6 +439,25 @@ def synthesize_workflow(
             }
             next_actions = ["explore_claims", "synthesize_validation"]
             
+        elif request.synthesize_type == "mcq":
+            if not request.query:
+                raise HTTPException(status_code=400, detail="query (topic) required for MCQ synthesis")
+            
+            from services_mcq_generation import generate_mcq_for_topic
+            
+            task_spec_dict = await generate_mcq_for_topic(
+                session=session,
+                topic=request.query,
+                graph_id=graph_id,
+                branch_id=branch_id,
+            )
+            
+            result = {
+                "task_spec": task_spec_dict,
+                "workflow": "practice",
+            }
+            next_actions = ["start_session", "explore_topic"]
+            
         else:
             raise HTTPException(status_code=400, detail=f"Unknown synthesize_type: {request.synthesize_type}")
         
@@ -489,7 +508,7 @@ def get_workflow_status(
         },
         synthesize={
             "available": True,
-            "types": ["answer", "memo", "summary", "claims"],
+            "types": ["answer", "memo", "summary", "claims", "mcq"],
             "graph_id": graph_id,
             "branch_id": branch_id,
         },

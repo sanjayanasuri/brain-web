@@ -22,7 +22,7 @@ export interface ActivityEvent {
     };
 }
 
-export type VisualNode = Concept & { domain: string; type: string; x?: number; y?: number };
+export type VisualNode = Concept & { domain: string; type: string; x?: number; y?: number; __isNew?: boolean; __createdAt?: number };
 
 export type VisualLink = {
     source: VisualNode;

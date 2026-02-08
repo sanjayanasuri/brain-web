@@ -1,9 +1,9 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useGraph } from '../GraphContext';
-import { useChatState } from './useChatState';
-import { useUIState } from './useUIState';
+import { useChat } from './useChatState';
+import { useUI } from './useUIState';
 import { EvidenceItem } from '../../../types/evidence';
 
 export function useEvidenceHighlight(
@@ -14,8 +14,8 @@ export function useEvidenceHighlight(
 ) {
     const graph = useGraph();
     const { graphData, setExpandedNodes } = graph;
-    const chat = useChatState();
-    const ui = useUIState();
+    const chat = useChat();
+    const ui = useUI();
 
     const clearEvidenceHighlight = useCallback(() => {
         chat.actions.setShowingEvidence(false);
@@ -205,10 +205,15 @@ export function useEvidenceHighlight(
         }
     }, [applyEvidenceHighlight, graphData.nodes, ui.state.zoomTransform, ui.state.zoomLevel, centerNodeInVisibleArea, chat.actions, graphRef]);
 
-    return {
+    return useMemo(() => ({
         clearEvidenceHighlight,
         applyEvidenceHighlight,
         applyEvidenceHighlightWithRetry,
         applySectionEvidenceHighlight
-    };
+    }), [
+        clearEvidenceHighlight,
+        applyEvidenceHighlight,
+        applyEvidenceHighlightWithRetry,
+        applySectionEvidenceHighlight
+    ]);
 }

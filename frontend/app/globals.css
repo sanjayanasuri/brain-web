@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Crimson+Pro:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 @import url('./styles/navigation.css');
+@import url('./styles/responsive.css');
 
 :root {
   /* Core Colors - Academic & Professional */
@@ -13,7 +14,7 @@
   --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
   --page-bg: linear-gradient(180deg, #fafbfc 0%, #f8fafc 60%, #ffffff 100%);
   --background: #ffffff;
-  
+
   /* Section Colors - Different colors for different study areas */
   --section-concepts: #2563eb;
   --section-notes: #059669;
@@ -21,7 +22,7 @@
   --section-connections: #7c3aed;
   --section-activity: #ea580c;
   --section-research: #0891b2;
-  
+
   /* Academic Color Palette */
   --academic-blue: #2563eb;
   --academic-purple: #7c3aed;
@@ -29,13 +30,13 @@
   --academic-orange: #ea580c;
   --academic-red: #dc2626;
   --academic-teal: #0891b2;
-  
+
   /* Typography Scale */
   --font-display: 'Inter', system-ui, -apple-system, sans-serif;
   --font-body: 'Inter', system-ui, -apple-system, sans-serif;
   --font-serif: 'Crimson Pro', Georgia, serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
-  
+
   /* Spacing Scale */
   --spacing-xs: 4px;
   --spacing-sm: 8px;
@@ -56,7 +57,7 @@
   --shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   --page-bg: linear-gradient(180deg, #111827 0%, #1f2937 60%, #111827 100%);
   --background: #111827;
-  
+
   /* Section Colors - Dark Mode */
   --section-concepts: #3b82f6;
   --section-notes: #10b981;
@@ -64,7 +65,7 @@
   --section-connections: #8b5cf6;
   --section-activity: #f97316;
   --section-research: #06b6d4;
-  
+
   /* Academic Color Palette - Dark Mode */
   --academic-blue: #3b82f6;
   --academic-purple: #8b5cf6;
@@ -110,7 +111,12 @@ body {
 }
 
 /* Typography Hierarchy */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: var(--font-display);
   font-weight: 600;
   line-height: 1.2;
@@ -208,6 +214,67 @@ a {
     radial-gradient(circle at 80% 10%, rgba(239, 71, 111, 0.08), transparent 22%),
     linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.4) 100%);
   transition: background 0.3s ease;
+  overflow: hidden;
+}
+
+/* iPad Split View / Narrow Viewport Support */
+@media (max-width: 1024px) {
+  .app-shell {
+    padding: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .graph-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .node-card {
+    width: calc(100% - 32px) !important;
+    right: 16px !important;
+    bottom: 16px !important;
+    max-width: none !important;
+  }
+
+  .context-panel {
+    max-width: 100% !important;
+    border-left: none !important;
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* Pencil Intent Animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 15px) scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+.pencil-intent-chip {
+  animation: fadeInUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+}
+
+.selection-action-menu {
+  animation: scaleIn 0.2s cubic-bezier(0, 0, 0.2, 1) forwards;
 }
 
 :root.dark .app-shell {
@@ -230,16 +297,20 @@ a {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 10px; /* Reduced gap */
-  margin-bottom: 0; /* No margin */
+  gap: 10px;
+  /* Reduced gap */
+  margin-bottom: 0;
+  /* No margin */
 }
 
 .eyebrow {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
-  font-size: 11px; /* Slightly smaller */
-  margin-bottom: 2px; /* Reduced margin */
+  font-size: 11px;
+  /* Slightly smaller */
+  margin-bottom: 2px;
+  /* Reduced margin */
 }
 
 .title {
@@ -295,8 +366,10 @@ a {
 
 .graph-controls {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); /* Slightly smaller */
-  gap: 6px; /* Reduced gap */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  /* Slightly smaller */
+  gap: 6px;
+  /* Reduced gap */
 }
 
 .graph-controls--compact {
@@ -345,7 +418,8 @@ a {
 }
 
 .control-card--compact .control-caption {
-  display: none; /* Hide descriptions in compact mode */
+  display: none;
+  /* Hide descriptions in compact mode */
 }
 
 .control-header {
@@ -363,8 +437,10 @@ a {
 
 .control-caption {
   color: var(--muted);
-  font-size: 12px; /* Reduced from 13px */
-  margin-top: 4px; /* Reduced from 6px */
+  font-size: 12px;
+  /* Reduced from 13px */
+  margin-top: 4px;
+  /* Reduced from 6px */
 }
 
 .legend {
@@ -420,11 +496,15 @@ a {
 .explorer-toolbar {
   width: 100%;
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: var(--spacing-md) var(--spacing-lg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
   box-shadow: var(--shadow);
   backdrop-filter: blur(12px);
+  margin: 0;
 }
 
 .explorer-toolbar__row {
@@ -555,7 +635,8 @@ a {
 .graph-canvas {
   position: relative;
   flex: 1 1 auto;
-  min-height: 380px; /* Enough to feel substantial, but not greedy */
+  min-height: 380px;
+  /* Enough to feel substantial, but not greedy */
   background: radial-gradient(circle at 30% 20%, rgba(17, 138, 178, 0.08), transparent 40%),
     radial-gradient(circle at 70% 30%, rgba(239, 71, 111, 0.08), transparent 40%),
     linear-gradient(145deg, #f4f7fb 0%, #eef4ff 50%, #fbfdff 100%);
@@ -708,28 +789,35 @@ a {
   background: var(--surface);
   border-top: 1px solid var(--border);
   border-radius: 26px 26px 0 0;
-  padding: 10px 16px 12px; /* Reduced padding */
+  padding: 10px 16px 12px;
+  /* Reduced padding */
   display: flex;
   flex-direction: column;
-  gap: 2px; /* Minimal gap - everything should be tight */
+  gap: 2px;
+  /* Minimal gap - everything should be tight */
   box-shadow: 0 -18px 50px rgba(15, 23, 42, 0.1);
   overflow: hidden;
-  min-height: 30vh; /* Higher by default */
+  min-height: 30vh;
+  /* Higher by default */
   transition: min-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), flex-basis 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  max-height: 100vh; /* Prevent overflow */
+  max-height: 100vh;
+  /* Prevent overflow */
 }
 
 .chat-pane--collapsed {
-  min-height: 30vh !important; /* Default size - ensure it's enforced */
+  min-height: 30vh !important;
+  /* Default size - ensure it's enforced */
 }
 
 .chat-pane--expanded {
-  min-height: 45vh !important; /* Expanded size to show answer, questions, and search bar - all components visible */
+  min-height: 45vh !important;
+  /* Expanded size to show answer, questions, and search bar - all components visible */
   flex-basis: 50% !important;
 }
 
 .chat-pane--maximized {
-  min-height: 75vh !important; /* Takes up most of the screen for long answers */
+  min-height: 75vh !important;
+  /* Takes up most of the screen for long answers */
   flex-basis: 75% !important;
 }
 
@@ -738,8 +826,10 @@ a {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 0; /* No spacing below header */
-  flex-shrink: 0; /* Never shrink - always visible */
+  margin-bottom: 0;
+  /* No spacing below header */
+  flex-shrink: 0;
+  /* Never shrink - always visible */
 }
 
 .chat-header h2 {
@@ -780,11 +870,14 @@ a {
 }
 
 .chat-stream {
-  flex: 1 1 auto; /* Take available space, allow scrolling */
+  flex: 1 1 auto;
+  /* Take available space, allow scrolling */
   display: flex;
   flex-direction: column;
-  gap: 10px; /* Reduced from 12px */
-  padding: 0; /* No padding */
+  gap: 10px;
+  /* Reduced from 12px */
+  padding: 0;
+  /* No padding */
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
@@ -846,8 +939,10 @@ a {
   align-items: flex-end;
   gap: 10px;
   min-height: 0;
-  margin-top: 0; /* No spacing above input */
-  flex-shrink: 0; /* Never shrink - always visible */
+  margin-top: 0;
+  /* No spacing above input */
+  flex-shrink: 0;
+  /* Never shrink - always visible */
 }
 
 .splitter {
@@ -862,12 +957,15 @@ a {
   flex: 1;
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 8px 12px; /* Reduced from 10px */
+  padding: 8px 12px;
+  /* Reduced from 10px */
   font-family: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
-  font-size: 13px; /* Reduced from 14px */
+  font-size: 13px;
+  /* Reduced from 14px */
   line-height: 1.5;
   resize: none;
-  min-height: 52px; /* Reduced from 64px */
+  min-height: 52px;
+  /* Reduced from 64px */
   box-shadow: var(--shadow);
 }
 
@@ -958,6 +1056,7 @@ a {
   0% {
     background-position: -60% 0;
   }
+
   100% {
     background-position: 120% 0;
   }
@@ -968,6 +1067,7 @@ a {
     opacity: 0;
     transform: translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -1007,44 +1107,51 @@ button {
   .graph-header {
     flex-direction: column;
   }
+
   .control-card--legend {
     grid-column: span 1;
   }
+
   .chat-bubble {
     max-width: 100%;
   }
-  
+
   /* Improve touch targets for mobile */
-  button, .pill, .chip, .explorer-btn {
-    min-height: 44px; /* iOS recommended touch target size */
+  button,
+  .pill,
+  .chip,
+  .explorer-btn {
+    min-height: 44px;
+    /* iOS recommended touch target size */
     min-width: 44px;
   }
-  
+
   /* Adjust padding for mobile */
   .graph-pane {
     padding: 12px 14px 10px;
   }
-  
+
   .node-card {
     width: calc(100% - 36px);
     max-width: 100%;
     right: 18px;
     left: 18px;
   }
-  
+
   .chat-pane {
     padding: 8px 12px 10px;
   }
-  
+
   .chat-input {
-    font-size: 16px; /* Prevent zoom on iOS */
+    font-size: 16px;
+    /* Prevent zoom on iOS */
     min-height: 48px;
   }
-  
+
   .title {
     font-size: 18px;
   }
-  
+
   .subtitle {
     font-size: 11px;
   }
@@ -1056,122 +1163,123 @@ button {
     padding: 10px 12px 8px;
     gap: 8px;
   }
-  
+
   .title {
     font-size: 16px;
   }
-  
+
   .subtitle {
     font-size: 10px;
   }
-  
+
   .stat-pill {
     min-width: 60px;
     padding: 6px 10px;
   }
-  
+
   .stat-value {
     font-size: 14px;
   }
-  
+
   .stat-label {
     font-size: 11px;
   }
-  
+
   .graph-controls {
     grid-template-columns: 1fr;
     gap: 8px;
   }
-  
+
   .node-card {
     padding: 12px 14px;
     border-radius: 12px;
   }
-  
+
   .node-card__header h3 {
     font-size: 16px;
   }
-  
+
   .chat-pane {
     padding: 8px 10px 8px;
     min-height: 35vh;
   }
-  
+
   .chat-pane--expanded {
     min-height: 50vh !important;
   }
-  
+
   .chat-pane--maximized {
     min-height: 80vh !important;
   }
-  
+
   .chat-header h2 {
     font-size: 16px;
   }
-  
+
   .chat-text {
     font-size: 14px;
   }
-  
+
   .chat-input {
-    font-size: 16px; /* Prevent zoom on iOS */
+    font-size: 16px;
+    /* Prevent zoom on iOS */
     padding: 10px 12px;
     min-height: 48px;
   }
-  
+
   .send-btn {
     padding: 10px 14px;
     font-size: 14px;
   }
-  
+
   .explorer-toolbar {
     padding: 8px 10px;
   }
-  
+
   .explorer-toolbar__row {
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
   }
-  
+
   .explorer-toolbar__group {
     flex-wrap: wrap;
     gap: 8px;
   }
-  
+
   .explorer-toolbar__group--right {
     margin-left: 0;
   }
-  
+
   .explorer-stat {
     min-width: 60px;
     padding: 4px 8px;
   }
-  
+
   .explorer-stat__value {
     font-size: 13px;
   }
-  
+
   .explorer-stat__label {
     font-size: 10px;
   }
-  
+
   /* Stack chips vertically on very small screens */
   .chips {
     flex-direction: column;
     gap: 6px;
   }
-  
+
   .chip {
     width: 100%;
     justify-content: center;
   }
-  
+
   /* Improve spacing for mobile */
   .home-grid {
     gap: 16px;
   }
-  
+
   /* Ensure all inputs are at least 16px to prevent iOS zoom */
   input[type="text"],
   input[type="search"],
@@ -1181,13 +1289,13 @@ button {
   select {
     font-size: 16px !important;
   }
-  
+
   /* Improve touch scrolling on iOS */
   .chat-stream,
   .resource-list {
     -webkit-overflow-scrolling: touch;
   }
-  
+
   /* Better spacing for suggestion cards on mobile */
   .suggestion-card {
     padding: 12px !important;
@@ -1216,7 +1324,8 @@ button {
 }
 
 .chat-bubble {
-  max-width: min(70%, 640px); /* wide on desktop, still constrained */
+  max-width: min(70%, 640px);
+  /* wide on desktop, still constrained */
 }
 
 /* Resource styles */
@@ -1295,10 +1404,12 @@ button {
     background-color: var(--background);
     box-shadow: 0 0 0 0 rgba(17, 138, 178, 0);
   }
+
   50% {
     background-color: rgba(17, 138, 178, 0.1);
     box-shadow: 0 0 0 4px rgba(17, 138, 178, 0.2);
   }
+
   100% {
     background-color: var(--background);
     box-shadow: 0 0 0 0 rgba(17, 138, 178, 0);
@@ -1516,17 +1627,148 @@ button:not(.pill):not(.chip):not(.badge) {
 }
 
 /* Improved spacing throughout */
-.gap-sm { gap: var(--spacing-sm); }
-.gap-md { gap: var(--spacing-md); }
-.gap-lg { gap: var(--spacing-lg); }
-.gap-xl { gap: var(--spacing-xl); }
+.gap-sm {
+  gap: var(--spacing-sm);
+}
 
-.p-sm { padding: var(--spacing-sm); }
-.p-md { padding: var(--spacing-md); }
-.p-lg { padding: var(--spacing-lg); }
-.p-xl { padding: var(--spacing-xl); }
+.gap-md {
+  gap: var(--spacing-md);
+}
 
-.m-sm { margin: var(--spacing-sm); }
-.m-md { margin: var(--spacing-md); }
-.m-lg { margin: var(--spacing-lg); }
-.m-xl { margin: var(--spacing-xl); }
+.gap-lg {
+  gap: var(--spacing-lg);
+}
+
+.gap-xl {
+  gap: var(--spacing-xl);
+}
+
+.p-sm {
+  padding: var(--spacing-sm);
+}
+
+.p-md {
+  padding: var(--spacing-md);
+}
+
+.p-lg {
+  padding: var(--spacing-lg);
+}
+
+.p-xl {
+  padding: var(--spacing-xl);
+}
+
+.m-sm {
+  margin: var(--spacing-sm);
+}
+
+.m-md {
+  margin: var(--spacing-md);
+}
+
+.m-lg {
+  margin: var(--spacing-lg);
+}
+
+.m-xl {
+  margin: var(--spacing-xl);
+}
+
+/* Tablet / Slate Aesthetics */
+.lecture-editor-content {
+  background-image: radial-gradient(#e5e7eb 0.5px, transparent 0.5px), radial-gradient(#e5e7eb 0.5px, transparent 0.5px);
+  background-size: 20px 20px;
+  background-position: 0 0, 10px 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+}
+
+.pencil-active .lecture-editor-content {
+  cursor: crosshair;
+}
+
+.paper-texture {
+  position: relative;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+.paper-texture::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url("https://www.transparenttextures.com/patterns/clean-gray-paper.png");
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Aesthetic Paper Styles */
+.paper-ruled {
+  background-image: linear-gradient(var(--border) 1px, transparent 1px);
+  background-size: 100% 32px;
+}
+
+.paper-grid {
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
+.paper-dot {
+  background-image: radial-gradient(var(--border) 1.5px, transparent 1.5px);
+  background-size: 30px 30px;
+}
+
+.paper-split {
+  background: linear-gradient(90deg, #ffffff 50%, #f7f7f5 50%) !important;
+  position: relative;
+}
+
+.paper-split::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  z-index: 1;
+}
+
+.paper-margin::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 80px;
+  bottom: 0;
+  width: 2px;
+  background: rgba(220, 38, 38, 0.2);
+  z-index: 1;
+}
+
+.paper-cream {
+  background-color: #fbf5e9 !important;
+}
+
+.paper-cream::before {
+  opacity: 0.12;
+}
+
+.paper-dark {
+  background-color: #1a1a1a !important;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+}
+
+.paper-dark .ProseMirror {
+  color: #eeeeee !important;
+}
+
+.paper-dark::before {
+  filter: invert(1);
+  opacity: 0.05;
+}

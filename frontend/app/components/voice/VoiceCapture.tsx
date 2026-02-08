@@ -122,7 +122,7 @@ export default function VoiceCapture({
             fontWeight: 'bold',
           }}
         >
-          {isListening ? '⏹ Stop' : '🎤 Start'}
+          {isListening ? 'Stop' : 'Start'}
         </button>
 
         {!autoClassify && (

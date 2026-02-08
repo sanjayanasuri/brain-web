@@ -3,19 +3,21 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { 
-  getLecture, 
-  getLectureSegments, 
-  ingestLecture,
+import {
   listLectures,
-  type Lecture, 
+  getLecture,
+  getLectureSegments,
+  ingestLecture,
+  type Lecture,
   type LectureSegment,
   type Concept,
   type Analogy,
-  getTeachingStyle,
+  getConcept,
+  getNeighborsWithRelationships,
   type TeachingStyleProfile,
   type PDFIngestResponse,
 } from '../api-client';
+import { optimizedStorage } from '../lib/navigationUtils';
 import PDFViewer from '../components/pdf/PDFViewer';
 
 export default function LectureStudioPage() {
@@ -26,69 +28,6 @@ export default function LectureStudioPage() {
   );
 }
 
-// Lecture Card Component for Landing Page
-function LectureCard({ lecture, router }: { lecture: Lecture; router: any }) {
-  // Use segment_count from lecture if available, otherwise default to 0
-  const segmentCount = lecture.segment_count ?? 0;
-
-  return (
-    <div
-      onClick={() => router.push(`/lecture-editor?lectureId=${lecture.lecture_id}`)}
-      style={{
-        background: 'var(--panel)',
-        borderRadius: '12px',
-        padding: '20px',
-        border: '1px solid var(--border)',
-        cursor: 'pointer',
-        transition: 'all 0.2s',
-        boxShadow: 'var(--shadow)',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.transform = 'translateY(-2px)';
-        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.15)';
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.transform = 'translateY(0)';
-        e.currentTarget.style.boxShadow = 'var(--shadow)';
-      }}
-    >
-      <h3 style={{
-        fontSize: '18px',
-        fontWeight: '600',
-        marginBottom: '8px',
-        color: 'var(--ink)',
-      }}>
-        {lecture.title}
-      </h3>
-      {lecture.description && (
-        <p style={{
-          fontSize: '14px',
-          color: 'var(--muted)',
-          marginBottom: '12px',
-          lineHeight: '1.5',
-        }}>
-          {lecture.description.length > 120 
-            ? lecture.description.substring(0, 120) + '...'
-            : lecture.description}
-        </p>
-      )}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        fontSize: '12px',
-        color: 'var(--muted)',
-      }}>
-        <span>
-          {segmentCount} segment{segmentCount !== 1 ? 's' : ''}
-        </span>
-        <span style={{ color: 'var(--accent)' }}>
-          Open →
-        </span>
-      </div>
-    </div>
-  );
-}
 
 function LectureStudioPageInner() {
   const searchParams = useSearchParams();
@@ -109,10 +48,33 @@ function LectureStudioPageInner() {
   const [ingestMode, setIngestMode] = useState<'text' | 'pdf'>('text');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [showPdfViewer, setShowPdfViewer] = useState(false);
-  
+
   // Landing page state (when no lectureId)
-  const [allLectures, setAllLectures] = useState<Lecture[]>([]);
+  const [allLectures, setAllLectures] = useState<Lecture[]>(optimizedStorage.getItem('lecture-studio-list', []));
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Persistence for selection
+  useEffect(() => {
+    if (lectureId) {
+      const savedIndex = optimizedStorage.getItem(`lecture-studio-idx-${lectureId}`);
+      if (savedIndex !== null) setSelectedSegmentIndex(savedIndex);
+
+      const savedConcepts = optimizedStorage.getItem(`lecture-studio-concepts-${lectureId}`);
+      if (savedConcepts) setHighlightedConcepts(new Set(savedConcepts));
+    }
+  }, [lectureId]);
+
+  useEffect(() => {
+    if (lectureId && selectedSegmentIndex !== null) {
+      optimizedStorage.setItem(`lecture-studio-idx-${lectureId}`, selectedSegmentIndex);
+    }
+  }, [lectureId, selectedSegmentIndex]);
+
+  useEffect(() => {
+    if (lectureId && highlightedConcepts.size > 0) {
+      optimizedStorage.setItem(`lecture-studio-concepts-${lectureId}`, Array.from(highlightedConcepts));
+    }
+  }, [lectureId, highlightedConcepts]);
 
   useEffect(() => {
     const id = lectureId;
@@ -123,6 +85,7 @@ function LectureStudioPageInner() {
           setLoading(true);
           const lectures = await listLectures();
           setAllLectures(lectures);
+          optimizedStorage.setItem('lecture-studio-list', lectures);
         } catch (err) {
           console.error('Failed to load lectures:', err);
           setError(err instanceof Error ? err.message : 'Failed to load lectures');
@@ -144,10 +107,6 @@ function LectureStudioPageInner() {
         ]);
         setLecture(lectureData);
         setSegments(segmentsData);
-        // Load teaching style lazily in background (non-critical)
-        getTeachingStyle()
-          .then(styleData => setTeachingStyle(styleData))
-          .catch(() => setTeachingStyle(null)); // Silently fail if missing
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load lecture');
       } finally {
@@ -190,7 +149,7 @@ function LectureStudioPageInner() {
 
   const handleIngestLecture = async () => {
     if (!ingestText.trim() || !lectureId) return;
-    
+
     try {
       setIngesting(true);
       await ingestLecture({
@@ -198,7 +157,7 @@ function LectureStudioPageInner() {
         lecture_text: ingestText.trim(),
         domain: ingestDomain.trim() || undefined,
       });
-      
+
       // Reload the lecture data to show new segments
       const [lectureData, segmentsData] = await Promise.all([
         getLecture(lectureId),
@@ -206,7 +165,7 @@ function LectureStudioPageInner() {
       ]);
       setLecture(lectureData);
       setSegments(segmentsData);
-      
+
       // Close modal and reset form
       setShowIngestModal(false);
       setIngestText('');
@@ -273,88 +232,229 @@ function LectureStudioPageInner() {
     );
 
     return (
-      <div style={{ 
-        minHeight: '100vh', 
-        background: 'var(--page-bg)',
-        padding: '40px 20px',
+      <div style={{
+        minHeight: '100vh',
+        background: 'var(--background)',
+        padding: '0',
+        display: 'flex',
+        flexDirection: 'column',
       }}>
-        <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
-          {/* Header */}
-          <div style={{ marginBottom: '32px' }}>
-            <h1 style={{ 
-              fontSize: '32px', 
-              fontWeight: '700', 
-              marginBottom: '8px',
-              color: 'var(--ink)',
-            }}>
-              Lecture Studio
-            </h1>
-            <p style={{ color: 'var(--muted)', fontSize: '16px' }}>
-              Organize and manage all your lectures and notes
-            </p>
-          </div>
-
-          {/* Search bar */}
-          <div style={{ marginBottom: '24px' }}>
-            <input
-              type="text"
-              placeholder="Search lectures..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              style={{
-                width: '100%',
-                maxWidth: '600px',
-                padding: '12px 16px',
-                border: '2px solid var(--border)',
-                borderRadius: '8px',
-                background: 'var(--surface)',
+        {/* Main Content Area */}
+        <div style={{
+          flex: 1,
+          padding: '40px clamp(20px, 5vw, 80px)',
+          maxWidth: '1600px',
+          width: '100%',
+          margin: '0 auto'
+        }}>
+          {/* Header Section */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            marginBottom: '40px',
+            gap: '24px',
+            flexWrap: 'wrap'
+          }}>
+            <div>
+              <h1 style={{
+                fontSize: 'clamp(28px, 4vw, 36px)',
+                fontWeight: '800',
+                letterSpacing: '-1.5px',
                 color: 'var(--ink)',
-                fontSize: '14px',
-                outline: 'none',
-                transition: 'border-color 0.2s',
-              }}
-              onFocus={(e) => e.currentTarget.style.borderColor = 'var(--accent)'}
-              onBlur={(e) => e.currentTarget.style.borderColor = 'var(--border)'}
-            />
+                marginBottom: '8px',
+              }}>
+                Studio
+              </h1>
+              <p style={{ color: 'var(--muted)', fontSize: '16px', fontWeight: '500' }}>
+                Your knowledge library and lecture drafts.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => setShowIngestModal(true)}
+                style={{
+                  padding: '12px 24px',
+                  background: 'var(--accent)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '14px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(37, 99, 235, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 4px 12px rgba(37, 99, 235, 0.2)';
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>
+                New Lecture
+              </button>
+            </div>
           </div>
 
-          {/* Lectures grid */}
-          {loading ? (
-            <div style={{ padding: '40px', textAlign: 'center' }}>
-              <div style={{ fontSize: '18px', color: 'var(--muted)' }}>Loading lectures...</div>
-            </div>
-          ) : error ? (
-            <div style={{ padding: '40px', textAlign: 'center' }}>
-              <div style={{ fontSize: '18px', color: 'var(--accent-2)' }}>{error}</div>
-            </div>
-          ) : filteredLectures.length === 0 ? (
-            <div style={{ 
-              padding: '60px 40px', 
-              textAlign: 'center',
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              border: '1px dashed var(--border)',
-            }}>
-              <div style={{ fontSize: '18px', color: 'var(--muted)', marginBottom: '12px' }}>
-                {searchQuery ? 'No lectures found' : 'No lectures yet'}
+          {/* Search & Filter Bar */}
+          <div style={{
+            display: 'flex',
+            gap: '16px',
+            marginBottom: '32px',
+            background: 'var(--panel)',
+            padding: '8px',
+            borderRadius: '16px',
+            border: '1px solid var(--border)',
+            alignItems: 'center'
+          }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <div style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
               </div>
-              {!searchQuery && (
-                <div style={{ fontSize: '14px', color: 'var(--muted)' }}>
-                  Create your first lecture by adding content to the graph
-                </div>
-              )}
+              <input
+                type="text"
+                placeholder="Search lectures, files, or concepts..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px 12px 48px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--ink)',
+                  fontSize: '15px',
+                  outline: 'none',
+                }}
+              />
             </div>
-          ) : (
+          </div>
+
+          {/* List View (Google Drive Style) */}
+          <div style={{
+            background: 'var(--panel)',
+            borderRadius: '20px',
+            border: '1px solid var(--border)',
+            overflow: 'hidden',
+            boxShadow: '0 4px 24px rgba(0,0,0,0.04)'
+          }}>
+            {/* List Header */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-              gap: '20px',
+              gridTemplateColumns: '1fr 2fr 120px 100px',
+              padding: '16px 24px',
+              borderBottom: '1px solid var(--border)',
+              background: 'rgba(0,0,0,0.02)',
+              fontSize: '12px',
+              fontWeight: '700',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              color: 'var(--muted)'
             }}>
-              {filteredLectures.map((lecture) => (
-                <LectureCard key={lecture.lecture_id} lecture={lecture} router={router} />
-              ))}
+              <div>Name</div>
+              <div>Description</div>
+              <div>Segments</div>
+              <div style={{ textAlign: 'right' }}>Action</div>
             </div>
-          )}
+
+            {loading ? (
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ fontSize: '16px', color: 'var(--muted)' }}>Loading your studio...</div>
+              </div>
+            ) : error ? (
+              <div style={{ padding: '60px', textAlign: 'center' }}>
+                <div style={{ fontSize: '16px', color: 'var(--accent-2)' }}>{error}</div>
+              </div>
+            ) : filteredLectures.length === 0 ? (
+              <div style={{
+                padding: '80px 40px',
+                textAlign: 'center',
+              }}>
+                <div style={{ fontSize: '18px', color: 'var(--muted)', marginBottom: '12px', fontWeight: '600' }}>
+                  {searchQuery ? 'No results match your search' : 'Your studio is empty'}
+                </div>
+                {!searchQuery && (
+                  <div style={{ fontSize: '14px', color: 'var(--muted)' }}>
+                    Start by creating a new lecture or uploading a document.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                {filteredLectures.map((lecture) => (
+                  <div
+                    key={lecture.lecture_id}
+                    onClick={() => router.push(`/lecture-editor?lectureId=${lecture.lecture_id}`)}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 2fr 120px 100px',
+                      padding: '16px 24px',
+                      borderBottom: '1px solid var(--border)',
+                      cursor: 'pointer',
+                      alignItems: 'center',
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(37, 99, 235, 0.03)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent';
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{
+                        width: '36px',
+                        height: '36px',
+                        borderRadius: '10px',
+                        background: 'rgba(37, 99, 235, 0.1)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'var(--accent)'
+                      }}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path><path d="M8 7h6"></path><path d="M8 11h8"></path></svg>
+                      </div>
+                      <div style={{ fontWeight: '600', color: 'var(--ink)', fontSize: '15px' }}>
+                        {lecture.title}
+                      </div>
+                    </div>
+                    <div style={{
+                      fontSize: '14px',
+                      color: 'var(--muted)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      paddingRight: '20px'
+                    }}>
+                      {lecture.description || 'No description provided.'}
+                    </div>
+                    <div style={{ fontSize: '14px', color: 'var(--muted)', fontWeight: '500' }}>
+                      {lecture.segment_count ?? 0} segments
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{
+                        fontSize: '13px',
+                        color: 'var(--accent)',
+                        fontWeight: '600',
+                        padding: '6px 12px',
+                        borderRadius: '8px',
+                        background: 'rgba(37, 99, 235, 0.05)'
+                      }}>
+                        Edit
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -382,8 +482,8 @@ function LectureStudioPageInner() {
   // Show PDF Viewer if PDF is selected
   if (showPdfViewer && pdfFile) {
     return (
-      <div style={{ 
-        minHeight: '100vh', 
+      <div style={{
+        minHeight: '100vh',
         background: 'var(--page-bg)',
         padding: '20px',
       }}>
@@ -425,25 +525,28 @@ function LectureStudioPageInner() {
   }
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'var(--page-bg)',
-      padding: '20px',
+    <div style={{
+      minHeight: '100vh',
+      background: 'var(--background)',
+      padding: '40px clamp(20px, 5vw, 60px)',
+      display: 'flex',
+      flexDirection: 'column',
     }}>
-      <div style={{ maxWidth: '1600px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '1600px', width: '100%', margin: '0 auto' }}>
         {/* Header */}
-        <div style={{ marginBottom: '24px' }}>
-          <Link href="/" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '14px' }}>
-            ← Back to Graph
+        <div style={{ marginBottom: '32px' }}>
+          <Link href="/lecture-studio" style={{ color: 'var(--accent)', textDecoration: 'none', fontSize: '14px', fontWeight: '600', display: 'inline-flex', alignItems: 'center', gap: '4px', marginBottom: '12px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+            Back to Studio
           </Link>
-          <h1 
+          <h1
             onClick={() => {
               router.push(`/lecture-editor?lectureId=${lectureId}`);
             }}
-            style={{ 
-              fontSize: '32px', 
-              fontWeight: '700', 
-              marginTop: '12px', 
+            style={{
+              fontSize: '32px',
+              fontWeight: '700',
+              marginTop: '12px',
               marginBottom: '8px',
               cursor: 'pointer',
               transition: 'opacity 0.2s',
@@ -466,7 +569,7 @@ function LectureStudioPageInner() {
               borderRadius: '8px',
               fontSize: '14px',
             }}>
-              <strong>Getting Started:</strong> This lecture has no content yet. 
+              <strong>Getting Started:</strong> This lecture has no content yet.
               <button
                 onClick={() => setShowIngestModal(true)}
                 style={{
@@ -489,18 +592,24 @@ function LectureStudioPageInner() {
         </div>
 
         {/* Three Column Layout */}
-        <div className="lecture-studio-grid">
+        <div className="lecture-studio-grid" style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
+          gap: '32px',
+          alignItems: 'start'
+        }}>
           {/* Left Column - Timeline */}
           <div style={{
             background: 'var(--panel)',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: 'var(--shadow)',
-            maxHeight: 'calc(100vh - 200px)',
+            borderRadius: '24px',
+            padding: '24px',
+            border: '1px solid var(--border)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+            maxHeight: 'calc(100vh - 250px)',
             overflowY: 'auto',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: '600' }}>Timeline</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px' }}>Timeline</h2>
               {segments.length === 0 && (
                 <button
                   onClick={() => setShowIngestModal(true)}
@@ -520,8 +629,8 @@ function LectureStudioPageInner() {
               )}
             </div>
             {segments.length === 0 ? (
-              <div style={{ 
-                color: 'var(--muted)', 
+              <div style={{
+                color: 'var(--muted)',
                 fontSize: '14px',
                 padding: '20px',
                 textAlign: 'center',
@@ -569,61 +678,61 @@ function LectureStudioPageInner() {
                         marginBottom: '8px',
                       }}
                     >
-                    <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '4px' }}>
-                      Segment #{segment.segment_index + 1}
-                    </div>
-                    {segment.summary ? (
-                      <div style={{ fontSize: '14px', marginBottom: '8px' }}>{segment.summary}</div>
-                    ) : (
-                      <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '8px' }}>
-                        {segment.text.substring(0, 100)}...
+                      <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '4px' }}>
+                        Segment #{segment.segment_index + 1}
                       </div>
-                    )}
-                    {segment.style_tags && segment.style_tags.length > 0 && (
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                        {segment.style_tags.map(tag => (
-                          <span
-                            key={tag}
-                            style={{
-                              fontSize: '11px',
-                              padding: '2px 8px',
-                              background: 'var(--panel)',
-                              border: '1px solid var(--border)',
-                              borderRadius: '12px',
-                              color: 'var(--accent)',
-                            }}
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {segment.covered_concepts.length > 0 && (
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        {segment.covered_concepts.map(concept => (
-                          <span
-                            key={concept.node_id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleConceptClick(concept);
-                            }}
-                            style={{
-                              fontSize: '11px',
-                              padding: '2px 8px',
-                              background: highlightedConcepts.has(concept.node_id)
-                                ? 'var(--accent)'
-                                : 'var(--panel)',
-                              border: highlightedConcepts.has(concept.node_id) ? 'none' : '1px solid var(--border)',
-                              color: highlightedConcepts.has(concept.node_id) ? 'white' : 'var(--accent)',
-                              borderRadius: '12px',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {concept.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                      {segment.summary ? (
+                        <div style={{ fontSize: '14px', marginBottom: '8px' }}>{segment.summary}</div>
+                      ) : (
+                        <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '8px' }}>
+                          {segment.text.substring(0, 100)}...
+                        </div>
+                      )}
+                      {segment.style_tags && segment.style_tags.length > 0 && (
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                          {segment.style_tags.map(tag => (
+                            <span
+                              key={tag}
+                              style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                background: 'var(--panel)',
+                                border: '1px solid var(--border)',
+                                borderRadius: '12px',
+                                color: 'var(--accent)',
+                              }}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {segment.covered_concepts.length > 0 && (
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {segment.covered_concepts.map(concept => (
+                            <span
+                              key={concept.node_id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleConceptClick(concept);
+                              }}
+                              style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                background: highlightedConcepts.has(concept.node_id)
+                                  ? 'var(--accent)'
+                                  : 'var(--panel)',
+                                border: highlightedConcepts.has(concept.node_id) ? 'none' : '1px solid var(--border)',
+                                color: highlightedConcepts.has(concept.node_id) ? 'white' : 'var(--accent)',
+                                borderRadius: '12px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {concept.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <button
                       onClick={() => handleSegmentClickToEditor(segment)}
@@ -650,13 +759,14 @@ function LectureStudioPageInner() {
           {/* Middle Column - Concept Cluster */}
           <div style={{
             background: 'var(--panel)',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: 'var(--shadow)',
-            maxHeight: 'calc(100vh - 200px)',
+            borderRadius: '24px',
+            padding: '24px',
+            border: '1px solid var(--border)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+            maxHeight: 'calc(100vh - 250px)',
             overflowY: 'auto',
           }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>Concept Cluster</h2>
+            <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px', marginBottom: '24px' }}>Concept Cluster</h2>
             {allConcepts.size === 0 ? (
               <div style={{ color: 'var(--muted)', fontSize: '14px' }}>No concepts in this lecture</div>
             ) : (
@@ -666,9 +776,9 @@ function LectureStudioPageInner() {
                   const segmentCount = segments.filter(seg =>
                     seg.covered_concepts.some(c => c.node_id === concept.node_id)
                   ).length;
-                  
+
                   const hasDescription = concept.description && concept.description.length > 20;
-                  
+
                   return (
                     <div
                       key={concept.node_id}
@@ -684,6 +794,21 @@ function LectureStudioPageInner() {
                           : 'transparent',
                         cursor: 'pointer',
                         transition: 'all 0.2s',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent)';
+                        e.currentTarget.style.background = 'var(--surface)';
+                        // Prefetch concept data
+                        getConcept(concept.node_id);
+                        getNeighborsWithRelationships(concept.node_id);
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = highlightedConcepts.has(concept.node_id)
+                          ? 'var(--accent)'
+                          : '1px solid var(--border)';
+                        e.currentTarget.style.background = highlightedConcepts.has(concept.node_id)
+                          ? 'var(--panel)'
+                          : 'transparent';
                       }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '4px' }}>
@@ -716,14 +841,15 @@ function LectureStudioPageInner() {
           {/* Right Column - Teaching Insights & Actions */}
           <div style={{
             background: 'var(--panel)',
-            borderRadius: '12px',
-            padding: '20px',
-            boxShadow: 'var(--shadow)',
-            maxHeight: 'calc(100vh - 200px)',
+            borderRadius: '24px',
+            padding: '24px',
+            border: '1px solid var(--border)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+            maxHeight: 'calc(100vh - 250px)',
             overflowY: 'auto',
           }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>Insights & Actions</h2>
-            
+            <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px', marginBottom: '24px' }}>Insights & Actions</h2>
+
             {/* Analogies Section */}
             {allAnalogies.length > 0 && (
               <div style={{ marginBottom: '24px' }}>
@@ -780,7 +906,7 @@ function LectureStudioPageInner() {
               <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', color: 'var(--muted)' }}>
                 Gaps (this lecture)
               </h3>
-              {Array.from(allConcepts.values()).filter(c => 
+              {Array.from(allConcepts.values()).filter(c =>
                 !c.description || c.description.length < 20
               ).length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -844,7 +970,8 @@ function LectureStudioPageInner() {
       </div>
 
       {/* Ingest Lecture Modal */}
-      {showIngestModal && (
+      {
+        showIngestModal && (
           <div
             style={{
               position: 'fixed',
@@ -866,254 +993,255 @@ function LectureStudioPageInner() {
               }
             }}
           >
-          <div
-            style={{
-              background: 'var(--panel)',
-              borderRadius: '12px',
-              padding: '24px',
-              width: '90%',
-              maxWidth: '600px',
-              border: '1px solid var(--border)',
-              maxHeight: '90vh',
-              overflowY: 'auto',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 20px 0' }}>
-              Add Lecture Content
-            </h2>
-            
-            {/* Mode Tabs */}
-            <div style={{ 
-              display: 'flex', 
-              gap: '8px', 
-              marginBottom: '20px',
-              borderBottom: '1px solid var(--border)',
-            }}>
-              <button
-                onClick={() => setIngestMode('text')}
-                style={{
-                  padding: '8px 16px',
-                  background: ingestMode === 'text' ? 'var(--accent)' : 'transparent',
-                  color: ingestMode === 'text' ? 'white' : 'var(--muted)',
-                  border: 'none',
-                  borderBottom: ingestMode === 'text' ? '2px solid var(--accent)' : '2px solid transparent',
-                  borderRadius: '0',
-                  fontSize: '14px',
-                  fontWeight: ingestMode === 'text' ? '600' : '400',
-                  cursor: 'pointer',
-                }}
-              >
-                Text Input
-              </button>
-              <button
-                onClick={() => setIngestMode('pdf')}
-                style={{
-                  padding: '8px 16px',
-                  background: ingestMode === 'pdf' ? 'var(--accent)' : 'transparent',
-                  color: ingestMode === 'pdf' ? 'white' : 'var(--muted)',
-                  border: 'none',
-                  borderBottom: ingestMode === 'pdf' ? '2px solid var(--accent)' : '2px solid transparent',
-                  borderRadius: '0',
-                  fontSize: '14px',
-                  fontWeight: ingestMode === 'pdf' ? '600' : '400',
-                  cursor: 'pointer',
-                }}
-              >
-                PDF Upload
-              </button>
-            </div>
+            <div
+              style={{
+                background: 'var(--panel)',
+                borderRadius: '12px',
+                padding: '24px',
+                width: '90%',
+                maxWidth: '600px',
+                border: '1px solid var(--border)',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 style={{ fontSize: '20px', fontWeight: '600', margin: '0 0 20px 0' }}>
+                Add Lecture Content
+              </h2>
 
-            {ingestMode === 'pdf' ? (
-              <div>
-                <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
-                  Upload a PDF file to extract concepts, relationships, and create a knowledge graph. You'll be able to review extractions before confirming.
-                </p>
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
-                    Domain/Topic (optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={ingestDomain}
-                    onChange={(e) => setIngestDomain(e.target.value)}
-                    placeholder="e.g., Software Engineering, Finance, etc."
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      background: 'var(--surface)',
-                      color: 'var(--ink)',
-                      fontSize: '14px',
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
-                    PDF File *
-                  </label>
-                  <input
-                    type="file"
-                    accept=".pdf,application/pdf"
-                    onChange={handlePdfFileSelect}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      background: 'var(--surface)',
-                      color: 'var(--ink)',
-                      fontSize: '14px',
-                      cursor: 'pointer',
-                    }}
-                  />
-                </div>
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-                  <button
-                    onClick={() => {
-                      setShowIngestModal(false);
-                      setIngestText('');
-                      setIngestDomain('');
-                      setIngestMode('text');
-                    }}
-                    style={{
-                      padding: '10px 20px',
-                      background: 'transparent',
-                      color: 'var(--muted)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
+              {/* Mode Tabs */}
+              <div style={{
+                display: 'flex',
+                gap: '8px',
+                marginBottom: '20px',
+                borderBottom: '1px solid var(--border)',
+              }}>
+                <button
+                  onClick={() => setIngestMode('text')}
+                  style={{
+                    padding: '8px 16px',
+                    background: ingestMode === 'text' ? 'var(--accent)' : 'transparent',
+                    color: ingestMode === 'text' ? 'white' : 'var(--muted)',
+                    border: 'none',
+                    borderBottom: ingestMode === 'text' ? '2px solid var(--accent)' : '2px solid transparent',
+                    borderRadius: '0',
+                    fontSize: '14px',
+                    fontWeight: ingestMode === 'text' ? '600' : '400',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Text Input
+                </button>
+                <button
+                  onClick={() => setIngestMode('pdf')}
+                  style={{
+                    padding: '8px 16px',
+                    background: ingestMode === 'pdf' ? 'var(--accent)' : 'transparent',
+                    color: ingestMode === 'pdf' ? 'white' : 'var(--muted)',
+                    border: 'none',
+                    borderBottom: ingestMode === 'pdf' ? '2px solid var(--accent)' : '2px solid transparent',
+                    borderRadius: '0',
+                    fontSize: '14px',
+                    fontWeight: ingestMode === 'pdf' ? '600' : '400',
+                    cursor: 'pointer',
+                  }}
+                >
+                  PDF Upload
+                </button>
               </div>
-            ) : (
-              <>
-            <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
-              Paste or type your lecture content below. The system will automatically extract concepts, create segments, and link them to your knowledge graph.
-            </p>
-            <div style={{ 
-              padding: '12px', 
-              background: 'var(--surface)', 
-              borderRadius: '8px', 
-              border: '1px solid var(--border)',
-              marginBottom: '20px',
-              fontSize: '13px',
-              color: 'var(--ink)',
-            }}>
-              <strong>Note:</strong> This will create a new lecture with segments. After ingestion, you can edit the lecture in the editor.
-            </div>
-            
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
-                Domain/Topic (optional)
-              </label>
-              <input
-                type="text"
-                value={ingestDomain}
-                onChange={(e) => setIngestDomain(e.target.value)}
-                placeholder="e.g., Software Engineering, Finance, etc."
-                disabled={ingesting}
-                onKeyDown={(e) => {
-                  // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
-                  if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
-                    // Allow default behavior for select all, copy, paste, cut
-                    return;
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  background: 'var(--surface)',
-                  color: 'var(--ink)',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
 
-            <div style={{ marginBottom: '24px' }}>
-              <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
-                Lecture Content *
-              </label>
-              <textarea
-                value={ingestText}
-                onChange={(e) => setIngestText(e.target.value)}
-                placeholder="Paste or type your lecture content here..."
-                disabled={ingesting}
-                rows={12}
-                onKeyDown={(e) => {
-                  // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
-                  if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
-                    // Allow default behavior for select all, copy, paste, cut
-                    return;
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  background: 'var(--surface)',
-                  color: 'var(--ink)',
-                  fontSize: '14px',
-                  fontFamily: 'inherit',
-                  resize: 'vertical',
-                }}
-              />
-            </div>
+              {ingestMode === 'pdf' ? (
+                <div>
+                  <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
+                    Upload a PDF file to extract concepts, relationships, and create a knowledge graph. You'll be able to review extractions before confirming.
+                  </p>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                      Domain/Topic (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={ingestDomain}
+                      onChange={(e) => setIngestDomain(e.target.value)}
+                      placeholder="e.g., Software Engineering, Finance, etc."
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        background: 'var(--surface)',
+                        color: 'var(--ink)',
+                        fontSize: '14px',
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                      PDF File *
+                    </label>
+                    <input
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      onChange={handlePdfFileSelect}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        background: 'var(--surface)',
+                        color: 'var(--ink)',
+                        fontSize: '14px',
+                        cursor: 'pointer',
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
+                    <button
+                      onClick={() => {
+                        setShowIngestModal(false);
+                        setIngestText('');
+                        setIngestDomain('');
+                        setIngestMode('text');
+                      }}
+                      style={{
+                        padding: '10px 20px',
+                        background: 'transparent',
+                        color: 'var(--muted)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
+                    Paste or type your lecture content below. The system will automatically extract concepts, create segments, and link them to your knowledge graph.
+                  </p>
+                  <div style={{
+                    padding: '12px',
+                    background: 'var(--surface)',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border)',
+                    marginBottom: '20px',
+                    fontSize: '13px',
+                    color: 'var(--ink)',
+                  }}>
+                    <strong>Note:</strong> This will create a new lecture with segments. After ingestion, you can edit the lecture in the editor.
+                  </div>
 
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => {
-                  if (!ingesting) {
-                    setShowIngestModal(false);
-                    setIngestText('');
-                    setIngestDomain('');
-                  }
-                }}
-                disabled={ingesting}
-                style={{
-                  padding: '10px 20px',
-                  background: 'transparent',
-                  color: 'var(--muted)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  cursor: ingesting ? 'not-allowed' : 'pointer',
-                  opacity: ingesting ? 0.5 : 1,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleIngestLecture}
-                disabled={!ingestText.trim() || ingesting}
-                style={{
-                  padding: '10px 20px',
-                  background: ingestText.trim() && !ingesting ? 'var(--accent)' : 'var(--muted)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: ingestText.trim() && !ingesting ? 'pointer' : 'not-allowed',
-                  opacity: ingestText.trim() && !ingesting ? 1 : 0.5,
-                }}
-              >
-                {ingesting ? 'Processing...' : 'Add Content'}
-              </button>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                      Domain/Topic (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={ingestDomain}
+                      onChange={(e) => setIngestDomain(e.target.value)}
+                      placeholder="e.g., Software Engineering, Finance, etc."
+                      disabled={ingesting}
+                      onKeyDown={(e) => {
+                        // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
+                        if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
+                          // Allow default behavior for select all, copy, paste, cut
+                          return;
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        background: 'var(--surface)',
+                        color: 'var(--ink)',
+                        fontSize: '14px',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ marginBottom: '24px' }}>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
+                      Lecture Content *
+                    </label>
+                    <textarea
+                      value={ingestText}
+                      onChange={(e) => setIngestText(e.target.value)}
+                      placeholder="Paste or type your lecture content here..."
+                      disabled={ingesting}
+                      rows={12}
+                      onKeyDown={(e) => {
+                        // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
+                        if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
+                          // Allow default behavior for select all, copy, paste, cut
+                          return;
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        background: 'var(--surface)',
+                        color: 'var(--ink)',
+                        fontSize: '14px',
+                        fontFamily: 'inherit',
+                        resize: 'vertical',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => {
+                        if (!ingesting) {
+                          setShowIngestModal(false);
+                          setIngestText('');
+                          setIngestDomain('');
+                        }
+                      }}
+                      disabled={ingesting}
+                      style={{
+                        padding: '10px 20px',
+                        background: 'transparent',
+                        color: 'var(--muted)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        cursor: ingesting ? 'not-allowed' : 'pointer',
+                        opacity: ingesting ? 0.5 : 1,
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleIngestLecture}
+                      disabled={!ingestText.trim() || ingesting}
+                      style={{
+                        padding: '10px 20px',
+                        background: ingestText.trim() && !ingesting ? 'var(--accent)' : 'var(--muted)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        cursor: ingestText.trim() && !ingesting ? 'pointer' : 'not-allowed',
+                        opacity: ingestText.trim() && !ingesting ? 1 : 0.5,
+                      }}
+                    >
+                      {ingesting ? 'Processing...' : 'Add Content'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
-            </>
-            )}
           </div>
-        </div>
-      )}
+        )
+      }
     </div>
   );
 }

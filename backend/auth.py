@@ -19,10 +19,10 @@ security = HTTPBearer(auto_error=False)
 
 # Public endpoints that don't require authentication
 PUBLIC_ENDPOINTS = {
-    "/",
     "/docs",
     "/openapi.json",
     "/redoc",
+    "/health",
 }
 
 
@@ -134,15 +134,16 @@ def require_auth(
     """
     FastAPI dependency that requires authentication.
     
-    Usage:
-        @router.get("/protected")
-        def protected_route(auth: dict = Depends(require_auth)):
-            user_id = auth["user_id"]
-            tenant_id = auth["tenant_id"]
-    
-    Raises:
-        HTTPException(401) if not authenticated
+    Checks for token OR if the request was already authenticated by middleware
+    (e.g., via Demo Mode elevation).
     """
+    # Check if middleware already authenticated the request
+    if request and hasattr(request.state, "is_authenticated") and request.state.is_authenticated:
+        return {
+            "user_id": getattr(request.state, "user_id", None),
+            "tenant_id": getattr(request.state, "tenant_id", None),
+            "is_authenticated": True,
+        }
     # Check for token in Authorization header
     if credentials:
         try:

@@ -475,9 +475,11 @@ def canonicalize_url(url: str, strip_query: bool = True) -> str:
     return canonical
 
 
-def _normalize_text_for_hash(text: str) -> str:
-    """Normalize text before hashing: trim and collapse whitespace."""
-    return ' '.join(text.strip().split())
+def normalize_text_for_hash(text: str) -> str:
+    """Normalize text for consistent hashing (strip whitespace, lower case)."""
+    if not text:
+        return ""
+    return ' '.join(text.strip().lower().split())
 
 
 def create_or_get_artifact(
@@ -512,7 +514,7 @@ def create_or_get_artifact(
     graph_id, branch_id = get_active_graph_context(session)
     
     # Normalize text and compute hash
-    normalized_text = _normalize_text_for_hash(text)
+    normalized_text = normalize_text_for_hash(text)
     content_hash = hashlib.sha256(normalized_text.encode('utf-8')).hexdigest()
     
     # Derive canonical_url if source_url exists
@@ -2079,6 +2081,8 @@ def get_user_profile(session: Session) -> UserProfile:
     query = """
     MERGE (u:UserProfile {id: 'default'})
     ON CREATE SET u.name = 'Sanjay',
+                  u.email = null,
+                  u.signup_date = datetime(),
                   u.background = [],
                   u.interests = [],
                   u.weak_spots = [],
@@ -2087,19 +2091,40 @@ def get_user_profile(session: Session) -> UserProfile:
     """
     # Use empty JSON object string for learning_preferences
     empty_json = json.dumps({})
+    empty_static = json.dumps({"occupation": "", "core_skills": [], "learning_style": "", "verified_expertise": []})
+    empty_episodic = json.dumps({"current_projects": [], "active_topics": [], "recent_searches": [], "last_updated": None})
+    
     rec = session.run(query, empty_json=empty_json).single()
     u = rec["u"]
-    # Deserialize learning_preferences if it's a JSON string
+    
+    # Deserialize JSON fields
     learning_prefs = u.get("learning_preferences", {})
     if isinstance(learning_prefs, str):
         learning_prefs = json.loads(learning_prefs)
+    
+    static_profile = u.get("static_profile", empty_static)
+    if isinstance(static_profile, str):
+        static_profile = json.loads(static_profile)
+    elif static_profile is None:
+        static_profile = json.loads(empty_static)
+    
+    episodic_context = u.get("episodic_context", empty_episodic)
+    if isinstance(episodic_context, str):
+        episodic_context = json.loads(episodic_context)
+    elif episodic_context is None:
+        episodic_context = json.loads(empty_episodic)
+    
     return UserProfile(
         id=u.get("id", "default"),
         name=u.get("name", "Sanjay"),
+        email=u.get("email"),
+        signup_date=u.get("signup_date").to_native() if u.get("signup_date") and hasattr(u.get("signup_date"), "to_native") else u.get("signup_date"),
         background=u.get("background", []),
         interests=u.get("interests", []),
         weak_spots=u.get("weak_spots", []),
         learning_preferences=learning_prefs,
+        static_profile=static_profile,
+        episodic_context=episodic_context,
     )
 
 
@@ -2110,29 +2135,115 @@ def update_user_profile(session: Session, profile: UserProfile) -> UserProfile:
     query = """
     MERGE (u:UserProfile {id: $id})
     SET u.name = $name,
+        u.email = $email,
+        u.signup_date = $signup_date,
         u.background = $background,
         u.interests = $interests,
         u.weak_spots = $weak_spots,
-        u.learning_preferences = $learning_preferences
+        u.learning_preferences = $learning_preferences,
+        u.static_profile = $static_profile,
+        u.episodic_context = $episodic_context
     RETURN u
     """
     profile_dict = profile.dict()
-    # Serialize learning_preferences to JSON string
+    # Serialize JSON fields to strings
     profile_dict["learning_preferences"] = json.dumps(profile_dict["learning_preferences"])
+    profile_dict["static_profile"] = json.dumps(profile_dict["static_profile"])
+    profile_dict["episodic_context"] = json.dumps(profile_dict["episodic_context"])
+    
     rec = session.run(query, **profile_dict).single()
     u = rec["u"]
-    # Deserialize learning_preferences if it's a JSON string
+    
+    # Deserialize JSON fields
     learning_prefs = u.get("learning_preferences", {})
     if isinstance(learning_prefs, str):
         learning_prefs = json.loads(learning_prefs)
+    
+    static_profile = u.get("static_profile", {})
+    if isinstance(static_profile, str):
+        static_profile = json.loads(static_profile)
+    
+    episodic_context = u.get("episodic_context", {})
+    if isinstance(episodic_context, str):
+        episodic_context = json.loads(episodic_context)
+    
     return UserProfile(
-        id=u.get("id", "default"),
-        name=u.get("name", "Sanjay"),
+        id=u["id"],
+        name=u["name"],
+        email=u.get("email"),
+        signup_date=u.get("signup_date").to_native() if u.get("signup_date") and hasattr(u.get("signup_date"), "to_native") else u.get("signup_date"),
         background=u.get("background", []),
         interests=u.get("interests", []),
         weak_spots=u.get("weak_spots", []),
         learning_preferences=learning_prefs,
+        static_profile=static_profile,
+        episodic_context=episodic_context
     )
+
+
+def patch_user_profile(session: Session, updates: Dict[str, Any]) -> UserProfile:
+    """
+    Partial update of user profile. Merges lists and dicts safely.
+    """
+    current = get_user_profile(session)
+    current_dict = current.dict()
+    
+    # Handle list merging
+    for list_field in ["background", "interests", "weak_spots"]:
+        if list_field in updates and isinstance(updates[list_field], list):
+            # Combine and dedup
+            combined = current_dict.get(list_field, []) + updates[list_field]
+            current_dict[list_field] = list(dict.fromkeys(combined))
+    
+    # Handle dict merging
+    for dict_field in ["learning_preferences", "static_profile", "episodic_context"]:
+        if dict_field in updates and isinstance(updates[dict_field], dict):
+            merged = current_dict.get(dict_field, {})
+            merged.update(updates[dict_field])
+            current_dict[dict_field] = merged
+            
+    # Handle name update
+    if "name" in updates:
+        current_dict["name"] = updates["name"]
+        
+    updated_profile = UserProfile(**current_dict)
+    return update_user_profile(session, updated_profile)
+
+
+def update_episodic_context(session: Session) -> UserProfile:
+    """
+    Auto-update episodic context based on recent activity.
+    Fetches recent learning topics and conversation summaries to populate:
+    - current_projects
+    - active_topics
+    - recent_searches
+    """
+    import time
+    
+    # Get current profile
+    profile = get_user_profile(session)
+    
+    # Get active learning topics (last 7 days)
+    topics = get_active_learning_topics(session, limit=10)
+    active_topics = [t.name for t in topics[:5]]  # Top 5 topics
+    
+    # Infer current projects from topics (heuristic: topics with high mention count)
+    current_projects = [t.name for t in topics if t.mention_count >= 3][:3]
+    
+    # Get recent conversation summaries for search context
+    summaries = get_recent_conversation_summaries(session, limit=5)
+    recent_searches = [s.summary for s in summaries if s.summary][:3]
+    
+    # Update episodic context
+    profile.episodic_context = {
+        "current_projects": current_projects,
+        "active_topics": active_topics,
+        "recent_searches": recent_searches,
+        "last_updated": int(time.time())
+    }
+    
+    # Save updated profile
+    return update_user_profile(session, profile)
 
 
 def store_conversation_summary(session: Session, summary: ConversationSummary) -> ConversationSummary:
@@ -2436,6 +2547,7 @@ def create_lecture_segment(
     start_time_sec: Optional[float],
     end_time_sec: Optional[float],
     style_tags: Optional[List[str]] = None,
+    ink_url: Optional[str] = None,
 ) -> dict:
     """
     Create a LectureSegment node and attach it to the Lecture node.
@@ -2456,12 +2568,14 @@ def create_lecture_segment(
                     seg.start_time_sec = $start_time_sec,
                     seg.end_time_sec   = $end_time_sec,
                     seg.style_tags     = $style_tags,
+                    seg.ink_url        = $ink_url,
                     seg.created_at     = datetime()
       ON MATCH SET  seg.text           = $text,
                     seg.summary        = $summary,
                     seg.start_time_sec = $start_time_sec,
                     seg.end_time_sec   = $end_time_sec,
                     seg.style_tags     = $style_tags,
+                    seg.ink_url        = $ink_url,
                     seg.updated_at     = datetime()
     MERGE (lec)-[:HAS_SEGMENT]->(seg)
     RETURN seg.segment_id AS segment_id,
@@ -2478,6 +2592,7 @@ def create_lecture_segment(
         start_time_sec=start_time_sec,
         end_time_sec=end_time_sec,
         style_tags=style_tags,
+        ink_url=ink_url,
     )
     return result.single().data()
 
@@ -3127,7 +3242,7 @@ def get_claims_for_communities(
     graph_id: str,
     community_ids: List[str],
     limit_per_comm: int = 30,
-    ingestion_run_id: Optional[str] = None
+    ingestion_run_id: Optional[Any] = None
 ) -> Dict[str, List[dict]]:
     """
     Get claims that mention concepts in each community, ordered by confidence.
@@ -3137,7 +3252,7 @@ def get_claims_for_communities(
         graph_id: Graph ID for scoping
         community_ids: List of community IDs
         limit_per_comm: Maximum claims per community
-        ingestion_run_id: Optional ingestion run ID to filter claims
+        ingestion_run_id: Optional ingestion run ID or list of IDs to filter claims
     
     Returns:
         Dict mapping community_id to list of claim dicts
@@ -3148,13 +3263,18 @@ def get_claims_for_communities(
     if not community_ids:
         return {}
     
+    # Normalize ingestion_run_id to a list for Cypher IN operator
+    run_ids = None
+    if ingestion_run_id:
+        run_ids = ingestion_run_id if isinstance(ingestion_run_id, list) else [ingestion_run_id]
+    
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
     MATCH (k:Community {graph_id: $graph_id, community_id: $comm_id})-[:BELONGS_TO]->(g)
     MATCH (c:Concept {graph_id: $graph_id})-[:IN_COMMUNITY]->(k)
     MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(c)
     WHERE $branch_id IN COALESCE(claim.on_branches, [])
-      AND ($run_id IS NULL OR claim.ingestion_run_id = $run_id)
+      AND ($run_ids IS NULL OR claim.ingestion_run_id IN $run_ids)
     WITH k.community_id AS comm_id, claim
     ORDER BY claim.confidence DESC
     WITH comm_id, collect(claim)[0..$limit] AS claims
@@ -3164,30 +3284,28 @@ def get_claims_for_communities(
     results = {}
     
     for comm_id in community_ids:
-        result = session.run(
-            query,
-            graph_id=graph_id,
-            branch_id=branch_id,
-            comm_id=comm_id,
-            limit=limit_per_comm,
-            run_id=ingestion_run_id
-        )
-        record = result.single()
+        params = {
+            "graph_id": graph_id,
+            "comm_id": comm_id,
+            "branch_id": branch_id,
+            "run_ids": run_ids,
+            "limit": limit_per_comm
+        }
+        res = session.run(query, **params)
+        record = res.single()
         if record:
-            claims = []
-            for claim_node in record["claims"]:
-                claims.append({
-                    "claim_id": claim_node.get("claim_id"),
-                    "text": claim_node.get("text"),
-                    "confidence": claim_node.get("confidence"),
-                    "source_id": claim_node.get("source_id"),
-                    "source_span": claim_node.get("source_span"),
-                })
-            results[comm_id] = claims
+            results[comm_id] = [_normalize_claim_from_db(c) for c in record["claims"]]
         else:
             results[comm_id] = []
-    
+            
     return results
+
+def _normalize_claim_from_db(record_data):
+    """Internal helper to normalize claim record data."""
+    props = dict(record_data)
+    # Ensure graph_id is present
+    return props
+    return props
 
 
 def get_evidence_subgraph(
@@ -4515,3 +4633,63 @@ def mark_claims_stale(
     )
     record = result.single()
     return record["count"] if record else 0
+
+
+def update_concept_mastery(
+    session: Session,
+    graph_id: str,
+    node_id: str,
+    mastery_level: int
+) -> bool:
+    """
+    Update the mastery level for a concept.
+    
+    Args:
+        session: Neo4j session
+        graph_id: Graph ID
+        node_id: Concept node ID
+        mastery_level: New mastery level (0-100)
+    
+    Returns:
+        True if updated, False otherwise
+    """
+    ensure_graph_scoping_initialized(session)
+    
+    now_ts = int(datetime.utcnow().timestamp() * 1000)
+    
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (n:Concept {graph_id: $graph_id})-[:BELONGS_TO]->(g)
+    WHERE n.node_id = $node_id
+    SET n.mastery_level = $mastery_level,
+        n.last_assessed = $now_ts
+    RETURN count(n) AS count
+    """
+    
+    result = session.run(
+        query,
+        graph_id=graph_id,
+        node_id=node_id,
+        mastery_level=mastery_level,
+        now_ts=now_ts
+    )
+    
+    record = result.single()
+    return record["count"] > 0 if record else False
+
+
+def get_concept_mastery(session: Session, graph_id: str, concept_name: str) -> int:
+    """
+    Fetch the current mastery score for a concept by name.
+    """
+    query = """
+    MATCH (g:GraphSpace {id: $graph_id})-[:CONTAINS]->(c:Concept)
+    WHERE toLower(c.name) = toLower($name)
+    RETURN c.mastery_score as score
+    LIMIT 1
+    """
+    result = session.run(query, graph_id=graph_id, name=concept_name).single()
+    
+    if result and result["score"] is not None:
+        return int(result["score"])
+    return 0

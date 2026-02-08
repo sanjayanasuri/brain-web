@@ -1,24 +1,38 @@
 """
 Brain Web Native Web Search Service
 
-Provides web search and content extraction capabilities using SearXNG.
+Provides web search and content extraction capabilities using Perplexica (replacing SearXNG).
 Enhanced with advanced features: stealth mode, AI reranking, caching, metadata extraction.
 This is adapted from open-source approaches but integrated natively into Brain Web.
 """
 import httpx
 import trafilatura
-from typing import List, Dict, Optional, Any
-import logging
-from urllib.parse import urlparse
 import json
 from diskcache import Cache
-from bs4 import BeautifulSoup
-import html2text
 import random
 import asyncio
 import io
+from typing import List, Dict, Optional, Any
+import logging
+from urllib.parse import urlparse
 import re
 from datetime import datetime
+from enum import Enum
+
+# Import Graph Retrieval dependencies (Portions of api_retrieval logic)
+try:
+    from db_neo4j import get_neo4j_session
+    from services_retrieval_plans import run_plan
+    GRAPH_RETRIEVAL_AVAILABLE = True
+except ImportError:
+    GRAPH_RETRIEVAL_AVAILABLE = False
+
+# AI libraries for native agents
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 try:
     from dateutil import parser as date_parser
@@ -56,18 +70,8 @@ try:
 except ImportError:
     SELENIUM_AVAILABLE = False
 
-try:
-    import scrapy
-    from scrapy.crawler import CrawlerProcess
-    from scrapy.utils.project import get_project_settings
-    SCRAPY_AVAILABLE = True
-except ImportError:
-    SCRAPY_AVAILABLE = False
 
 logger = logging.getLogger("brain_web")
-
-# SearXNG configuration
-SEARXNG_URL = "http://127.0.0.1:8888"  # Default SearXNG instance
 
 # Initialize cache (DiskCache for persistent caching)
 cache = Cache("/tmp/brainweb_websearch_cache")
@@ -84,105 +88,364 @@ MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 1.0  # seconds
 MAX_RETRY_DELAY = 10.0  # seconds
 
-def get_ranker():
-    """Get or create FlashRank reranker instance."""
-    global _ranker
-    if _ranker is None and FLASHRANK_AVAILABLE:
-        try:
-            _ranker = Ranker(model_name="ms-marco-TinyBERT-L-2-v2", cache_dir="/tmp/flashrank")
-        except Exception as e:
-            logger.warning(f"Failed to initialize FlashRank: {e}")
-    return _ranker
-
-
 async def search_web(
     query: str,
     engines: Optional[str] = None,
     language: str = "en",
     time_range: Optional[str] = None,
     rerank: bool = False,
+    context: str = None,
 ) -> List[Dict[str, Any]]:
     """
-    Search the web using SearXNG with optional AI semantic reranking.
-    
-    Args:
-        query: Search query
-        engines: Comma-separated list of engines (e.g., "google,bing,duckduckgo")
-        language: Language code (default: "en")
-        time_range: Time filter ("day", "week", "month", "year")
-        rerank: Enable AI semantic reranking for better relevance (FlashRank)
-        
-    Returns:
-        List of search results with title, url, content/snippet
+    Search the web using DuckDuckGo (via duckduckgo_search) with optional AI semantic reranking.
+    Replaces the previous Perplexica integration.
     """
     # Check cache
-    cache_key = f"search:{query}:{engines}:{language}:{time_range}:{rerank}"
+    cache_key = f"search:ddg:{query}:{engines}:{language}:{time_range}:{rerank}"
     cached = cache.get(cache_key)
     if cached:
         logger.info(f"Cache hit for query: {query}")
         return cached
     
     try:
-        # Build SearXNG search URL
-        params = {
-            "q": query,
-            "format": "json",
-            "language": language,
-        }
+        from duckduckgo_search import DDGS
         
-        if engines:
-            params["engines"] = engines
-        else:
-            # Default: use multiple engines for better results
-            params["engines"] = "google,bing,duckduckgo,brave"
-            
+        # Map time_range to DDG format
+        # DDG supports: d (day), w (week), m (month), y (year)
+        timelimit = None
         if time_range:
-            params["time_range"] = time_range
+            mapping = {"day": "d", "week": "w", "month": "m", "year": "y"}
+            timelimit = mapping.get(time_range.lower(), time_range)
+
+        # Region mapping (approximate)
+        region = "wt-wt" # World-wide
+        if language and language != "en":
+            region = f"us-{language}" # Fallback
             
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(f"{SEARXNG_URL}/search", params=params)
-            response.raise_for_status()
+        results = []
+        
+        # Use sync DDGS in a thread or direct if async supported (AsyncDDGS is available in newer versions, checking...)
+        # Safer to use synchronous DDGS text search for stability, it's fast enough.
+        # Running in executor to avoid blocking main loop
+        def _run_search():
+            with DDGS() as ddgs:
+                # limited to 10 results for speed/relevance
+                return list(ddgs.text(keywords=query, region=region, timelimit=timelimit, max_results=10))
+        
+        ddg_results = await asyncio.to_thread(_run_search)
+        
+        for r in ddg_results:
+            results.append({
+                "title": r.get('title', ''),
+                "url": r.get('href', ''),
+                "content": r.get('body', ''),
+                "engine": "duckduckgo",
+                "score": 1.0,
+            })
+
+            # AI Semantic Reranking
+        if rerank and results and FLASHRANK_AVAILABLE:
+            try:
+                ranker = get_ranker()
+                if ranker:
+                    from flashrank import RerankRequest
+                    rerank_request = RerankRequest(
+                        query=query,
+                        passages=[
+                            {"id": i, "text": f"{r['title']} {r['content'][:200]}", "meta": r}
+                            for i, r in enumerate(results)
+                        ]
+                    )
+                    ranked = ranker.rerank(rerank_request)
+                    results = [r["meta"] for r in ranked]
+            except Exception as e:
+                logger.warning(f"Reranking failed: {e}")
             
-            data = response.json()
-            results = []
+        cache.set(cache_key, results, expire=3600)
+        return results
             
-            for item in data.get("results", []):
-                results.append({
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "snippet": item.get("content", "")[:500],
-                    "engine": item.get("engine", ""),
-                    "score": item.get("score", 0),
-                })
-            
-            # AI Semantic Reranking for better relevance
-            if rerank and results and FLASHRANK_AVAILABLE:
-                try:
-                    ranker = get_ranker()
-                    if ranker:
-                        from flashrank import RerankRequest
-                        rerank_request = RerankRequest(
-                            query=query,
-                            passages=[
-                                {"id": i, "text": f"{r['title']} {r['snippet']}", "meta": r}
-                                for i, r in enumerate(results)
-                            ]
-                        )
-                        ranked = ranker.rerank(rerank_request)
-                        results = [r["meta"] for r in ranked]
-                        logger.info(f"AI reranking applied to {len(results)} results")
-                except Exception as e:
-                    logger.warning(f"Reranking failed: {e}")
-            
-            # Cache results (1 hour expiry)
-            cache.set(cache_key, results, expire=3600)
-                
-            logger.info(f"Web search found {len(results)} results for query: {query}")
-            return results
-            
-    except Exception as e:
-        logger.error(f"Web search failed: {e}")
+    except ImportError:
+        logger.error("duckduckgo-search not installed. Please install: pip install duckduckgo-search")
         return []
+    except Exception as e:
+        logger.exception(f"Web search failed: {e}")
+        return []
+
+class SearchFocus(str, Enum):
+    GENERAL = "general"
+    ACADEMIC = "academic"
+    YOUTUBE = "youtube"
+    WOLFRAM_ALPHA = "wolfram_alpha"
+    REDDIT = "reddit"
+    GITHUB = "github"
+
+class QueryClassifier:
+    """Port of Perplexica Classifier logic to Python."""
+    
+    @staticmethod
+    async def classify(query: str, chat_history: List[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Classify query for focus area and search requirements."""
+        if not OPENAI_AVAILABLE:
+            return {"focus": SearchFocus.GENERAL, "skip_search": False, "standalone_query": query}
+            
+        from config import OPENAI_API_KEY
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        prompt = f"""Analyze the user's query and classify it.
+QUERY: {query}
+HISTORY: {json.dumps(chat_history[-2:]) if chat_history else "[]"}
+
+Return JSON ONLY:
+{{
+  "focus": "general|academic|youtube|wolfram_alpha|reddit|github",
+  "skip_search": boolean,
+  "standalone_query": "rephrased query for search engines",
+  "reasoning": "brief explanation"
+}}
+
+Rules:
+- General: Any typical search
+- Academic: Scientific papers, research, formal knowledge
+- YouTube: Video-specific info, tutorials, visual demos
+- Reddit/GitHub: Discussion or code specific
+- skip_search: True if it's purely conversational or greeting
+"""
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "system", "content": "You are a research classifier. Return only valid JSON."},
+                          {"role": "user", "content": prompt}],
+                response_format={ "type": "json_object" }
+            )
+            result = json.loads(response.choices[0].message.content)
+            return result
+        except Exception as e:
+            logger.warning(f"Classification failed: {e}")
+            return {"focus": SearchFocus.GENERAL, "skip_search": False, "standalone_query": query}
+
+class ResearcherAgent:
+    """
+    Python-native implementation of Perplexica's Researcher.
+    Uses iterative tool-calling to gather info from Web and Knowledge Graph.
+    """
+    def __init__(self, api_key: str = None):
+        from config import OPENAI_API_KEY
+        self.api_key = api_key or OPENAI_API_KEY
+        self.client = OpenAI(api_key=self.api_key) if OPENAI_AVAILABLE else None
+
+    async def execute(self, query: str, active_graph_id: str = "default", history: List[Dict] = None) -> Dict[str, Any]:
+        """Main Research Loop (Iterative ReAct)."""
+        if not self.client:
+            return {"answer": "Agent system unavailable.", "sources": []}
+
+        # 1. Classify
+        classification = await QueryClassifier.classify(query, history)
+        if classification.get("skip_search"):
+            return {"answer": "I don't need to search to answer this.", "sources": []}
+
+        # 2. Iterative Research Loop
+        max_iterations = 3
+        collected_context = []
+        all_sources = []
+        
+        for i in range(max_iterations):
+            # Decide next step
+            prompt = self._build_research_prompt(query, classification, collected_context, i, max_iterations)
+            
+            tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web for real-time information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The search query"},
+                                "focus": {"type": "string", "enum": ["general", "academic", "youtube", "reddit"], "default": "general"}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "graph_search",
+                        "description": "Search the personal knowledge graph for existing concepts and connections.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "The query to search in the graph"}
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "done",
+                        "description": "Call this when you have enough information to answer the user's request."
+                    }
+                }
+            ]
+
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "system", "content": "You are a deep-research agent. Use tools to gather facts."},
+                          {"role": "user", "content": prompt}],
+                tools=tools,
+                tool_choice="auto"
+            )
+
+            msg = response.choices[0].message
+            if not msg.tool_calls:
+                break
+
+            for tool_call in msg.tool_calls:
+                tool_name = tool_call.function.name
+                args = json.loads(tool_call.function.arguments)
+
+                if tool_name == "done":
+                    return await self._synthesize(query, all_sources, active_graph_id)
+
+                elif tool_name == "web_search":
+                    results = await search_web(args["query"], engines=args.get("focus", "web"))
+                    all_sources.extend(results)
+                    # Add snippet to context
+                    context_snippet = f"WEB SEARCH RESULTS FOR '{args['query']}':\n" + \
+                                     "\n".join([f"- {r['title']}: {r['content'][:300]}" for r in results[:3]])
+                    collected_context.append(context_snippet)
+
+                elif tool_name == "graph_search":
+                    graph_results = await self._perform_graph_search(args["query"], active_graph_id)
+                    context_snippet = f"KNOWLEDGE GRAPH RESULTS FOR '{args['query']}':\n{graph_results}"
+                    collected_context.append(context_snippet)
+
+        # Final synthesis if loop finishes without 'done'
+        return await self._synthesize(query, all_sources, active_graph_id)
+
+    async def _perform_graph_search(self, query: str, graph_id: str) -> str:
+        """Helper to run a graph retrieval plan."""
+        if not GRAPH_RETRIEVAL_AVAILABLE:
+            return "Graph retrieval not available."
+            
+        try:
+            # Note: We need a way to get a session here. 
+            # In a real async environment, we'd use a dependency or manager.
+            # For now, we'll try to get a temporary session if possible.
+            from db_neo4j import driver
+            with driver.session() as session:
+                result = run_plan(
+                    session=session,
+                    query=query,
+                    intent="definition_overview", # Default for agent search
+                    graph_id=graph_id,
+                    branch_id="main", # Default branch for now
+                    limit=5,
+                    detail_level="summary"
+                )
+                summary = result.context.get("summary", "")
+                entities = ", ".join([e["name"] for e in result.context.get("focus_entities", [])])
+                return f"Summary: {summary}\nEntities: {entities}"
+        except Exception as e:
+            logger.error(f"Graph search tool failed: {e}")
+            return f"Error searching graph: {e}"
+
+    def _build_research_prompt(self, query: str, classification: Dict, context: List[str], iteration: int, max_iter: int) -> str:
+        context_str = "\n\n".join(context) if context else "No information gathered yet."
+        return f"""Conduct deep research for: {query}
+Focus Area: {classification['focus']}
+Iteration: {iteration + 1}/{max_iter}
+
+GATHERED CONTEXT:
+{context_str}
+
+Decide your next action. Use web_search for fresh facts, or graph_search to check personal knowledge.
+If you have sufficient information, call done."""
+
+    async def _synthesize(self, query: str, sources: List[Dict], graph_id: str) -> Dict[str, Any]:
+        """Final synthesis step."""
+        # Deduplicate sources by URL
+        unique_sources = []
+        seen_urls = set()
+        for s in sources:
+            if s['url'] not in seen_urls:
+                unique_sources.append(s)
+                seen_urls.add(s['url'])
+
+        context = "\n".join([f"[{i+1}] {s['title']} ({s['url']}): {s['content'][:1000]}" 
+                             for i, s in enumerate(unique_sources[:8])])
+        
+        prompt = f"""Answer the query based on the sources provided. Include citations as [1], [2], etc.
+QUERY: {query}
+SOURCES:
+{context}
+
+Return a detailed, informative response that connects web facts with your internal knowledge."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "system", "content": "You are a helpful research assistant."},
+                          {"role": "user", "content": prompt}]
+            )
+            return {
+                "answer": response.choices[0].message.content,
+                "sources": unique_sources[:15]
+            }
+        except Exception as e:
+            logger.error(f"Synthesis failed: {e}")
+            return {"answer": "Error generating response.", "sources": unique_sources[:15]}
+
+
+class NewsAggregator:
+    """Service to fetch and categorize news for the Discover pillar."""
+    
+    CATEGORIES = {
+        "tech": ["latest artificial intelligence news", "semiconductor industry updates", "new consumer electronics 2026", "software engineering trends"],
+        "science": ["recent space exploration discoveries", "biotechnology breakthroughs", "climate change research updates", "physics new discoveries"],
+        "finance": ["stock market daily summary", "global economy news", "cryptocurrency market updates", "venture capital trends 2026"],
+        "culture": ["contemporary art exhibitions 2026", "new literature releases", "cultural trends global", "philosophy today"],
+        "sports": ["major league sports results", "olympic preparations news", "global soccer updates", "extreme sports trends"],
+        "entertainment": ["new movie releases 2026", "music industry latest", "streaming service trends", "gaming industry news"]
+    }
+
+    @staticmethod
+    async def fetch_category_news(category: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Fetch fresh news for a specific category."""
+        queries = NewsAggregator.CATEGORIES.get(category.lower(), NewsAggregator.CATEGORIES["tech"])
+        selected_query = random.choice(queries)
+        
+        # Use Perplexica search with time_range='day' for freshness
+        results = await search_web(
+            query=selected_query,
+            time_range="day",
+            rerank=True
+        )
+        
+        if not results:
+            # Fallback to 'week' if nothing found for 'day'
+            results = await search_web(
+                query=selected_query,
+                time_range="week",
+                rerank=True
+            )
+            
+        return results[:limit]
+
+    @staticmethod
+    async def get_discover_feed() -> Dict[str, List[Dict[str, Any]]]:
+        """Fetch top news across all categories for the main feed."""
+        categories_to_fetch = ["tech", "finance", "science", "entertainment"]
+        tasks = [NewsAggregator.fetch_category_news(cat, limit=4) for cat in categories_to_fetch]
+        results = await asyncio.gather(*tasks)
+        
+        return {
+            cat: res for cat, res in zip(categories_to_fetch, results)
+        }
 
 
 async def _check_rate_limit(domain: str, max_requests: int = 10, window_seconds: int = 60) -> bool:
@@ -461,7 +724,7 @@ async def fetch_page_content(
     url: str,
     max_length: int = 10000,
     format: str = "text",
-    stealth_mode: str = "off",
+    stealth_mode: str = "medium",
     auto_bypass: bool = False,
     render_js: bool = False,
 ) -> Optional[Dict[str, Any]]:
@@ -593,14 +856,14 @@ async def fetch_page_content(
             if format == "json" or (format == "text" and extracted.startswith("{")):
                 data = json.loads(extracted)
                 metadata = {
-                    "title": data.get("title", ""),
-                    "author": data.get("author", ""),
-                    "sitename": data.get("sitename", ""),
-                    "date": data.get("date", ""),
-                    "description": data.get("description", ""),
-                    "language": data.get("language", ""),
+                    "title": data.get("title") or "",
+                    "author": data.get("author") or "",
+                    "sitename": data.get("sitename") or "",
+                    "date": data.get("date") or "",
+                    "description": data.get("description") or "",
+                    "language": data.get("language") or "",
                 }
-                content = data.get("text", "")
+                content = data.get("text") or ""
             else:
                 # Markdown or HTML format
                 content = extracted
@@ -694,7 +957,7 @@ async def search_and_fetch(
     max_content_length: int = 10000,
     format: str = "text",
     rerank: bool = False,
-    stealth_mode: str = "off",
+    stealth_mode: str = "medium",
     render_js: bool = False,
     translate_to: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -752,7 +1015,7 @@ async def search_and_fetch(
             render_js=render_js,
         )
         
-        if fetched:
+        if fetched and fetched.get("content") and len(fetched.get("content", "").strip()) > 0:
             # Calculate content quality score
             quality_score = _calculate_content_quality(fetched)
             
@@ -771,6 +1034,7 @@ async def search_and_fetch(
                     "title": result.get("title", ""),
                     "url": url,
                     "snippet": result.get("snippet", ""),
+                    "graph": result.get("graph"),
                 },
                 "fetched_content": {
                     "title": fetched.get("title", ""),
@@ -786,6 +1050,7 @@ async def search_and_fetch(
                     "title": result.get("title", ""),
                     "url": url,
                     "snippet": result.get("snippet", ""),
+                    "graph": result.get("graph"),
                 },
                 "fetch_status": "failed",
             }

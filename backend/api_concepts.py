@@ -89,9 +89,9 @@ class ConceptNoteEntry(BaseModel):
     section_title: str
     summary_text: str
     source_type: str
-    confidence_level: float
+    confidence_level: Optional[float] = 0.5
     created_at: datetime
-    related_node_ids: List[str]
+    related_node_ids: Optional[List[str]] = []
 
 
 # ============================================================================
@@ -261,7 +261,7 @@ def get_all_graph_data(
     try:
         nodes = get_all_concepts(session)
         relationships = get_all_relationships(session, include_proposed=include_proposed)
-        logger.info(f"Fetched {len(nodes)} nodes and {len(relationships)} relationships")
+        logger.debug(f"Fetched {len(nodes)} nodes and {len(relationships)} relationships")
         return {
             "nodes": nodes,
             "links": relationships,

@@ -1,6 +1,7 @@
 from neo4j import GraphDatabase  # type: ignore[reportMissingImports]
 from neo4j.exceptions import SessionExpired, ServiceUnavailable, TransientError
 from typing import Generator, Optional
+from contextlib import contextmanager
 import time
 import logging
 
@@ -28,6 +29,7 @@ def _get_driver():
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
+            notifications_min_severity="OFF",  # Suppress schema warnings
         )
 
     try:
@@ -44,6 +46,7 @@ def _get_driver():
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
+            notifications_min_severity="OFF",
         )
     return _driver
 
@@ -111,6 +114,23 @@ def get_neo4j_session() -> Generator:
                 session.close()
             except Exception:
                 pass
+
+
+@contextmanager
+def neo4j_session():
+    """
+    Context manager for Neo4j sessions (for use with 'with' statements).
+    Use this instead of get_neo4j_session() when not using FastAPI dependencies.
+    """
+    session_gen = get_neo4j_session()
+    session = next(session_gen)
+    try:
+        yield session
+    finally:
+        try:
+            next(session_gen)
+        except StopIteration:
+            pass
 
 
 def get_driver():

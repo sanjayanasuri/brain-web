@@ -16,7 +16,6 @@ from services_ingestion_runs import create_ingestion_run, update_ingestion_run_s
 from services_evidence_snapshots import create_or_get_snapshot, normalize_content, compute_content_hash
 from services_sources import upsert_source_document
 from services_graph import get_concept_by_name
-from services_browser_use import execute_skill, BrowserUseAPIError
 from connectors.edgar import EdgarConnector
 from connectors.ir import IRConnector
 from connectors.news_rss import NewsRSSConnector
@@ -59,84 +58,6 @@ def _get_company_id_from_ticker(session: Session, graph_id: str, ticker: str) ->
     return None
 
 
-def _acquire_via_browser_use_ir(
-    session: Session,
-    graph_id: str,
-    branch_id: str,
-    ticker: str,
-    company_id: Optional[str],
-    skill_id: Optional[str],
-) -> List[Dict[str, Any]]:
-    """
-    Acquire IR pages using Browser Use skill.
-    
-    Args:
-        session: Neo4j session
-        graph_id: Graph ID
-        branch_id: Branch ID
-        ticker: Ticker symbol
-        company_id: Optional Company Concept node_id
-        skill_id: Browser Use skill ID for IR acquisition
-    
-    Returns:
-        List of acquisition artifacts (url, title, published_at, raw_text, source_type)
-    """
-    if not skill_id:
-        logger.warning(f"[Finance Acquisition] No Browser Use IR skill configured for {ticker}")
-        return []
-    
-    artifacts = []
-    try:
-        # Execute Browser Use skill to fetch IR pages
-        skill_output = execute_skill(
-            skill_id,
-            parameters={
-                "ticker": ticker,
-                "page_type": "ir",  # Investor relations pages
-                "max_pages": 10,
-            }
-        )
-        
-        # Parse skill output (structure depends on skill implementation)
-        # Expected: list of pages with url, title, published_at, content
-        pages = skill_output.get("pages", []) or []
-        
-        for page in pages:
-            url = page.get("url", "")
-            title = page.get("title", "")
-            published_at_str = page.get("published_at")
-            content = page.get("content", "") or page.get("text", "")
-            
-            # Convert published_at to Unix timestamp
-            published_at_ts = None
-            if published_at_str:
-                try:
-                    dt = datetime.fromisoformat(published_at_str.replace("Z", "+00:00"))
-                    published_at_ts = int(dt.timestamp() * 1000)
-                except Exception:
-                    pass
-            
-            if url and content:
-                artifacts.append({
-                    "url": url,
-                    "title": title or url,
-                    "published_at": published_at_ts,
-                    "raw_text": content,
-                    "raw_html": page.get("html"),
-                    "source_type": "BROWSER_USE",
-                    "doc_type": "IR_PAGE",
-                })
-        
-        logger.info(f"[Finance Acquisition] Browser Use IR skill returned {len(artifacts)} pages for {ticker}")
-        
-    except BrowserUseAPIError as e:
-        logger.error(f"[Finance Acquisition] Browser Use IR skill failed for {ticker}: {e}")
-    except Exception as e:
-        logger.error(f"[Finance Acquisition] Browser Use IR skill error for {ticker}: {e}", exc_info=True)
-    
-    return artifacts
-
-
 def run_company_acquisition(
     session: Session,
     company_id: str,
@@ -144,7 +65,6 @@ def run_company_acquisition(
     sources: List[str] = ["edgar", "ir", "news"],
     since_days: int = 30,
     limit_per_source: int = 20,
-    browser_use_ir_skill_id: Optional[str] = None,
 ) -> FinanceSourceRun:
     """
     Run a complete acquisition cycle for a company.
@@ -163,7 +83,6 @@ def run_company_acquisition(
         sources: List of sources to use ["edgar", "ir", "news"]
         since_days: Days to look back
         limit_per_source: Max documents per source
-        browser_use_ir_skill_id: Optional Browser Use skill ID for IR pages
     
     Returns:
         FinanceSourceRun with acquisition results
@@ -214,28 +133,6 @@ def run_company_acquisition(
             error_msg = f"EDGAR acquisition failed: {str(e)}"
             errors.append(error_msg)
             sources_failed.append("edgar")
-            logger.error(f"[Finance Acquisition] {error_msg}", exc_info=True)
-    
-    # Acquire from IR (Browser Use)
-    if "ir" in sources:
-        sources_attempted.append("ir")
-        try:
-            ir_artifacts = _acquire_via_browser_use_ir(
-                session=session,
-                graph_id=graph_id,
-                branch_id=branch_id,
-                ticker=ticker,
-                company_id=company_id,
-                skill_id=browser_use_ir_skill_id,
-            )
-            all_artifacts.extend(ir_artifacts)
-            sources_succeeded.append("ir")
-            logger.info(f"[Finance Acquisition] IR (Browser Use): {len(ir_artifacts)} pages for {ticker}")
-            
-        except Exception as e:
-            error_msg = f"IR acquisition failed: {str(e)}"
-            errors.append(error_msg)
-            sources_failed.append("ir")
             logger.error(f"[Finance Acquisition] {error_msg}", exc_info=True)
     
     # Acquire from News RSS

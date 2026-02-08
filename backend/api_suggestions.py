@@ -585,3 +585,59 @@ def get_suggestions(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get suggestions: {str(e)}")
 
+
+@router.get("/paths")
+def get_suggested_paths(
+    concept_id: str = Query(..., description="Starting concept ID"),
+    limit: int = Query(3, ge=1, le=10, description="Number of paths to return"),
+    graph_id: Optional[str] = Query(None, description="Graph ID"),
+    session: Session = Depends(get_neo4j_session),
+) -> List[Dict[str, Any]]:
+    """
+    Get suggested learning paths starting from a specific concept.
+    """
+    try:
+        if graph_id:
+            target_graph_id = graph_id
+        else:
+            target_graph_id, _ = get_active_graph_context(session)
+
+        # 1. Find simple paths: Concept -> Neighbor -> Neighbor of Neighbor
+        path_query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        MATCH (start:Concept {node_id: $concept_id})-[:BELONGS_TO]->(g)
+        MATCH path = (start)-[:RELATED_TO*2..3]-(end:Concept)
+        WHERE (end)-[:BELONGS_TO]->(g)
+        RETURN path, end.node_id as end_id, end.name as end_name, end.domain as end_domain, end.type as end_type
+        LIMIT $limit
+        """
+        
+        result = session.run(path_query, graph_id=target_graph_id, concept_id=concept_id, limit=limit)
+        paths = []
+        
+        for record in result:
+            neo4j_path = record["path"]
+            nodes = neo4j_path.nodes
+            steps = []
+            for node in nodes:
+                steps.append({
+                    "concept_id": node["node_id"],
+                    "name": node["name"],
+                    "domain": node.get("domain", "General"),
+                    "type": node.get("type", "Concept")
+                })
+                
+            paths.append({
+                "path_id": hashlib.md5(f"{concept_id}-{record['end_id']}".encode()).hexdigest()[:8],
+                "title": f"Path to {record['end_name']}",
+                "rationale": "Connected through key concepts",
+                "steps": steps,
+                "start_concept_id": concept_id
+            })
+            
+        return paths
+
+    except Exception as e:
+        print(f"Error fetching paths: {e}")
+        # Return empty list instead of erroring out to keep UI stable
+        return []

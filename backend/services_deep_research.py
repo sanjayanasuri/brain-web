@@ -48,16 +48,10 @@ async def perform_deep_research(
     """
     
     # 1. Setup Session & Context
-    driver = get_neo4j_session()
-    session = driver._session  # Hack: get underlying session if using wrapper, or just use driver.session()
-    # Note: In this codebase, get_neo4j_session usually returns a driver or session factory. 
-    # Let's assume standard pattern: use `with driver.session() as session:`
+    from db_neo4j import get_driver
+    driver = get_driver()
     
-    # Actually, look at other services. They typically take `session` as arg or use a context manager.
-    # Let's use a fresh session for this operation.
-    from db_neo4j import driver as neo4j_driver
-    
-    with neo4j_driver.session() as session:
+    with driver.session() as session:
         if not graph_id or not branch_id:
             graph_id, branch_id = get_active_graph_context(session)
             
@@ -80,69 +74,46 @@ async def perform_deep_research(
             )
             
             fetches = search_result.get("results", [])
-            logger.info(f"Deep Research: Fetched {len(fetches)} pages for {topic}")
+            logger.info(f"Deep Research: Found {len(fetches)} matching sources for '{topic}'")
+            for i, f in enumerate(fetches):
+                url = f.get("search_result", {}).get("url")
+                title = f.get("search_result", {}).get("title")
+                logger.info(f"  Source {i+1}: [{title}]({url})")
             
             # 4. Ingest Content (Parallel)
             ingest_tasks = []
             
-            for item in fetches:
+            for i, item in enumerate(fetches):
                 status = item.get("fetch_status")
                 if status != "success":
+                    logger.warning(f"  Skipping Source {i+1}: Fetch failed or no content")
                     continue
                     
                 content_data = item.get("fetched_content", {})
                 url = item.get("search_result", {}).get("url")
+                title = content_data.get("title") or item.get("search_result", {}).get("title")
                 
-                # Ingest payload
-                # Note: ingest_web_payload is synchronous (Neo4j ops). 
-                # For true parallel, we'd need thread pool, but for now sequential is safer for DB locks.
-                # Or we can run it in executor.
-                
-                # For "Quick Access", speed matters. Let's do sequential for safety first, optimize later.
-                # Just calling it directly.
+                logger.info(f"Ingesting Source {i+1}: {title}...")
                 
                 # Metadata to track this specific research run
                 meta = {
                     "research_topic": topic,
                     "research_run_id": run_id,
-                    "source_title": content_data.get("title"),
+                    "source_title": title,
                 }
                 
                 res = ingest_web_payload(
                     session=session,
                     url=url,
                     text=content_data.get("content", ""),
-                    title=content_data.get("title"),
+                    title=title,
                     graph_id_override=graph_id,
                     branch_id_override=branch_id,
                     metadata=meta,
-                    # Crucial: Link these to the run_id so we can filter later
-                    # ingest_web_payload creates a run internally? 
-                    # No, it calls create_ingestion_run. 
-                    # We want to associate it with OUR run_id or link them.
-                    # ingest_web_payload doesn't take an external run_id to strictly reuse. 
-                    # It creates a run for *that specific page*.
-                    # However, we can tag the *Claims* and *SourceChunks* with our parent run_id
-                    # if we modified ingest_web_payload to accept it.
-                    # 
-                    # Looking at ingest_web_payload signature: 
-                    # It doesn't accept an external run_id override for the MAIN run object.
-                    # BUT retrieval helpers filter by `claim.ingestion_run_id`.
-                    # ingest_web_payload sets `claim.ingestion_run_id` to the run IT creates.
-                    # 
-                    # PROBLEM: `ingest_web_payload` creates a NEW run for every page.
-                    # So we will have N runs.
-                    # We need to analyze across ALL these N runs.
-                    # 
-                    # SOLUTION: 
-                    # 1. Collect the `run_id`s returned by `ingest_web_payload`.
-                    # 2. Pass this list of run_ids to retrieval plans (need to support list).
-                    # OR
-                    # Update `ingest_web_payload` to accept `parent_run_id` or similar? 
-                    # Easier: Just collect the list of run_ids.
                 )
                 
                 item["ingest_result"] = res
+                logger.info(f"  ✓ Ingested {title}. Run ID: {res['run_id']}")
             
             # Collect all run IDs from ingestion
             ingestion_run_ids = [
@@ -175,6 +146,9 @@ async def perform_deep_research(
                     intent = Intent.COMPARE.value
                 else:
                     intent = Intent.DEFINITION_OVERVIEW.value
+            
+            logger.info(f"Deep Research: Detected intent '{intent}' for analysis")
+            logger.info(f"Deep Research: Running retrieval plan on {len(ingestion_run_ids)} ingested sources...")
             
             # 6. Run Retrieval Plan
             # We need to run the plan passing the *list* of run_ids to filter.
@@ -216,7 +190,8 @@ async def perform_deep_research(
                 graph_id=graph_id,
                 branch_id=branch_id,
                 limit=10,
-                detail_level="full"
+                detail_level="full",
+                ingestion_run_id=ingestion_run_ids
             )
             
             # 7. Augment with "Fresh" Claims from this session
@@ -233,15 +208,25 @@ async def perform_deep_research(
                 fresh_res = session.run(query_fresh, graph_id=graph_id, run_ids=ingestion_run_ids)
                 fresh_claims = [record.data() for record in fresh_res]
             
-            # 8. Synthesize Learning Brief
-            # Combine plan context + fresh claims
+            # 8. Synthesize Learning Report
+            from services_research_memo import generate_research_memo
+            
+            logger.info(f"Deep Research: Synthesizing research report for '{topic}'")
+            memo_result = generate_research_memo(
+                session=session,
+                query=topic,
+                graph_id=graph_id,
+                branch_id=branch_id,
+                evidence_strictness="low", # Be more inclusive for research findings
+            )
             
             response = {
                 "topic": topic,
                 "intent": intent,
-                "summary": "Research complete.",
+                "summary": memo_result.get("memo_text", "Research complete."),
                 "fresh_findings": fresh_claims,
                 "context_analysis": plan_result.dict(),
+                "citations": memo_result.get("citations", []),
                 "sources": [
                     {"title": i["search_result"]["title"], "url": i["search_result"]["url"]}
                     for i in fetches if i.get("fetch_status") == "success"

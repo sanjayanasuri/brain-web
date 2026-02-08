@@ -24,19 +24,18 @@ def auto_export_csv(background_tasks: Optional[BackgroundTasks] = None, export_p
     def _export():
         try:
             if graph_id:
-                print(f"[SYNC] Starting auto-export to CSV for graph: {graph_id}...")
+                logger.debug(f"[SYNC] Starting auto-export to CSV for graph: {graph_id}...")
             else:
-                print("[SYNC] Starting auto-export to CSV (all graphs)...")
+                logger.debug("[SYNC] Starting auto-export to CSV (all graphs)...")
             from scripts import export_csv_from_neo4j
             export_csv_from_neo4j.main(graph_id=graph_id, export_per_graph=export_per_graph)
             if graph_id:
-                print(f"[SYNC] ✓ Auto-export to CSV completed successfully for graph: {graph_id}")
+                logger.debug(f"[SYNC] ✓ Auto-export to CSV completed successfully for graph: {graph_id}")
             else:
-                print("[SYNC] ✓ Auto-export to CSV completed successfully")
+                logger.debug("[SYNC] ✓ Auto-export to CSV completed successfully")
             logger.info(f"Auto-export to CSV completed successfully (graph_id={graph_id})")
         except Exception as e:
-            print(f"[SYNC] ✗ Error during auto-export to CSV: {e}")
-            logger.error(f"Error during auto-export to CSV: {e}", exc_info=True)
+            logger.error(f"[SYNC] ✗ Error during auto-export to CSV: {e}", exc_info=True)
             # Don't raise - export failures shouldn't break API responses
     
     if background_tasks:

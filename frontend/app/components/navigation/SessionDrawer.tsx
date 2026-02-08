@@ -12,306 +12,6 @@ import { useOptimizedNavigation, routePrefetchers, quickNav, useNavigationShortc
 import { useEnhancedNavigation } from '../../lib/navigationHelpers';
 import { clearChatStateIfAvailable, closeMobileSidebarIfAvailable, registerMobileSidebarCloseFunction } from '../../lib/globalNavigationState';
 
-// Todo List Component
-function TodoList({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
-  // Always initialize with empty array to match server render (prevent hydration mismatch)
-  const [todos, setTodos] = useState<Array<{ id: string; text: string; completed: boolean }>>([]);
-  const [newTodo, setNewTodo] = useState('');
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState('');
-  const [isMounted, setIsMounted] = useState(false);
-
-  // Load todos from localStorage after mount (client-only)
-  useEffect(() => {
-    setIsMounted(true);
-    if (typeof window === 'undefined') return;
-    
-    try {
-      const savedTodos = localStorage.getItem('brain-web-todos');
-      if (savedTodos) {
-        const parsed = JSON.parse(savedTodos);
-        if (Array.isArray(parsed)) {
-          setTodos(parsed);
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load todos:', e);
-    }
-  }, []);
-
-  // Save todos to localStorage whenever they change (but skip initial empty state)
-  useEffect(() => {
-    if (typeof window === 'undefined' || !isMounted) return;
-    
-    // Use optimized storage with debouncing
-    optimizedStorage.setItem('brain-web-todos', todos, 300);
-  }, [todos, isMounted]);
-
-  const addTodo = () => {
-    if (newTodo.trim()) {
-      const todo = {
-        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-        text: newTodo.trim(),
-        completed: false,
-      };
-      const newTodos = [...todos, todo];
-      setTodos(newTodos);
-      setNewTodo('');
-      // Immediate save for user feedback
-      optimizedStorage.setItem('brain-web-todos', newTodos, 0);
-    }
-  };
-
-  const toggleTodo = (id: string) => {
-    const newTodos = todos.map(todo => 
-      todo.id === id ? { ...todo, completed: !todo.completed } : todo
-    );
-    setTodos(newTodos);
-    optimizedStorage.setItem('brain-web-todos', newTodos, 0);
-  };
-
-  const deleteTodo = (id: string) => {
-    const newTodos = todos.filter(todo => todo.id !== id);
-    setTodos(newTodos);
-    optimizedStorage.setItem('brain-web-todos', newTodos, 0);
-  };
-
-  const startEdit = (id: string, text: string) => {
-    setEditingId(id);
-    setEditText(text);
-  };
-
-  const saveEdit = (id: string) => {
-    if (editText.trim()) {
-      const newTodos = todos.map(todo => 
-        todo.id === id ? { ...todo, text: editText.trim() } : todo
-      );
-      setTodos(newTodos);
-      optimizedStorage.setItem('brain-web-todos', newTodos, 0);
-    }
-    setEditingId(null);
-    setEditText('');
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditText('');
-  };
-
-  return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{
-        padding: '16px',
-        borderBottom: '1px solid var(--border)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexShrink: 0,
-      }}>
-        <h2 style={{ fontSize: 'clamp(15px, 2vw, 17px)', fontWeight: '600', margin: 0 }}>Todo</h2>
-        {onToggleCollapse && (
-          <button
-            onClick={onToggleCollapse}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '4px 8px',
-              borderRadius: '4px',
-              color: 'var(--muted)',
-              fontSize: '14px',
-            }}
-            aria-label="Collapse sidebar"
-            title="Collapse sidebar"
-          >
-            ←
-          </button>
-        )}
-      </div>
-
-      {/* Todo List */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
-        {/* Add Todo Input */}
-        <div style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
-          <input
-            type="text"
-            value={newTodo}
-            onChange={(e) => setNewTodo(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                addTodo();
-              }
-            }}
-            placeholder="Add a task..."
-            style={{
-              flex: 1,
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderRadius: '6px',
-              fontSize: 'clamp(13px, 1.8vw, 14px)',
-              background: 'var(--surface)',
-              color: 'var(--ink)',
-              outline: 'none',
-            }}
-          />
-          <button
-            onClick={addTodo}
-            style={{
-              padding: '8px 12px',
-              background: 'var(--accent)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontSize: '13px',
-              fontWeight: '500',
-            }}
-          >
-            Add
-          </button>
-        </div>
-
-        {/* Todo Items */}
-        {todos.length === 0 ? (
-          <div style={{ 
-            color: 'var(--muted)', 
-            fontSize: 'clamp(13px, 1.8vw, 14px)', 
-            textAlign: 'center', 
-            padding: '20px',
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-            No tasks yet. Add one above!
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {todos.map((todo) => (
-              <div
-                key={todo.id}
-                style={{
-                  padding: '10px',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border)',
-                  background: todo.completed ? 'var(--surface)' : 'var(--background)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  opacity: todo.completed ? 0.6 : 1,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={todo.completed}
-                  onChange={() => toggleTodo(todo.id)}
-                  style={{
-                    cursor: 'pointer',
-                    width: '16px',
-                    height: '16px',
-                  }}
-                />
-                {editingId === todo.id ? (
-                  <div style={{ flex: 1, display: 'flex', gap: '4px' }}>
-                    <input
-                      type="text"
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          saveEdit(todo.id);
-                        } else if (e.key === 'Escape') {
-                          cancelEdit();
-                        }
-                      }}
-                      style={{
-                        flex: 1,
-                        padding: '4px 8px',
-                        border: '1px solid var(--border)',
-                        borderRadius: '4px',
-                        fontSize: '13px',
-                        background: 'var(--surface)',
-                        color: 'var(--ink)',
-                        outline: 'none',
-                      }}
-                      autoFocus
-                    />
-                    <button
-                      onClick={() => saveEdit(todo.id)}
-                      style={{
-                        padding: '4px 8px',
-                        background: 'var(--accent)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '11px',
-                      }}
-                    >
-                      ✓
-                    </button>
-                    <button
-                      onClick={cancelEdit}
-                      style={{
-                        padding: '4px 8px',
-                        background: 'transparent',
-                        color: 'var(--muted)',
-                        border: '1px solid var(--border)',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '11px',
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div
-                      onClick={() => startEdit(todo.id, todo.text)}
-                      style={{
-                        flex: 1,
-                      fontSize: 'clamp(13px, 1.8vw, 14px)',
-                      color: 'var(--ink)',
-                      textDecoration: todo.completed ? 'line-through' : 'none',
-                      cursor: 'pointer',
-                      }}
-                    >
-                      {todo.text}
-                    </div>
-                    <button
-                      onClick={() => deleteTodo(todo.id)}
-                      style={{
-                        padding: '4px 8px',
-                        background: 'transparent',
-                        color: 'var(--muted)',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        borderRadius: '4px',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'var(--surface)';
-                        e.currentTarget.style.color = 'var(--accent-2)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'transparent';
-                        e.currentTarget.style.color = 'var(--muted)';
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 interface SessionDrawerProps {
   isCollapsed?: boolean;
@@ -330,25 +30,64 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const [isMobile, setIsMobile] = useState(false);
   const [activeGraphId, setActiveGraphId] = useState<string>('');
   const [graphs, setGraphs] = useState<GraphSummary[]>([]);
-  
+  const [userProfile, setUserProfile] = useState<{ name?: string } | null>(null);
+  const [uiPreferences, setUIPreferences] = useState<any>(null);
+
   // Add navigation shortcuts
   useNavigationShortcuts(activeGraphId);
-  
+
   // Enhanced navigation with chat state management
   const enhancedNav = useEnhancedNavigation({
     resetChatState: clearChatStateIfAvailable,
     closeMobileSidebar: () => setIsMobileSidebarOpen(false),
     activeGraphId
   });
-  
+
   // Register mobile sidebar close function for global access
   useEffect(() => {
     registerMobileSidebarCloseFunction(() => setIsMobileSidebarOpen(false));
   }, [setIsMobileSidebarOpen]);
 
+  // Swipe Gesture Handling for iPad
+  useEffect(() => {
+    let touchStartX = 0;
+    let touchEndX = 0;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartX = e.changedTouches[0].screenX;
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      touchEndX = e.changedTouches[0].screenX;
+      handleSwipe();
+    };
+
+    const handleSwipe = () => {
+      const swipeDistance = touchEndX - touchStartX;
+      const threshold = 100;
+
+      if (swipeDistance > threshold && isCollapsed) {
+        // Swipe right to expand
+        onToggleCollapse?.();
+      } else if (swipeDistance < -threshold && !isCollapsed) {
+        // Swipe left to collapse
+        onToggleCollapse?.();
+      }
+    };
+
+    document.addEventListener('touchstart', handleTouchStart);
+    document.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart);
+      document.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [isCollapsed, onToggleCollapse]);
+
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+      // iPad counts as mobile if it's in portrait, but let's be more specific for tablets
+      setIsMobile(window.innerWidth < 768 || (window.innerWidth < 1024 && 'ontouchstart' in window));
     };
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -363,17 +102,46 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
         setRecentSessions(sessions);
         const localLastSession = getLastSession();
         setLastSession(localLastSession);
-        
+
         // Load graphs to get active graph
         const graphsData = await listGraphs();
         setActiveGraphId(graphsData.active_graph_id || '');
         setGraphs(graphsData.graphs || []);
-        
+
         // Load chat sessions
         const chats = getChatSessions();
         // Sort by updatedAt descending
         const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
         setChatSessions(sortedChats.slice(0, 10));
+
+        // Load user profile
+        try {
+          const profileRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/preferences/user-profile`, {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('brain-web-token') || ''}`
+            }
+          });
+          if (profileRes.ok) {
+            const profileData = await profileRes.json();
+            setUserProfile(profileData);
+          }
+        } catch (e) {
+          console.warn('Failed to load user profile:', e);
+        }
+        // Load UI preferences
+        try {
+          const uiRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/preferences/ui`, {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('brain-web-token') || ''}`
+            }
+          });
+          if (uiRes.ok) {
+            const uiData = await uiRes.json();
+            setUIPreferences(uiData);
+          }
+        } catch (e) {
+          console.warn('Failed to load UI preferences:', e);
+        }
       } catch (err) {
         console.warn('Failed to load sessions:', err);
         setRecentSessions([]);
@@ -382,20 +150,27 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       }
     }
     loadData();
-    
-    // Refresh chat sessions periodically
-    const interval = setInterval(() => {
-      const chats = getChatSessions();
-      const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
-      setChatSessions(sortedChats.slice(0, 10));
-    }, 2000);
-    
-    return () => clearInterval(interval);
   }, []);
+
+  const handleUpdateUIPreferences = async (newPrefs: any) => {
+    setUIPreferences(newPrefs);
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/preferences/ui`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('brain-web-token') || ''}`
+        },
+        body: JSON.stringify(newPrefs)
+      });
+    } catch (e) {
+      console.error('Failed to save UI preferences:', e);
+    }
+  };
 
   const navigateToExplorer = useCallback(async (params?: { conceptId?: string; graphId?: string; chat?: string }) => {
     const url = quickNav.toExplorer(params?.graphId, params?.conceptId, params?.chat);
-    
+
     await navigateWithOptimization(url, {
       prefetch: async () => {
         // Prefetch relevant data based on parameters
@@ -454,7 +229,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    
+
     return date.toLocaleDateString();
   };
 
@@ -492,7 +267,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     sessions.forEach((session) => {
       const sessionDate = new Date(session.end_at);
       const sessionDay = new Date(sessionDate.getFullYear(), sessionDate.getMonth(), sessionDate.getDate());
-      
+
       if (sessionDay.getTime() === today.getTime()) {
         groups[0].sessions.push(session);
       } else if (sessionDay.getTime() === yesterday.getTime()) {
@@ -507,35 +282,35 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
 
   const sessionGroups = groupSessionsByDate(recentSessions);
   const mostRecentGraphSession = recentSessions[0];
-  
+
   // Get graph name for display
   const getGraphName = (graphId?: string): string => {
     if (!graphId) return '';
     const graph = graphs.find(g => g.graph_id === graphId);
     return graph?.name || graphId;
   };
-  
+
   // Find the most recent session for the graph we want to display
   const getMostRecentGraphInfo = () => {
     const targetGraphId = mostRecentGraphSession?.graph_id || activeGraphId;
     if (!targetGraphId) return null;
-    
+
     // Find all sessions for this graph
     const graphSessions = recentSessions.filter(s => s.graph_id === targetGraphId);
     const latestSession = graphSessions[0] || mostRecentGraphSession;
-    
+
     if (!latestSession) return null;
-    
+
     return {
       name: getGraphName(targetGraphId),
       session: latestSession,
       graphId: targetGraphId,
     };
   };
-  
+
   const mostRecentGraphInfo = getMostRecentGraphInfo();
   const mostRecentGraphName = mostRecentGraphInfo?.name || '';
-  
+
   // Format time for graph session display
   const formatGraphSessionTime = (endAt: string): string => {
     try {
@@ -550,7 +325,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       if (diffMins < 60) return `${diffMins}m ago`;
       if (diffHours < 24) return `${diffHours}h ago`;
       if (diffDays < 7) return `${diffDays}d ago`;
-      
+
       return date.toLocaleDateString();
     } catch (e) {
       return 'Recent';
@@ -590,67 +365,34 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
           zIndex: 1000,
           boxShadow: '2px 0 8px rgba(0, 0, 0, 0.1)',
         }}>
-          <TodoList onToggleCollapse={() => setIsMobileSidebarOpen(false)} />
           <div style={{ padding: '16px', borderTop: '1px solid var(--border)' }}>
-            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              Quick Links
+            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              Pillars
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <div
-                onClick={enhancedNav.navigateToHome}
-                className={`nav-link ${pathname === '/home' ? 'active' : ''}`}
-                style={{ cursor: 'pointer' }}
-              >
-                Home
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <Link
-                href={`/?graph_id=${activeGraphId || 'default'}`}
+                href="/home"
+                onClick={() => setIsMobileSidebarOpen(false)}
+                className={`nav-link ${pathname === '/home' ? 'active' : ''}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '8px', textDecoration: 'none', color: 'var(--ink)' }}
+              >
+                <span style={{ fontWeight: pathname === '/home' ? '600' : '400' }}>Home</span>
+              </Link>
+              <Link
+                href="/"
                 onClick={() => setIsMobileSidebarOpen(false)}
                 className={`nav-link ${pathname === '/' ? 'active' : ''}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '8px', textDecoration: 'none', color: 'var(--ink)' }}
               >
-                Explorer
+                <span style={{ fontWeight: pathname === '/' ? '600' : '400' }}>Explorer</span>
               </Link>
               <Link
-                href="/gaps"
+                href="/lecture-studio"
                 onClick={() => setIsMobileSidebarOpen(false)}
-                className={`nav-link ${pathname === '/gaps' ? 'active' : ''}`}
+                className={`nav-link ${pathname === '/lecture-studio' ? 'active' : ''}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '8px', textDecoration: 'none', color: 'var(--ink)' }}
               >
-                Gaps
-              </Link>
-              <Link
-                href="/review"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className={`nav-link ${pathname === '/review' ? 'active' : ''}`}
-              >
-                Review
-              </Link>
-              <Link
-                href="/digest"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className={`nav-link ${pathname === '/digest' ? 'active' : ''}`}
-              >
-                Digest
-              </Link>
-              <Link
-                href="/saved"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className={`nav-link ${pathname === '/saved' ? 'active' : ''}`}
-              >
-                Saved
-              </Link>
-              <Link
-                href="/source-management"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className={`nav-link ${pathname === '/source-management' ? 'active' : ''}`}
-              >
-                Source Management
-              </Link>
-              <Link
-                href="/profile-customization"
-                onClick={() => setIsMobileSidebarOpen(false)}
-                className={`nav-link ${pathname === '/profile-customization' ? 'active' : ''}`}
-              >
-                Profile Customization
+                <span style={{ fontWeight: pathname === '/lecture-studio' ? '600' : '400' }}>Studio</span>
               </Link>
             </div>
           </div>
@@ -693,66 +435,53 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
         <Link
           href="/home"
           style={{
-            padding: '8px',
-            borderRadius: '6px',
+            padding: '10px',
+            borderRadius: '10px',
             color: pathname === '/home' ? 'var(--accent)' : 'var(--muted)',
-            fontSize: '20px',
+            fontSize: '22px',
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            background: pathname === '/home' ? 'var(--surface)' : 'transparent',
           }}
           title="Home"
         >
-          🏠
+          H
         </Link>
         <Link
           href="/"
           style={{
-            padding: '8px',
-            borderRadius: '6px',
+            padding: '10px',
+            borderRadius: '10px',
             color: pathname === '/' ? 'var(--accent)' : 'var(--muted)',
-            fontSize: '20px',
+            fontSize: '22px',
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            background: pathname === '/' ? 'var(--surface)' : 'transparent',
           }}
           title="Explorer"
         >
-          🗺️
+          E
         </Link>
         <Link
-          href="/gaps"
+          href="/lecture-studio"
           style={{
-            padding: '8px',
-            borderRadius: '6px',
-            color: pathname === '/gaps' ? 'var(--accent)' : 'var(--muted)',
-            fontSize: '20px',
+            padding: '10px',
+            borderRadius: '10px',
+            color: pathname === '/lecture-studio' ? 'var(--accent)' : 'var(--muted)',
+            fontSize: '22px',
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            background: pathname === '/lecture-studio' ? 'var(--surface)' : 'transparent',
           }}
-          title="Gaps"
+          title="Studio"
         >
-          ⚠️
-        </Link>
-        <Link
-          href="/review"
-          style={{
-            padding: '8px',
-            borderRadius: '6px',
-            color: pathname === '/review' ? 'var(--accent)' : 'var(--muted)',
-            fontSize: '20px',
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-          title="Review"
-        >
-          ✓
+          U
         </Link>
       </div>
     );
@@ -766,79 +495,78 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
       display: 'flex',
       flexDirection: 'column',
       height: '100vh',
-      overflowY: 'auto',
+      overflowY: 'hidden',
       flexShrink: 0,
     }}>
-      {/* Todo List Section */}
-      <TodoList onToggleCollapse={onToggleCollapse} />
+      {/* Search/Home Pillar Section */}
+      <div style={{ padding: '20px 16px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '12px', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          Brain Web
+        </h1>
 
-      {/* Quick Links Section */}
-      <div style={{ 
-        padding: '16px', 
-        borderTop: '1px solid var(--border)',
-        flexShrink: 0,
-      }}>
-        <div style={{ 
-          fontSize: 'clamp(12px, 1.6vw, 13px)', 
-          fontWeight: '600', 
-          color: 'var(--muted)', 
-          marginBottom: '8px', 
-          textTransform: 'uppercase', 
-          letterSpacing: '0.5px' 
-        }}>
-          Quick Links
-        </div>
-        <div className="nav-section-content">
-          <div
-            onClick={enhancedNav.navigateToHome}
-            className={`nav-link ${pathname === '/home' ? 'active' : ''}`}
-            style={{ cursor: 'pointer' }}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <Link
+            href="/home"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '10px',
+              textDecoration: 'none', color: pathname === '/home' ? 'var(--accent)' : 'var(--ink)',
+              background: pathname === '/home' ? 'var(--surface)' : 'transparent',
+              fontWeight: pathname === '/home' ? '600' : '400',
+              transition: 'all 0.2s ease'
+            }}
           >
-            Home
-          </div>
+            <span>Home</span>
+          </Link>
           <Link
             href="/"
-            className={`nav-link ${pathname === '/' ? 'active' : ''}`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '10px',
+              textDecoration: 'none', color: pathname === '/' ? 'var(--accent)' : 'var(--ink)',
+              background: pathname === '/' ? 'var(--surface)' : 'transparent',
+              fontWeight: pathname === '/' ? '600' : '400',
+              transition: 'all 0.2s ease'
+            }}
           >
-            Explorer
+            <span>Explorer</span>
           </Link>
           <Link
-            href="/gaps"
-            className={`nav-link ${pathname === '/gaps' ? 'active' : ''}`}
+            href="/lecture-studio"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '10px',
+              textDecoration: 'none', color: pathname === '/lecture-studio' ? 'var(--accent)' : 'var(--ink)',
+              background: pathname === '/lecture-studio' ? 'var(--surface)' : 'transparent',
+              fontWeight: pathname === '/lecture-studio' ? '600' : '400',
+              transition: 'all 0.2s ease'
+            }}
           >
-            Gaps
-          </Link>
-          <Link
-            href="/review"
-            className={`nav-link ${pathname === '/review' ? 'active' : ''}`}
-          >
-            Review
-          </Link>
-          <Link
-            href="/ingest"
-            className={`nav-link ${pathname === '/ingest' ? 'active' : ''}`}
-          >
-            Upload PDF
-          </Link>
-          <Link
-            href="/source-management"
-            className={`nav-link ${pathname === '/source-management' ? 'active' : ''}`}
-          >
-            Source Management
-          </Link>
-          <Link
-            href="/profile-customization"
-            className={`nav-link ${pathname === '/profile-customization' ? 'active' : ''}`}
-          >
-            Profile Customization
-          </Link>
-          <Link
-            href="/control-panel"
-            className={`nav-link ${pathname === '/control-panel' ? 'active' : ''}`}
-          >
-            Workspace Library
+            <span>Studio</span>
           </Link>
         </div>
+      </div>
+
+      <div style={{ padding: '0 16px', margin: '8px 0' }}>
+        <div style={{ height: '1px', background: 'var(--border)', width: '100%' }} />
+      </div>
+
+      {/* Main Content Area (Todos/Sessions) */}
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      </div>
+
+      {/* Footer / Profile */}
+      <div style={{ padding: '16px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{
+          width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-gradient)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '12px'
+        }}>
+          {(userProfile?.name || 'User').charAt(0).toUpperCase()}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {userProfile?.name || 'User'}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>Pro Member</div>
+        </div>
+        <Link href="/profile-customization" style={{ color: 'var(--muted)', fontSize: '13px', fontWeight: 'bold' }} title="Settings">Settings</Link>
       </div>
     </div>
   );

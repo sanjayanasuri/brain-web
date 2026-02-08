@@ -216,7 +216,7 @@ export default function SuggestedPlan({ daysAhead = 7 }: SuggestedPlanProps) {
                           {suggestion.task_title}
                         </div>
                         <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ fontSize: '14px' }}>🕒</span>
+                          <span style={{ fontSize: '12px', fontWeight: 700 }}>Time:</span>
                           {formatTime(suggestion.start)} - {formatTime(suggestion.end)}
                         </div>
                         {suggestion.reasons.length > 0 && (

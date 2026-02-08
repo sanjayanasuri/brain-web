@@ -11,15 +11,12 @@ import {
   setFocusAreaActive,
   getUserProfile,
   updateUserProfile,
-  getTeachingStyle,
-  recomputeTeachingStyle,
   getUIPreferences,
   updateUIPreferences,
   getGraphOverview,
   ResponseStyleProfileWrapper,
   FocusArea,
   UserProfile,
-  TeachingStyleProfile,
   type UIPreferences,
   type ReminderPreferences,
 } from '../api-client';
@@ -35,14 +32,12 @@ export default function ControlPanelPage() {
 
   const [styleWrapper, setStyleWrapper] =
     useState<ResponseStyleProfileWrapper | null>(null);
-  const [teachingStyle, setTeachingStyle] = useState<TeachingStyleProfile | null>(null);
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
   const [savingStyle, setSavingStyle] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [addingFocus, setAddingFocus] = useState(false);
-  const [recomputingStyle, setRecomputingStyle] = useState(false);
   const [uiPreferences, setUIPreferences] = useState<UIPreferences | null>(null);
   const [savingReminders, setSavingReminders] = useState(false);
 
@@ -67,13 +62,11 @@ export default function ControlPanelPage() {
 
         const [
           styleRes,
-          teachingStyleRes,
           focusRes,
           profileRes,
           uiPrefsRes,
         ] = await Promise.allSettled([
           getResponseStyle(),
-          getTeachingStyle(),
           getFocusAreas(),
           getUserProfile(),
           getUIPreferences(),
@@ -81,9 +74,6 @@ export default function ControlPanelPage() {
 
         if (styleRes.status === 'fulfilled') {
           setStyleWrapper(styleRes.value);
-        }
-        if (teachingStyleRes.status === 'fulfilled') {
-          setTeachingStyle(teachingStyleRes.value);
         }
         if (focusRes.status === 'fulfilled') {
           setFocusAreas(focusRes.value);
@@ -224,19 +214,19 @@ export default function ControlPanelPage() {
       >
         <div>
           <p className="eyebrow">Profile Customization</p>
-          <h1 className="title">Customize Your Brain Web</h1>
+          <h1 className="title">Personalize Your AI</h1>
           <p className="subtitle">
-            Tune how Brain Web talks, what it focuses on, and personalize your learning experience.
+            Tune how Brain Web interacts with you and shapes your learning experience.
           </p>
         </div>
         <div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Link
-              href="/"
+              href="/settings"
               className="pill pill--ghost pill--small"
               style={{ cursor: 'pointer', textDecoration: 'none' }}
             >
-              ← Back to Graph
+              Account Settings
             </Link>
             <Link
               href="/source-management"
@@ -261,13 +251,13 @@ export default function ControlPanelPage() {
       >
         {/* LEFT COLUMN: Voice + Profile */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-          {/* Your Voice */}
+          {/* System Instructions */}
           <section className="control-card">
             <div className="control-header" style={{ marginBottom: 8 }}>
               <div>
-                <span>Your Voice</span>
+                <span>System Instructions</span>
                 <p className="subtitle" style={{ marginTop: 4 }}>
-                  Shape how Brain Web explains things.
+                  Shape how Brain Web explains things and structures its responses.
                 </p>
               </div>
             </div>
@@ -284,12 +274,12 @@ export default function ControlPanelPage() {
                       setStyleWrapper(prev =>
                         prev
                           ? {
-                              ...prev,
-                              profile: {
-                                ...prev.profile,
-                                tone: e.target.value,
-                              },
-                            }
+                            ...prev,
+                            profile: {
+                              ...prev.profile,
+                              tone: e.target.value,
+                            },
+                          }
                           : prev,
                       )
                     }
@@ -305,12 +295,12 @@ export default function ControlPanelPage() {
                       setStyleWrapper(prev =>
                         prev
                           ? {
-                              ...prev,
-                              profile: {
-                                ...prev.profile,
-                                teaching_style: e.target.value,
-                              },
-                            }
+                            ...prev,
+                            profile: {
+                              ...prev.profile,
+                              teaching_style: e.target.value,
+                            },
+                          }
                           : prev,
                       )
                     }
@@ -325,12 +315,12 @@ export default function ControlPanelPage() {
                       setStyleWrapper(prev =>
                         prev
                           ? {
-                              ...prev,
-                              profile: {
-                                ...prev.profile,
-                                sentence_structure: e.target.value,
-                              },
-                            }
+                            ...prev,
+                            profile: {
+                              ...prev.profile,
+                              sentence_structure: e.target.value,
+                            },
+                          }
                           : prev,
                       )
                     }
@@ -347,14 +337,14 @@ export default function ControlPanelPage() {
                       setStyleWrapper(prev =>
                         prev
                           ? {
-                              ...prev,
-                              profile: {
-                                ...prev.profile,
-                                explanation_order: stringToList(
-                                  e.target.value,
-                                ),
-                              },
-                            }
+                            ...prev,
+                            profile: {
+                              ...prev.profile,
+                              explanation_order: stringToList(
+                                e.target.value,
+                              ),
+                            },
+                          }
                           : prev,
                       )
                     }
@@ -371,14 +361,14 @@ export default function ControlPanelPage() {
                       setStyleWrapper(prev =>
                         prev
                           ? {
-                              ...prev,
-                              profile: {
-                                ...prev.profile,
-                                forbidden_styles: stringToList(
-                                  e.target.value,
-                                ),
-                              },
-                            }
+                            ...prev,
+                            profile: {
+                              ...prev.profile,
+                              forbidden_styles: stringToList(
+                                e.target.value,
+                              ),
+                            },
+                          }
                           : prev,
                       )
                     }
@@ -391,110 +381,26 @@ export default function ControlPanelPage() {
                   onClick={handleSaveStyle}
                   disabled={savingStyle}
                 >
-                  {savingStyle ? 'Saving…' : 'Save voice'}
+                  {savingStyle ? 'Saving…' : 'Save instructions'}
                 </button>
               </div>
             )}
           </section>
 
-          {/* Teaching Style Profile */}
+
+          {/* User Profile */}
           <section className="control-card">
             <div className="control-header" style={{ marginBottom: 8 }}>
               <div>
-                <span>Teaching Style Profile</span>
+                <span>User Profile</span>
                 <p className="subtitle" style={{ marginTop: 4 }}>
-                  Automatically learned from your lectures. Used to shape chat and drafts.
-                </p>
-              </div>
-            </div>
-
-            {teachingStyle && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{
-                  padding: '12px',
-                  background: 'rgba(17, 138, 178, 0.05)',
-                  borderRadius: '8px',
-                  border: '1px solid rgba(17, 138, 178, 0.2)',
-                }}>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong style={{ fontSize: '12px', color: 'var(--muted)' }}>Tone:</strong>
-                    <div style={{ fontSize: '14px', marginTop: '4px' }}>{teachingStyle.tone}</div>
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong style={{ fontSize: '12px', color: 'var(--muted)' }}>Teaching style:</strong>
-                    <div style={{ fontSize: '14px', marginTop: '4px' }}>{teachingStyle.teaching_style}</div>
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong style={{ fontSize: '12px', color: 'var(--muted)' }}>Sentence structure:</strong>
-                    <div style={{ fontSize: '14px', marginTop: '4px' }}>{teachingStyle.sentence_structure}</div>
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong style={{ fontSize: '12px', color: 'var(--muted)' }}>Explanation order:</strong>
-                    <div style={{ fontSize: '14px', marginTop: '4px' }}>
-                      {teachingStyle.explanation_order.join(' → ')}
-                    </div>
-                  </div>
-                  <div>
-                    <strong style={{ fontSize: '12px', color: 'var(--muted)' }}>Forbidden styles:</strong>
-                    <div style={{ fontSize: '14px', marginTop: '4px' }}>
-                      {teachingStyle.forbidden_styles.join(', ')}
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  className="send-btn"
-                  style={{ alignSelf: 'flex-start' }}
-                  onClick={async () => {
-                    try {
-                      setRecomputingStyle(true);
-                      setError(null);
-                      const updated = await recomputeTeachingStyle(5);
-                      setTeachingStyle(updated);
-                    } catch (err) {
-                      setError(
-                        err instanceof Error ? err.message : 'Failed to recompute teaching style',
-                      );
-                    } finally {
-                      setRecomputingStyle(false);
-                    }
-                  }}
-                  disabled={recomputingStyle}
-                >
-                  {recomputingStyle ? 'Recomputing…' : 'Recompute from recent lectures'}
-                </button>
-                <p style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '-8px' }}>
-                  Analyzes your 5 most recent lectures to update your teaching style profile.
-                </p>
-              </div>
-            )}
-          </section>
-
-          {/* You as a learner */}
-          <section className="control-card">
-            <div className="control-header" style={{ marginBottom: 8 }}>
-              <div>
-                <span>You as a learner</span>
-                <p className="subtitle" style={{ marginTop: 4 }}>
-                  Background, interests, and weak spots.
+                  Personal details, interests, and background. Dynamically updated from your interactions.
                 </p>
               </div>
             </div>
 
             {userProfile && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <label className="field-label">
-                  Name
-                  <input
-                    className="chat-input"
-                    value={userProfile.name}
-                    onChange={e =>
-                      setUserProfile(prev =>
-                        prev ? { ...prev, name: e.target.value } : prev,
-                      )
-                    }
-                  />
-                </label>
                 <label className="field-label">
                   Background (comma-separated)
                   <input
@@ -504,9 +410,9 @@ export default function ControlPanelPage() {
                       setUserProfile(prev =>
                         prev
                           ? {
-                              ...prev,
-                              background: stringToList(e.target.value),
-                            }
+                            ...prev,
+                            background: stringToList(e.target.value),
+                          }
                           : prev,
                       )
                     }
@@ -521,9 +427,9 @@ export default function ControlPanelPage() {
                       setUserProfile(prev =>
                         prev
                           ? {
-                              ...prev,
-                              interests: stringToList(e.target.value),
-                            }
+                            ...prev,
+                            interests: stringToList(e.target.value),
+                          }
                           : prev,
                       )
                     }
@@ -538,9 +444,9 @@ export default function ControlPanelPage() {
                       setUserProfile(prev =>
                         prev
                           ? {
-                              ...prev,
-                              weak_spots: stringToList(e.target.value),
-                            }
+                            ...prev,
+                            weak_spots: stringToList(e.target.value),
+                          }
                           : prev,
                       )
                     }
@@ -562,9 +468,9 @@ export default function ControlPanelPage() {
                         setUserProfile(prev =>
                           prev
                             ? {
-                                ...prev,
-                                learning_preferences: parsed,
-                              }
+                              ...prev,
+                              learning_preferences: parsed,
+                            }
                             : prev,
                         );
                         setError(null);
@@ -581,7 +487,7 @@ export default function ControlPanelPage() {
                   onClick={handleSaveProfile}
                   disabled={savingProfile}
                 >
-                  {savingProfile ? 'Saving…' : 'Save learner profile'}
+                  {savingProfile ? 'Saving…' : 'Save profile'}
                 </button>
               </div>
             )}
@@ -594,328 +500,32 @@ export default function ControlPanelPage() {
           <section className="control-card control-card--legend">
             <div className="control-header" style={{ marginBottom: 8 }}>
               <div>
-                <span>Current focus</span>
+                <span>Dynamic Focus</span>
                 <p className="subtitle" style={{ marginTop: 4 }}>
-                  What you want Brain Web to lean toward right now.
+                  Topics Brain Web is currently leaning toward based on your recent activity.
                 </p>
               </div>
             </div>
 
             <div className="legend">
-              {focusAreas.map(area => (
-                <div key={area.id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <button
-                    className={`pill ${
-                      area.active ? 'pill--active' : ''
-                    }`}
-                    onClick={() => handleToggleFocus(area)}
-                  >
-                    {area.name}
-                  </button>
-                  <button
-                    className="pill pill--ghost pill--small"
-                    onClick={() => handleRemoveFocus(area)}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
+              {focusAreas.length === 0 ? (
+                <p className="subtitle" style={{ fontStyle: 'italic' }}>No active focus areas. Start a conversation to build focus.</p>
+              ) : (
+                focusAreas.map(area => (
+                  <div key={area.id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div
+                      className={`pill ${area.active ? 'pill--active' : ''
+                        }`}
+                    >
+                      {area.name}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
 
-            <div
-              style={{
-                marginTop: 12,
-                borderTop: '1px solid var(--border)',
-                paddingTop: 10,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-              }}
-            >
-              <p
-                className="eyebrow"
-                style={{ fontSize: 11, textTransform: 'none' }}
-              >
-                Add a new focus area
-              </p>
-              <input
-                className="chat-input"
-                placeholder="e.g. Distributed Systems"
-                value={newFocusName}
-                onChange={e => setNewFocusName(e.target.value)}
-              />
-              <input
-                className="chat-input"
-                placeholder="Optional description"
-                value={newFocusDescription}
-                onChange={e => setNewFocusDescription(e.target.value)}
-              />
-              <button
-                className="pill"
-                style={{ alignSelf: 'flex-start' }}
-                onClick={handleAddFocusArea}
-                disabled={addingFocus}
-              >
-                {addingFocus ? 'Adding…' : 'Add focus area'}
-              </button>
-            </div>
           </section>
 
-          {/* Reminder Preferences */}
-          <section className="control-card control-card--legend">
-            <div className="control-header" style={{ marginBottom: 8 }}>
-              <div>
-                <span>Reminders</span>
-                <p className="subtitle" style={{ marginTop: 4 }}>
-                  Optional in-app reminders for digest, review queue, and finance snapshots.
-                </p>
-              </div>
-            </div>
-
-            {uiPreferences && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {/* Weekly Digest */}
-                <div style={{
-                  padding: '12px',
-                  background: 'var(--background)',
-                  borderRadius: '6px',
-                  border: '1px solid var(--border)',
-                }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={uiPreferences.reminders?.weekly_digest?.enabled || false}
-                      onChange={(e) => {
-                        setUIPreferences(prev => prev ? {
-                          ...prev,
-                          reminders: {
-                            ...(prev.reminders || {
-                              weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                              review_queue: { enabled: false, cadence_days: 3 },
-                              finance_stale: { enabled: false, cadence_days: 7 },
-                            }),
-                            weekly_digest: {
-                              ...(prev.reminders?.weekly_digest || { enabled: false, day_of_week: 1, hour: 9 }),
-                              enabled: e.target.checked,
-                            },
-                          },
-                        } : null);
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <span style={{ fontWeight: '600', fontSize: '14px' }}>Weekly digest reminder</span>
-                  </label>
-                  {uiPreferences.reminders?.weekly_digest?.enabled && (
-                    <div style={{ marginLeft: '24px', marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        Day:
-                        <select
-                          value={uiPreferences.reminders.weekly_digest.day_of_week || 1}
-                          onChange={(e) => {
-                            setUIPreferences(prev => prev ? {
-                              ...prev,
-                              reminders: {
-                                ...(prev.reminders || {
-                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                                  review_queue: { enabled: false, cadence_days: 3 },
-                                  finance_stale: { enabled: false, cadence_days: 7 },
-                                }),
-                                weekly_digest: {
-                                  ...(prev.reminders?.weekly_digest || { enabled: true, day_of_week: 1, hour: 9 }),
-                                  day_of_week: parseInt(e.target.value),
-                                },
-                              },
-                            } : null);
-                          }}
-                          style={{ padding: '2px 4px', fontSize: '12px' }}
-                        >
-                          <option value={1}>Monday</option>
-                          <option value={2}>Tuesday</option>
-                          <option value={3}>Wednesday</option>
-                          <option value={4}>Thursday</option>
-                          <option value={5}>Friday</option>
-                          <option value={6}>Saturday</option>
-                          <option value={7}>Sunday</option>
-                        </select>
-                      </label>
-                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        Hour:
-                        <input
-                          type="number"
-                          min="0"
-                          max="23"
-                          value={uiPreferences.reminders.weekly_digest.hour || 9}
-                          onChange={(e) => {
-                            setUIPreferences(prev => prev ? {
-                              ...prev,
-                              reminders: {
-                                ...(prev.reminders || {
-                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                                  review_queue: { enabled: false, cadence_days: 3 },
-                                  finance_stale: { enabled: false, cadence_days: 7 },
-                                }),
-                                weekly_digest: {
-                                  ...(prev.reminders?.weekly_digest || { enabled: true, day_of_week: 1, hour: 9 }),
-                                  hour: parseInt(e.target.value) || 9,
-                                },
-                              },
-                            } : null);
-                          }}
-                          style={{ width: '50px', padding: '2px 4px', fontSize: '12px' }}
-                        />
-                      </label>
-                    </div>
-                  )}
-                </div>
-
-                {/* Review Queue */}
-                <div style={{
-                  padding: '12px',
-                  background: 'var(--background)',
-                  borderRadius: '6px',
-                  border: '1px solid var(--border)',
-                }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={uiPreferences.reminders?.review_queue?.enabled || false}
-                      onChange={(e) => {
-                        setUIPreferences(prev => prev ? {
-                          ...prev,
-                          reminders: {
-                            ...(prev.reminders || {
-                              weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                              review_queue: { enabled: false, cadence_days: 3 },
-                              finance_stale: { enabled: false, cadence_days: 7 },
-                            }),
-                            review_queue: {
-                              ...(prev.reminders?.review_queue || { enabled: false, cadence_days: 3 }),
-                              enabled: e.target.checked,
-                            },
-                          },
-                        } : null);
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <span style={{ fontWeight: '600', fontSize: '14px' }}>Review queue reminder</span>
-                  </label>
-                  {uiPreferences.reminders?.review_queue?.enabled && (
-                    <div style={{ marginLeft: '24px', marginTop: '8px' }}>
-                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        Remind every:
-                        <input
-                          type="number"
-                          min="1"
-                          value={uiPreferences.reminders.review_queue.cadence_days || 3}
-                          onChange={(e) => {
-                            setUIPreferences(prev => prev ? {
-                              ...prev,
-                              reminders: {
-                                ...(prev.reminders || {
-                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                                  review_queue: { enabled: false, cadence_days: 3 },
-                                  finance_stale: { enabled: false, cadence_days: 7 },
-                                }),
-                                review_queue: {
-                                  ...(prev.reminders?.review_queue || { enabled: true, cadence_days: 3 }),
-                                  cadence_days: parseInt(e.target.value) || 3,
-                                },
-                              },
-                            } : null);
-                          }}
-                          style={{ width: '50px', padding: '2px 4px', fontSize: '12px' }}
-                        />
-                        days
-                      </label>
-                    </div>
-                  )}
-                </div>
-
-                {/* Finance Stale */}
-                <div style={{
-                  padding: '12px',
-                  background: 'var(--background)',
-                  borderRadius: '6px',
-                  border: '1px solid var(--border)',
-                }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={uiPreferences.reminders?.finance_stale?.enabled || false}
-                      onChange={(e) => {
-                        setUIPreferences(prev => prev ? {
-                          ...prev,
-                          reminders: {
-                            ...(prev.reminders || {
-                              weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                              review_queue: { enabled: false, cadence_days: 3 },
-                              finance_stale: { enabled: false, cadence_days: 7 },
-                            }),
-                            finance_stale: {
-                              ...(prev.reminders?.finance_stale || { enabled: false, cadence_days: 7 }),
-                              enabled: e.target.checked,
-                            },
-                          },
-                        } : null);
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <span style={{ fontWeight: '600', fontSize: '14px' }}>Finance stale snapshot reminder</span>
-                  </label>
-                  {uiPreferences.reminders?.finance_stale?.enabled && (
-                    <div style={{ marginLeft: '24px', marginTop: '8px' }}>
-                      <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        Remind every:
-                        <input
-                          type="number"
-                          min="1"
-                          value={uiPreferences.reminders.finance_stale.cadence_days || 7}
-                          onChange={(e) => {
-                            setUIPreferences(prev => prev ? {
-                              ...prev,
-                              reminders: {
-                                ...(prev.reminders || {
-                                  weekly_digest: { enabled: false, day_of_week: 1, hour: 9 },
-                                  review_queue: { enabled: false, cadence_days: 3 },
-                                  finance_stale: { enabled: false, cadence_days: 7 },
-                                }),
-                                finance_stale: {
-                                  ...(prev.reminders?.finance_stale || { enabled: true, cadence_days: 7 }),
-                                  cadence_days: parseInt(e.target.value) || 7,
-                                },
-                              },
-                            } : null);
-                          }}
-                          style={{ width: '50px', padding: '2px 4px', fontSize: '12px' }}
-                        />
-                        days
-                      </label>
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  className="pill"
-                  style={{ alignSelf: 'flex-start', marginTop: '8px' }}
-                  onClick={async () => {
-                    if (!uiPreferences) return;
-                    try {
-                      setSavingReminders(true);
-                      setError(null);
-                      await updateUIPreferences(uiPreferences);
-                    } catch (err) {
-                      setError(err instanceof Error ? err.message : 'Failed to save reminders');
-                    } finally {
-                      setSavingReminders(false);
-                    }
-                  }}
-                  disabled={savingReminders}
-                >
-                  {savingReminders ? 'Saving…' : 'Save reminder preferences'}
-                </button>
-              </div>
-            )}
-          </section>
 
         </div>
       </div>

@@ -9,13 +9,13 @@ from datetime import datetime
 
 # Import the script modules as Python modules, not as CLI scripts
 from scripts import import_csv_to_neo4j, export_csv_from_neo4j
-from notion_sync import sync_once
-from notion_index_state import load_index_state, is_page_indexed, set_page_indexed, set_index_mode
-from notion_page_index import get_lectures_for_page, remove_page_from_index
+from service_notion_sync import sync_once
+from service_notion_index_state import load_index_state, is_page_indexed, set_page_indexed, set_index_mode
+from service_notion_page_index import get_lectures_for_page, remove_page_from_index
 from services_notion import list_notion_pages, list_notion_databases
-from notion_wrapper import get_page_title
+from service_notion_wrapper import get_page_title
 from config import NOTION_DATABASE_IDS
-from notion_wrapper import get_database_pages
+from service_notion_wrapper import get_database_pages
 from services_graph import unlink_lecture, get_notion_config, update_notion_config
 from db_neo4j import get_neo4j_session
 from models import NotionConfig
@@ -305,7 +305,7 @@ def get_notion_sync_history(limit: int = 20, auth: dict = Depends(require_auth))
                         page_title = get_page_title(page)
                         # Update the index with the fetched title for future use
                         if page_title and page_title != "Untitled":
-                            from notion_page_index import add_lecture_for_page
+                            from service_notion_page_index import add_lecture_for_page
                             # Update just the title without changing lecture_ids
                             existing_lecture_ids = page_info.get("lecture_ids", [])
                             if existing_lecture_ids:

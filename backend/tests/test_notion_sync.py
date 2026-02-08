@@ -22,7 +22,7 @@ class TestStateManagement:
     
     def test_load_last_sync_timestamp_first_run(self, tmp_path, monkeypatch):
         """Test loading timestamp when no previous sync exists."""
-        from notion_sync import load_last_sync_timestamp, SYNC_STATE_FILE
+        from service_notion_sync import load_last_sync_timestamp, SYNC_STATE_FILE
         
         # Use temporary file
         monkeypatch.setattr('notion_sync.SYNC_STATE_FILE', tmp_path / "notion_sync_state.json")
@@ -33,11 +33,11 @@ class TestStateManagement:
     
     def test_save_and_load_timestamp(self, tmp_path, monkeypatch):
         """Test saving and loading timestamp."""
-        from notion_sync import save_last_sync_timestamp, load_last_sync_timestamp, SYNC_STATE_FILE
+        from service_notion_sync import save_last_sync_timestamp, load_last_sync_timestamp, SYNC_STATE_FILE
         
         # Use temporary file
         test_file = tmp_path / "notion_sync_state.json"
-        monkeypatch.setattr('notion_sync.SYNC_STATE_FILE', test_file)
+        monkeypatch.setattr('service_notion_sync.SYNC_STATE_FILE', test_file)
         
         # Save timestamp
         test_timestamp = datetime.now(timezone.utc)
@@ -51,7 +51,7 @@ class TestStateManagement:
     
     def test_load_timestamp_invalid_file(self, tmp_path, monkeypatch):
         """Test loading timestamp when file is corrupted."""
-        from notion_sync import load_last_sync_timestamp, SYNC_STATE_FILE
+        from service_notion_sync import load_last_sync_timestamp, SYNC_STATE_FILE
         
         # Use temporary file with invalid JSON
         test_file = tmp_path / "notion_sync_state.json"
@@ -69,15 +69,15 @@ class TestFindUpdatedPages:
     
     def test_find_updated_pages_no_timestamp(self, mock_notion_client):
         """Test finding pages when no timestamp (first sync)."""
-        from notion_sync import find_updated_pages_since
+        from service_notion_sync import find_updated_pages_since
         
         # Mock database pages
         mock_notion_client.pages.list.return_value = {"results": []}
         
         # Set NOTION_DATABASE_IDS to have one database so it doesn't process standalone pages
         # (which would require mocking list_notion_pages() and get_page())
-        with patch('notion_sync.NOTION_DATABASE_IDS', ['db1']):
-            with patch('notion_sync.get_database_pages', return_value=[
+        with patch('service_notion_sync.NOTION_DATABASE_IDS', ['db1']):
+            with patch('service_notion_sync.get_database_pages', return_value=[
                 {
                     "id": "page1",
                     "last_edited_time": "2024-01-01T00:00:00Z",
@@ -90,7 +90,7 @@ class TestFindUpdatedPages:
     
     def test_find_updated_pages_with_timestamp(self, mock_notion_client):
         """Test finding pages updated since a timestamp."""
-        from notion_sync import find_updated_pages_since
+        from service_notion_sync import sync_once, SYNC_STATE_FILE
         
         timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
         
@@ -114,7 +114,7 @@ class TestFindUpdatedPages:
     
     def test_find_updated_pages_empty(self, mock_notion_client):
         """Test finding pages when none are updated."""
-        from notion_sync import find_updated_pages_since
+        from service_notion_sync import sync_once, SYNC_STATE_FILE
         
         timestamp = datetime(2024, 1, 1, tzinfo=timezone.utc)
         

@@ -573,6 +573,9 @@ def delete_graph(session: Session, graph_id: str) -> None:
     session.run(query, graph_id=graph_id).consume()
 
 
+_SCOPING_INITIALIZED = False
+
+
 def ensure_graph_scoping_initialized(session: Session) -> None:
     """Backfill legacy data into the default graph and main branch.
 
@@ -581,6 +584,10 @@ def ensure_graph_scoping_initialized(session: Session) -> None:
     - Only touches relationships that do not already have graph_id/on_branches
     - Best-effort backfill for Resources + HAS_RESOURCE scoping
     """
+    global _SCOPING_INITIALIZED
+    if _SCOPING_INITIALIZED:
+        return
+
     ensure_schema_constraints(session)
     ensure_default_context(session)
 
@@ -646,3 +653,5 @@ def ensure_graph_scoping_initialized(session: Session) -> None:
         graph_id=DEFAULT_GRAPH_ID,
         branch_id=DEFAULT_BRANCH_ID,
     ).consume()
+
+    _SCOPING_INITIALIZED = True

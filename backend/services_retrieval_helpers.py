@@ -48,7 +48,7 @@ def retrieve_claims_for_community_ids(
     branch_id: str,
     community_ids: List[str],
     limit_per: int = 30,
-    ingestion_run_id: Optional[str] = None
+    ingestion_run_id: Optional[Any] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve claims for given community IDs.
@@ -59,7 +59,7 @@ def retrieve_claims_for_community_ids(
         branch_id: Branch ID
         community_ids: List of community IDs
         limit_per: Max claims per community
-        ingestion_run_id: Optional run ID filter
+        ingestion_run_id: Optional run ID or list of IDs filter
     
     Returns:
         Flattened list of claim dicts
@@ -89,7 +89,7 @@ def retrieve_top_claims_by_query_embedding(
     branch_id: str,
     query: str,
     limit: int = 30,
-    ingestion_run_id: Optional[str] = None
+    ingestion_run_id: Optional[Any] = None
 ) -> List[Dict[str, Any]]:
     """
     Retrieve top claims by embedding similarity to query.
@@ -100,13 +100,18 @@ def retrieve_top_claims_by_query_embedding(
         branch_id: Branch ID
         query: Query text
         limit: Max claims to return
-        ingestion_run_id: Optional run ID filter
+        ingestion_run_id: Optional run ID or list of IDs filter
     
     Returns:
         List of claim dicts sorted by similarity
     """
     ensure_graph_scoping_initialized(session)
     
+    # Normalize ingestion_run_id to a list for Cypher IN operator
+    run_ids = None
+    if ingestion_run_id:
+        run_ids = ingestion_run_id if isinstance(ingestion_run_id, list) else [ingestion_run_id]
+
     # Get query embedding
     try:
         query_embedding = embed_text(query)
@@ -120,7 +125,7 @@ def retrieve_top_claims_by_query_embedding(
     MATCH (claim:Claim {graph_id: $graph_id})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(claim.on_branches, [])
       AND claim.embedding IS NOT NULL
-      AND ($run_id IS NULL OR claim.ingestion_run_id = $run_id)
+      AND ($run_ids IS NULL OR claim.ingestion_run_id IN $run_ids)
     OPTIONAL MATCH (claim)-[:SUPPORTED_BY]->(chunk:SourceChunk {graph_id: $graph_id})
     RETURN claim.claim_id AS claim_id,
            claim.text AS text,
@@ -136,7 +141,7 @@ def retrieve_top_claims_by_query_embedding(
         query_cypher,
         graph_id=graph_id,
         branch_id=branch_id,
-        run_id=ingestion_run_id
+        run_ids=run_ids
     )
     
     claims_with_scores = []

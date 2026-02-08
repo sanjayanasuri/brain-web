@@ -23,12 +23,12 @@ export default function MobileConceptList({
 
   if (concepts.length === 0) {
     return (
-      <div style={{ 
-        padding: '48px 24px', 
+      <div style={{
+        padding: '48px 24px',
         textAlign: 'center',
         color: '#9ca3af',
       }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🧠</div>
+        <div style={{ fontSize: '14px', fontWeight: 700, marginBottom: '16px', color: '#9ca3af' }}>Brain</div>
         <div style={{ fontSize: '18px', fontWeight: '500', marginBottom: '8px', color: '#6b7280' }}>
           Start Building Your Knowledge Graph
         </div>
@@ -41,7 +41,7 @@ export default function MobileConceptList({
 
   return (
     <div style={{ padding: '16px', paddingBottom: '100px' }}>
-      <div style={{ 
+      <div style={{
         marginBottom: '16px',
         fontSize: '14px',
         color: '#6b7280',
@@ -49,7 +49,7 @@ export default function MobileConceptList({
       }}>
         {concepts.length} {concepts.length === 1 ? 'concept' : 'concepts'}
       </div>
-      
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {concepts.map((concept) => (
           <div
@@ -72,18 +72,18 @@ export default function MobileConceptList({
               e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
             }}
           >
-            <div style={{ 
-              fontSize: '18px', 
-              fontWeight: '600', 
+            <div style={{
+              fontSize: '18px',
+              fontWeight: '600',
               marginBottom: '8px',
               color: '#111827',
             }}>
               {concept.name}
             </div>
-            
+
             {concept.description && (
-              <div style={{ 
-                fontSize: '14px', 
+              <div style={{
+                fontSize: '14px',
                 color: '#6b7280',
                 marginBottom: '8px',
                 lineHeight: '1.5',
@@ -124,7 +124,7 @@ export default function MobileConceptList({
                   color: '#16a34a',
                   borderRadius: '6px',
                 }}>
-                  🔗 Link
+                  Link
                 </span>
               )}
             </div>

@@ -3,14 +3,13 @@
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useGraph } from '../GraphContext';
-import { useUIState } from './useUIState';
-import { useChatState } from './useChatState';
+import { useUI } from './useUIState';
+import { useChat } from './useChatState';
 import {
     selectGraph,
     getConcept,
     getResourcesForConcept,
     getIngestionRunChanges,
-    getTeachingStyle
 } from '../../../api-client';
 import { getLastSession } from '../../../lib/sessionState';
 import { addConceptToHistory } from '../../../lib/conceptNavigationHistory';
@@ -40,8 +39,8 @@ export function useGraphInitialization(
         setTeachingStyle
     } = graph;
 
-    const ui = useUIState();
-    const chat = useChatState();
+    const ui = useUI();
+    const chat = useChat();
 
     const hasInitializedRef = useRef(false);
     const lastGraphIdRef = useRef<string | null>(null);
@@ -71,7 +70,6 @@ export function useGraphInitialization(
 
                 refreshBranches();
                 refreshFocusAreas();
-                getTeachingStyle().then(setTeachingStyle).catch(() => { });
             } catch (err) {
                 console.error('Error loading initial data:', err);
             }
@@ -117,7 +115,7 @@ export function useGraphInitialization(
                     const node = conceptInGraph as any;
                     if (node.x && node.y) {
                         centerNodeInVisibleArea(node.x, node.y, 800, true);
-                        graphRef.current.zoom(2.0, 800);
+                        graphRef.current.zoom?.(2.0, 800);
                     }
                 }
             }, 100);

@@ -12,13 +12,37 @@ interface Heading {
 
 interface DocumentOutlineProps {
   editor: Editor | null;
+  content?: string;
 }
 
-export function DocumentOutline({ editor }: DocumentOutlineProps) {
+export function DocumentOutline({ editor, content }: DocumentOutlineProps) {
   const [headings, setHeadings] = useState<Heading[]>([]);
 
   useEffect(() => {
-    if (!editor) return;
+    // If we have content, we can generate a global outline
+    if (content) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(content, 'text/html');
+      const foundHeadings: Heading[] = [];
+
+      const elements = doc.querySelectorAll('h1, h2, h3, h4, h5, h6');
+      elements.forEach((el, index) => {
+        const level = parseInt(el.tagName.substring(1));
+        foundHeadings.push({
+          id: `heading-content-${index}`,
+          level,
+          text: el.textContent || 'Untitled',
+          pos: index, // This pos is just for key/order here
+        });
+      });
+      setHeadings(foundHeadings);
+      return;
+    }
+
+    if (!editor) {
+      setHeadings([]);
+      return;
+    }
 
     const updateHeadings = () => {
       const foundHeadings: Heading[] = [];
@@ -51,7 +75,7 @@ export function DocumentOutline({ editor }: DocumentOutlineProps) {
       editor.off('update', updateHeadings);
       editor.off('selectionUpdate', updateHeadings);
     };
-  }, [editor]);
+  }, [editor, content]);
 
   const handleHeadingClick = (pos: number) => {
     if (!editor) return;

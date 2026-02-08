@@ -98,6 +98,15 @@ def set_profile(profile: UserProfile, session=Depends(get_neo4j_session)):
     return update_user_profile(session, profile)
 
 
+@router.patch("/user-profile", response_model=UserProfile)
+def patch_profile(update_dict: dict, session=Depends(get_neo4j_session)):
+    """
+    Partial update of the user profile.
+    """
+    from services_graph import patch_user_profile
+    return patch_user_profile(session, update_dict)
+
+
 @router.get("/ui", response_model=UIPreferences)
 def get_ui_prefs(session=Depends(get_neo4j_session)):
     """

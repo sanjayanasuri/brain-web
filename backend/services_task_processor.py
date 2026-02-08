@@ -79,6 +79,8 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
             result = _process_retrieve_context(session, task)
         elif task.task_type == TaskType.EXTRACT_CONCEPTS:
             result = _process_extract_concepts(session, task)
+        elif task.task_type == TaskType.REBUILD_COMMUNITIES:
+            result = _process_rebuild_communities(session, task)
         else:
             error = f"Unknown task type: {task.task_type}"
         
@@ -425,3 +427,34 @@ def _process_extract_concepts(session: Session, task: Task) -> Dict[str, Any]:
         "message": "Concept extraction not yet implemented",
         "task_type": task.task_type.value,
     }
+
+
+def _process_rebuild_communities(session: Session, task: Task) -> Dict[str, Any]:
+    """Rebuild communities for the graph."""
+    try:
+        from services_community_build import trigger_community_build
+        
+        resolution = task.params.get("resolution", 0.6)
+        
+        logger.info(f"Starting community rebuild task for graph {task.graph_id}")
+        
+        success = trigger_community_build(
+            session=session,
+            graph_id=task.graph_id,
+            branch_id=task.branch_id,
+            resolution=float(resolution),
+        )
+        
+        if success:
+            return {
+                "message": "Community detection completed successfully",
+                "graph_id": task.graph_id,
+                "task_type": task.task_type.value,
+            }
+        else:
+            raise Exception("Community build reported failure (check server logs for details)")
+            
+    except Exception as e:
+        logger.error(f"Error rebuilding communities: {e}", exc_info=True)
+        # Re-raise to be caught by main loop and mark task as FAILED
+        raise e

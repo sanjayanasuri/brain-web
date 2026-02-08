@@ -6,12 +6,14 @@ import { useSearchParams } from 'next/navigation';
 interface AIChatSidebarProps {
   lectureId?: string | null;
   lectureTitle?: string;
+  triggerMessage?: { text: string, image?: string, context?: { blockId?: string; blockText?: string } } | null;
+  onTriggerProcessed?: () => void;
 }
 
-export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
+export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTriggerProcessed }: AIChatSidebarProps) {
   const searchParams = useSearchParams();
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string, image?: string, blockId?: string }>>([]);
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -22,6 +24,51 @@ export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (triggerMessage) {
+      const { text, image, context } = triggerMessage;
+      setMessage(text);
+
+      const sendTrigger = async () => {
+        setMessages((prev) => [...prev, { role: 'user', content: text, image, blockId: context?.blockId }]);
+        setIsLoading(true);
+        setMessage('');
+
+        try {
+          const response = await fetch('/api/brain-web/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: text,
+              image: image, // Optional visual context
+              context_text: context?.blockText, // Full block text for tutor context
+              mode: 'graphrag',
+              graph_id: graphId,
+              branch_id: branchId,
+              lecture_id: lectureId,
+              focus_concept_id: undefined,
+              response_prefs: {
+                mode: 'compact',
+                ask_question_policy: 'at_most_one',
+                end_with_next_step: false,
+              },
+            }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setMessages((prev) => [...prev, { role: 'assistant', content: data.answer || '...' }]);
+          }
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setIsLoading(false);
+          onTriggerProcessed?.();
+        }
+      };
+      sendTrigger();
+    }
+  }, [triggerMessage]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,15 +164,46 @@ export function AIChatSidebar({ lectureId, lectureTitle }: AIChatSidebarProps) {
             </div>
             <div
               style={{
-                padding: '12px',
+                padding: '10px 12px',
+                borderRadius: '12px',
                 background: msg.role === 'user' ? 'var(--accent)' : 'var(--panel)',
-                color: msg.role === 'user' ? 'white' : 'var(--ink)',
-                borderRadius: '8px',
-                fontSize: '14px',
-                lineHeight: '1.6',
-                whiteSpace: 'pre-wrap',
+                color: msg.role === 'user' ? '#fff' : 'var(--ink)',
+                fontSize: '13px',
+                lineHeight: '1.5',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                border: msg.role === 'user' ? 'none' : '1px solid var(--border)'
               }}
             >
+              {msg.image && (
+                <div style={{ marginBottom: '8px', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.2)' }}>
+                  <img src={msg.image} alt="Handwritten Context" style={{ width: '100%', display: 'block' }} />
+                </div>
+              )}
+              {msg.blockId && (
+                <div
+                  className="block-link"
+                  style={{
+                    marginBottom: '8px',
+                    fontSize: '10px',
+                    color: msg.role === 'user' ? 'rgba(255,255,255,0.8)' : 'var(--accent)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                  onClick={() => {
+                    // Scroll to block logic
+                    const block = document.getElementById(`block-${msg.blockId}`);
+                    if (block) {
+                      block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      block.style.backgroundColor = 'rgba(255, 230, 0, 0.3)';
+                      setTimeout(() => { block.style.backgroundColor = 'transparent'; }, 2000);
+                    }
+                  }}
+                >
+                  <span>🔗 Linked to notes</span>
+                </div>
+              )}
               {msg.content}
             </div>
           </div>

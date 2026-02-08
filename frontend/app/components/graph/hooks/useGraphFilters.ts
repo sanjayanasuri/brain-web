@@ -1,6 +1,6 @@
 'use client';
 
-import { useReducer, useCallback } from 'react';
+import { useReducer, useCallback, useMemo } from 'react';
 
 interface GraphFiltersState {
   filterStatusAccepted: boolean;
@@ -67,37 +67,37 @@ function graphFiltersReducer(state: GraphFiltersState, action: GraphFiltersActio
 
 export function useGraphFilters() {
   const [state, dispatch] = useReducer(graphFiltersReducer, initialState);
-  
-  const actions = {
-    setStatusAccepted: useCallback((accepted: boolean) => {
+
+  const actions = useMemo(() => ({
+    setStatusAccepted: (accepted: boolean) => {
       dispatch({ type: 'SET_STATUS_ACCEPTED', payload: accepted });
-    }, []),
-    setStatusProposed: useCallback((proposed: boolean) => {
+    },
+    setStatusProposed: (proposed: boolean) => {
       dispatch({ type: 'SET_STATUS_PROPOSED', payload: proposed });
-    }, []),
-    setStatusRejected: useCallback((rejected: boolean) => {
+    },
+    setStatusRejected: (rejected: boolean) => {
       dispatch({ type: 'SET_STATUS_REJECTED', payload: rejected });
-    }, []),
-    setConfidenceThreshold: useCallback((threshold: number) => {
+    },
+    setConfidenceThreshold: (threshold: number) => {
       dispatch({ type: 'SET_CONFIDENCE_THRESHOLD', payload: threshold });
-    }, []),
-    setFilterSources: useCallback((sources: Set<string>) => {
+    },
+    setFilterSources: (sources: Set<string>) => {
       dispatch({ type: 'SET_FILTER_SOURCES', payload: sources });
-    }, []),
-    toggleFilterSource: useCallback((source: string) => {
+    },
+    toggleFilterSource: (source: string) => {
       dispatch({ type: 'TOGGLE_FILTER_SOURCE', payload: source });
-    }, []),
-    setShowFilters: useCallback((show: boolean) => {
+    },
+    setShowFilters: (show: boolean) => {
       dispatch({ type: 'SET_SHOW_FILTERS', payload: show });
-    }, []),
-    setSourceLayer: useCallback((layer: 'concepts' | 'evidence' | 'snapshots') => {
+    },
+    setSourceLayer: (layer: 'concepts' | 'evidence' | 'snapshots') => {
       dispatch({ type: 'SET_SOURCE_LAYER', payload: layer });
-    }, []),
-    resetFilters: useCallback(() => {
+    },
+    resetFilters: () => {
       dispatch({ type: 'RESET_FILTERS' });
-    }, []),
-  };
-  
-  return { state, actions };
+    },
+  }), []);
+
+  return useMemo(() => ({ state, actions }), [state, actions]);
 }
 

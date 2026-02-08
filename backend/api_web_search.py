@@ -14,6 +14,9 @@ from services_web_search import (
     deep_research,
     get_youtube_transcript,
     crawl_site,
+    ResearcherAgent,
+    QueryClassifier,
+    NewsAggregator,
 )
 
 logger = logging.getLogger("brain_web")
@@ -58,7 +61,7 @@ async def fetch_endpoint(
     url: str = Query(..., description="URL to fetch content from"),
     max_length: int = Query(10000, description="Maximum content length"),
     format: str = Query("text", description="Output format: text, markdown, or html"),
-    stealth_mode: str = Query("off", description="Anti-bot bypass: off, low, medium, high"),
+    stealth_mode: str = Query("medium", description="Anti-bot bypass: off, low, medium, high"),
     render_js: bool = Query(False, description="Enable JavaScript rendering for SPAs (Playwright/Selenium)"),
 ):
     """
@@ -99,7 +102,7 @@ async def search_and_fetch_endpoint(
     max_content_length: int = Query(10000, description="Maximum content length per page"),
     format: str = Query("text", description="Output format: text, markdown, or html"),
     rerank: bool = Query(False, description="Enable AI semantic reranking for better relevance"),
-    stealth_mode: str = Query("off", description="Anti-bot bypass: off, low, medium, high"),
+    stealth_mode: str = Query("medium", description="Anti-bot bypass: off, low, medium, high"),
     render_js: bool = Query(False, description="Enable JavaScript rendering for SPAs"),
     translate_to: Optional[str] = Query(None, description="Translate content to target language code (e.g., 'es', 'fr', 'de')"),
 ):
@@ -265,3 +268,54 @@ async def translate_endpoint(
 async def health_check():
     """Health check endpoint."""
     return {"status": "ok", "service": "brain-web-web-search"}
+
+@router.post("/research")
+async def research_endpoint(
+    query: str = Query(..., description="Research query"),
+    active_graph_id: str = Query("default", description="Active graph space ID"),
+):
+    """
+    Perform native, graph-aware research using the ResearcherAgent.
+    Iteratively searches the web and your knowledge graph to provide high-fidelity answers.
+    """
+    try:
+        agent = ResearcherAgent()
+        result = await agent.execute(query, active_graph_id=active_graph_id)
+        return result
+    except Exception as e:
+        logger.error(f"Research agent error: {e}")
+        raise HTTPException(status_code=500, detail=f"Research unsuccessful: {str(e)}")
+
+@router.post("/classify")
+async def classify_endpoint(
+    query: str = Query(..., description="Query to classify"),
+):
+    """Classify a query focus and search requirements."""
+    try:
+        result = await QueryClassifier.classify(query)
+        return result
+    except Exception as e:
+        logger.error(f"Classification error: {e}")
+        raise HTTPException(status_code=500, detail=f"Classification failed: {str(e)}")
+
+@router.get("/discover-news")
+async def discover_news_endpoint():
+    """Fetch top news across multiple categories for the Discover feed."""
+    try:
+        return await NewsAggregator.get_discover_feed()
+    except Exception as e:
+        logger.error(f"Discover news error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch discover news: {str(e)}")
+
+@router.get("/news-category")
+async def news_category_endpoint(
+    category: str = Query(..., description="Category: tech, science, finance, culture, sports, entertainment"),
+    limit: int = Query(10, description="Number of results"),
+):
+    """Fetch news for a specific category."""
+    try:
+        results = await NewsAggregator.fetch_category_news(category, limit)
+        return {"category": category, "results": results}
+    except Exception as e:
+        logger.error(f"Category news error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch news for {category}: {str(e)}")

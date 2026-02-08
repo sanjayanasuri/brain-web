@@ -670,9 +670,7 @@ def _extract_evidence_used(
         # Determine source type from claim metadata or source_id if not from doc
         if source_type == "web" and source_id:
             source_id_lower = str(source_id).lower()
-            if "browser_use" in source_id_lower or "browser" in source_id_lower:
-                source_type = "browser_use"
-            elif "notion" in source_id_lower:
+            if "notion" in source_id_lower:
                 source_type = "notion"
             elif "upload" in source_id_lower:
                 source_type = "upload"

@@ -18,6 +18,7 @@ INTENT_PRIORITY = {
     Intent.COMPARE: 4,
     Intent.WHO_NETWORK: 3,
     Intent.EXPLORE_NEXT: 2,
+    Intent.SELF_KNOWLEDGE: 1.5,
     Intent.DEFINITION_OVERVIEW: 1,
 }
 
@@ -58,6 +59,10 @@ INTENT_KEYWORDS = {
         "rabbit hole", "what next", "explore", "related topics", "related",
         "similar", "next", "continue", "dive deeper", "learn more",
         "what else", "other", "additional"
+    ],
+    Intent.SELF_KNOWLEDGE: [
+        "what do i know", "my notes", "my graph", "personal knowledge",
+        "have i learned", "in my brain", "my research", "what did i say"
     ],
 }
 
@@ -127,6 +132,7 @@ Available intents:
 - COMPARE: Asking to compare, contrast, differences, similarities
 - WHO_NETWORK: Asking about people, connections, relationships, networks
 - EXPLORE_NEXT: Asking what to explore next, related topics, rabbit holes
+- SELF_KNOWLEDGE: Asking about what the user already knows, their own notes, or their personal knowledge graph (e.g., 'What do I know about X?', 'Show me my notes on Y')
 - DEFINITION_OVERVIEW: General definition, explanation, overview questions
 
 Return ONLY a JSON object:

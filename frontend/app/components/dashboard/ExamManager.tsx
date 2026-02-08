@@ -162,7 +162,6 @@ export default function ExamManager() {
 
       {exams.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--muted)' }}>
-          <div style={{ fontSize: '32px', marginBottom: '12px' }}>📅</div>
           <div style={{ fontSize: '13px' }}>No upcoming exams. Add one to get study recommendations.</div>
         </div>
       ) : (
@@ -199,7 +198,6 @@ export default function ExamManager() {
                     </span>
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span>📚</span>
                     <span>{exam.required_concepts.length} {exam.required_concepts.length === 1 ? 'concept' : 'concepts'} to study</span>
                   </div>
                 </div>

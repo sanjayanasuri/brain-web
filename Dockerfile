@@ -1,19 +1,28 @@
-# Root-level Dockerfile for Railway
-# This sets the build context to backend/ directory
+# Unified Root-level Dockerfile for Railway
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/backend:/app
 
 WORKDIR /app
 
-# Copy from backend directory (build context is repo root)
-COPY backend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# 1. Copy requirements first for caching
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
-# Copy entire backend directory
-COPY backend/ /app/
+# 2. Explicitly copy ALL files from backend directory
+COPY backend/ /app/backend/
 
-EXPOSE 8000
+# 3. Copy other essential root files
+COPY vercel.json railway.json /app/
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# DEBUG: Final verification of files
+RUN echo "--- FINAL BACKEND LIST ---" && ls -la /app/backend/
+
+COPY backend/start.sh /app/backend/start.sh
+RUN chmod +x /app/backend/start.sh
+
+EXPOSE 8080
+WORKDIR /app/backend
+CMD ["./start.sh"]

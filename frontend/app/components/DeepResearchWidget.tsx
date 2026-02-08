@@ -11,16 +11,19 @@ export default function DeepResearchWidget() {
     const [result, setResult] = useState<DeepResearchResponse | null>(null);
     const [error, setError] = useState<string | null>(null);
 
-    const handleSearch = async () => {
-        if (!topic.trim()) return;
+    const handleSearch = async (topicOverride?: string) => {
+        const searchTopic = topicOverride || topic;
+        if (!searchTopic.trim()) return;
 
         setLoading(true);
         setError(null);
         setResult(null);
 
+        if (topicOverride) setTopic(topicOverride);
+
         try {
             const response = await runDeepResearch({
-                topic,
+                topic: searchTopic,
                 breadth,
                 depth
             });
@@ -100,7 +103,7 @@ export default function DeepResearchWidget() {
                 </select>
 
                 <button
-                    onClick={handleSearch}
+                    onClick={() => handleSearch()}
                     disabled={loading || !topic.trim()}
                     style={{
                         padding: '8px 16px',
@@ -125,89 +128,161 @@ export default function DeepResearchWidget() {
 
             {result && result.data && (
                 <div style={{ marginTop: '16px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
-                    <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', color: 'var(--ink)' }}>Findings</h4>
-
-                    {/* Summary */}
-                    {result.data.summary && (
-                        <p style={{ fontSize: '14px', color: 'var(--ink)', lineHeight: '1.5', marginBottom: '16px' }}>
-                            {result.data.summary}
-                        </p>
-                    )}
-
-                    {/* Sources */}
-                    {result.data.sources && result.data.sources.length > 0 && (
-                        <div style={{ marginBottom: '16px' }}>
-                            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '4px' }}>
-                                SOURCES ({result.data.sources.length})
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                {result.data.sources.map((source: any, i: number) => (
-                                    <a
-                                        key={i}
-                                        href={source.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        style={{
-                                            fontSize: '12px',
-                                            color: 'var(--accent)',
-                                            textDecoration: 'none',
-                                            background: 'var(--surface)',
-                                            padding: '4px 8px',
-                                            borderRadius: '4px',
-                                            border: '1px solid var(--border)',
-                                            maxWidth: '200px',
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                        }}
-                                        title={source.title}
-                                    >
-                                        {source.title || source.url}
-                                    </a>
-                                ))}
-                            </div>
+                    {result.data.error ? (
+                        <div style={{ color: 'var(--red)', fontSize: '14px', textAlign: 'center', padding: '12px' }}>
+                            {result.data.error}
                         </div>
-                    )}
+                    ) : (
+                        <>
+                            <h4 style={{ margin: '0 0 8px 0', fontSize: '14px', color: 'var(--ink)' }}>Findings</h4>
 
-                    {/* Fresh Claims */}
-                    {result.data.fresh_findings && result.data.fresh_findings.length > 0 && (
-                        <div>
-                            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px' }}>
-                                KEY INSIGHTS
-                            </div>
-                            <ul style={{ paddingLeft: '20px', margin: '0' }}>
-                                {result.data.fresh_findings.slice(0, 5).map((claim: any, i: number) => (
-                                    <li key={i} style={{ fontSize: '13px', color: 'var(--ink)', marginBottom: '6px' }}>
-                                        {claim.text}
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-
-                    {/* Recursive results */}
-                    {result.data.sub_research && (
-                        <div style={{ marginTop: '16px' }}>
-                            <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px' }}>
-                                FOLLOW-UP RESEARCH
-                            </div>
-                            {result.data.sub_research.map((sub: any, i: number) => (
-                                <div key={i} style={{
-                                    background: 'var(--surface)',
-                                    padding: '12px',
-                                    borderRadius: '8px',
-                                    marginBottom: '8px',
-                                    border: '1px solid var(--border)'
-                                }}>
-                                    <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '4px' }}>
-                                        {sub.topic}
+                            {/* Summary / Memo */}
+                            {result.data.summary && (
+                                <div style={{ marginBottom: '24px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                        <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)' }}>
+                                            RESEARCH REPORT
+                                        </div>
+                                        <button
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(result.data.summary);
+                                                alert('Report copied to clipboard!');
+                                            }}
+                                            style={{
+                                                fontSize: '11px',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                padding: '2px 8px',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                color: 'var(--ink)'
+                                            }}
+                                        >
+                                            Copy Markdown
+                                        </button>
                                     </div>
-                                    <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
-                                        {sub.fresh_findings?.length || 0} new insights found
+                                    <div
+                                        className="markdown-content"
+                                        style={{
+                                            fontSize: '14px',
+                                            color: 'var(--ink)',
+                                            lineHeight: '1.6',
+                                            background: 'var(--surface)',
+                                            padding: '16px',
+                                            borderRadius: '8px',
+                                            border: '1px solid var(--border)',
+                                            maxHeight: '400px',
+                                            overflowY: 'auto'
+                                        }}
+                                        dangerouslySetInnerHTML={{
+                                            __html: require('markdown-it')({ html: true, linkify: true }).render(result.data.summary)
+                                        }}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Sources */}
+                            {result.data.sources && result.data.sources.length > 0 && (
+                                <div style={{ marginBottom: '20px' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px' }}>
+                                        SOURCES ({result.data.sources.length})
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '8px' }}>
+                                        {result.data.sources.map((source: any, i: number) => (
+                                            <a
+                                                key={i}
+                                                href={source.url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                style={{
+                                                    fontSize: '12px',
+                                                    color: 'var(--accent)',
+                                                    textDecoration: 'none',
+                                                    background: 'var(--surface)',
+                                                    padding: '8px 12px',
+                                                    borderRadius: '6px',
+                                                    border: '1px solid var(--border)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '8px',
+                                                    transition: 'border-color 0.2s',
+                                                }}
+                                                onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent)'}
+                                                onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border)'}
+                                                title={source.title}
+                                            >
+                                                <span style={{
+                                                    flex: 1,
+                                                    whiteSpace: 'nowrap',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis'
+                                                }}>
+                                                    {source.title || source.url}
+                                                </span>
+                                                <span style={{ fontSize: '10px', color: 'var(--muted)' }}></span>
+                                            </a>
+                                        ))}
                                     </div>
                                 </div>
-                            ))}
-                        </div>
+                            )}
+
+                            {/* Fresh Claims */}
+                            {result.data.fresh_findings && result.data.fresh_findings.length > 0 && (
+                                <div>
+                                    <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px' }}>
+                                        KEY INSIGHTS
+                                    </div>
+                                    <ul style={{ paddingLeft: '20px', margin: '0' }}>
+                                        {result.data.fresh_findings.slice(0, 5).map((claim: any, i: number) => (
+                                            <li key={i} style={{ fontSize: '13px', color: 'var(--ink)', marginBottom: '6px' }}>
+                                                {claim.text}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+
+                            {/* Recursive results */}
+                            {result.data.sub_research && (
+                                <div style={{ marginTop: '16px' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: '600', color: 'var(--muted)', marginBottom: '8px' }}>
+                                        FOLLOW-UP RESEARCH
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '8px' }}>
+                                        {result.data.sub_research.map((sub: any, i: number) => (
+                                            <div
+                                                key={i}
+                                                onClick={() => handleSearch(sub.topic)}
+                                                style={{
+                                                    background: 'var(--surface)',
+                                                    padding: '12px',
+                                                    borderRadius: '8px',
+                                                    border: '1px solid var(--border)',
+                                                    cursor: 'pointer',
+                                                    transition: 'transform 0.2s, border-color 0.2s',
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.borderColor = 'var(--accent)';
+                                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.borderColor = 'var(--border)';
+                                                    e.currentTarget.style.transform = 'translateY(0)';
+                                                }}
+                                            >
+                                                <div style={{ fontWeight: '600', fontSize: '13px', marginBottom: '4px', color: 'var(--ink)' }}>
+                                                    {sub.topic}
+                                                </div>
+                                                <div style={{ fontSize: '11px', color: 'var(--muted)', display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span>{sub.fresh_findings?.length || 0} insights</span>
+                                                    <span>Research</span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             )}

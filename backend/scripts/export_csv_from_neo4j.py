@@ -1,11 +1,21 @@
 import csv
 import sys
+import logging
 from pathlib import Path
 
 # Add parent directory to path so we can import backend modules
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from neo4j import Session
+
+# Setup logging
+logger = logging.getLogger("scripts.export_csv")
+if not logger.handlers:
+    # If run as a script, ensure output to CLI
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 # Backward compatible: try get_driver first, fall back to driver if needed
 try:
@@ -96,7 +106,7 @@ def export_nodes(session: Session, outfile: Path, graph_id: str = None):
             ])
             count += 1
 
-    print(f"[OK] Exported {count} Concept nodes to {outfile.name}.")
+    logger.info(f"[OK] Exported {count} Concept nodes to {outfile.name}.")
 
 
 @run_in_session
@@ -148,7 +158,7 @@ def export_edges(session: Session, outfile: Path, graph_id: str = None):
             ])
             count += 1
 
-    print(f"[OK] Exported {count} edges to {outfile.name}.")
+    logger.info(f"[OK] Exported {count} edges to {outfile.name}.")
 
 
 @run_in_session
@@ -181,7 +191,7 @@ def export_lecture_covers(session: Session, outfile: Path):
             ])
             count += 1
 
-    print(f"[OK] Exported {count} COVERS edges to {outfile.name}.")
+    logger.info(f"[OK] Exported {count} COVERS edges to {outfile.name}.")
 
 
 def main(graph_id: str = None, export_per_graph: bool = True):
@@ -194,11 +204,11 @@ def main(graph_id: str = None, export_per_graph: bool = True):
         export_per_graph: If True, also export separate CSV files for each graph.
                          Files will be named like nodes_G{graph_id}.csv
     """
-    print(f"Using GRAPH_DIR = {GRAPH_DIR}")
+    logger.debug(f"Using GRAPH_DIR = {GRAPH_DIR}")
     if graph_id:
-        print(f"Exporting graph: {graph_id}")
+        logger.debug(f"Exporting graph: {graph_id}")
     else:
-        print("Exporting all graphs")
+        logger.debug("Exporting all graphs")
 
     # Always export combined files (for backward compatibility)
     export_nodes(NODES_OUT, graph_id=graph_id)
@@ -216,7 +226,7 @@ def main(graph_id: str = None, export_per_graph: bool = True):
             with driver.session() as session:
                 graphs = list_graphs(session)
             
-            print(f"\n[PER-GRAPH] Exporting {len(graphs)} individual graphs...")
+            logger.debug(f"\n[PER-GRAPH] Exporting {len(graphs)} individual graphs...")
             for graph in graphs:
                 gid = graph.get("graph_id")
                 if not gid:
@@ -229,12 +239,12 @@ def main(graph_id: str = None, export_per_graph: bool = True):
                 
                 export_nodes(per_graph_nodes, graph_id=gid)
                 export_edges(per_graph_edges, graph_id=gid)
-                print(f"[PER-GRAPH] ✓ Exported graph {gid} ({graph.get('name', 'Unnamed')})")
+                logger.info(f"[PER-GRAPH] ✓ Exported graph {gid} ({graph.get('name', 'Unnamed')})")
         except Exception as e:
-            print(f"[PER-GRAPH] ⚠ Warning: Could not export per-graph files: {e}")
+            logger.warning(f"[PER-GRAPH] ⚠ Warning: Could not export per-graph files: {e}")
             # Don't fail the whole export if per-graph export fails
 
-    print("[DONE] CSV export complete.")
+    logger.info("[DONE] CSV export complete.")
 
 
 if __name__ == "__main__":

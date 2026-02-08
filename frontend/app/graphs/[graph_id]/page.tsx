@@ -258,7 +258,10 @@ export default function GraphBrowserPage() {
         padding: '20px 24px',
       }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+          <div
+            className="responsive-header-stack"
+            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}
+          >
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                 <Link href="/home" style={{ color: 'var(--muted)', fontSize: '14px', fontWeight: 500 }}>Home</Link>
@@ -385,61 +388,63 @@ export default function GraphBrowserPage() {
                 </div>
 
                 <GlassCard style={{ padding: 0, overflow: 'hidden' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr style={{ backgroundColor: 'rgba(0,0,0,0.02)', borderBottom: '1px solid var(--border)' }}>
-                        <th style={{ padding: '16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Concept</th>
-                        <th style={{ padding: '16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Domain</th>
-                        <th style={{ padding: '16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
-                        {sortBy === 'degree' && (
-                          <th style={{ padding: '16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Connections</th>
-                        )}
-                        <th style={{ padding: '16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {concepts.map((concept) => (
-                        <tr
-                          key={concept.concept_id}
-                          style={{
-                            borderBottom: '1px solid var(--border)',
-                            cursor: 'pointer',
-                            transition: 'background 0.1s ease'
-                          }}
-                          className="hover:bg-black/5 dark:hover:bg-white/5"
-                          onClick={() => handleOpenInExplorer(concept.concept_id)}
-                        >
-                          <td style={{ padding: '16px', fontWeight: '600', color: 'var(--ink)' }}>{concept.name}</td>
-                          <td style={{ padding: '16px' }}>
-                            <Badge variant="neutral">{concept.domain}</Badge>
-                          </td>
-                          <td style={{ padding: '16px' }}>
-                            <Badge variant="outline">{concept.type}</Badge>
-                          </td>
+                  <div style={{ overflowX: 'auto', width: '100%' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
+                      <thead>
+                        <tr style={{ backgroundColor: 'rgba(0,0,0,0.02)', borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ padding: '16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Concept</th>
+                          <th style={{ padding: '16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Domain</th>
+                          <th style={{ padding: '16px', textAlign: 'left', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
                           {sortBy === 'degree' && (
-                            <td style={{ padding: '16px', textAlign: 'right', color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
-                              {concept.degree ?? 0}
-                            </td>
+                            <th style={{ padding: '16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Connections</th>
                           )}
-                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e: React.MouseEvent) => {
-                                  e.stopPropagation();
-                                  handleTogglePin(concept.concept_id);
-                                }}
-                                style={{ color: isConceptPinned(graphId, concept.concept_id) ? '#f59e0b' : 'var(--muted)' }}
-                              >
-                                {isConceptPinned(graphId, concept.concept_id) ? 'Unpin' : 'Pin'}
-                              </Button>
-                            </div>
-                          </td>
+                          <th style={{ padding: '16px', textAlign: 'right', fontSize: '12px', fontWeight: '600', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {concepts.map((concept) => (
+                          <tr
+                            key={concept.concept_id}
+                            style={{
+                              borderBottom: '1px solid var(--border)',
+                              cursor: 'pointer',
+                              transition: 'background 0.1s ease'
+                            }}
+                            className="hover:bg-black/5 dark:hover:bg-white/5"
+                            onClick={() => handleOpenInExplorer(concept.concept_id)}
+                          >
+                            <td style={{ padding: '16px', fontWeight: '600', color: 'var(--ink)' }}>{concept.name}</td>
+                            <td style={{ padding: '16px' }}>
+                              <Badge variant="neutral">{concept.domain}</Badge>
+                            </td>
+                            <td style={{ padding: '16px' }}>
+                              <Badge variant="outline">{concept.type}</Badge>
+                            </td>
+                            {sortBy === 'degree' && (
+                              <td style={{ padding: '16px', textAlign: 'right', color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+                                {concept.degree ?? 0}
+                              </td>
+                            )}
+                            <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e: React.MouseEvent) => {
+                                    e.stopPropagation();
+                                    handleTogglePin(concept.concept_id);
+                                  }}
+                                  style={{ color: isConceptPinned(graphId, concept.concept_id) ? '#f59e0b' : 'var(--muted)' }}
+                                >
+                                  {isConceptPinned(graphId, concept.concept_id) ? 'Unpin' : 'Pin'}
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </GlassCard>
 
                 {/* Pagination */}

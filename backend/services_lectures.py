@@ -1,11 +1,11 @@
 # services_lectures.py
 
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 from uuid import uuid4
 
 from neo4j import Session
 
-from models import Concept, Lecture, LectureCreate, LectureStep, LectureStepCreate
+from models import Concept, Lecture, LectureCreate, LectureStep, LectureStepCreate, NotebookPage
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 
 
@@ -30,7 +30,8 @@ def create_lecture(session: Session, payload: LectureCreate) -> Lecture:
         level: $level,
         estimated_time: $estimated_time,
         slug: $slug,
-        raw_text: $raw_text
+        raw_text: $raw_text,
+        annotations: $annotations
     })
     MERGE (l)-[:BELONGS_TO]->(g)
     RETURN l.lecture_id AS lecture_id,
@@ -40,7 +41,8 @@ def create_lecture(session: Session, payload: LectureCreate) -> Lecture:
            l.level AS level,
            l.estimated_time AS estimated_time,
            l.slug AS slug,
-           l.raw_text AS raw_text
+           l.raw_text AS raw_text,
+           l.annotations AS annotations
     """
 
     params = {
@@ -54,6 +56,7 @@ def create_lecture(session: Session, payload: LectureCreate) -> Lecture:
         "estimated_time": payload.estimated_time,
         "slug": payload.slug,
         "raw_text": payload.raw_text,
+        "annotations": payload.annotations,
     }
 
     record = session.run(query, **params).single()
@@ -83,6 +86,7 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
            l.slug AS slug,
            l.raw_text AS raw_text,
            l.metadata_json AS metadata_json,
+           l.annotations AS annotations,
            count(DISTINCT seg) AS segment_count
     LIMIT 1
     """
@@ -107,6 +111,7 @@ def get_lecture_by_id(session: Session, lecture_id: str) -> Optional[Lecture]:
            l.slug AS slug,
            l.raw_text AS raw_text,
            l.metadata_json AS metadata_json,
+           l.annotations AS annotations,
            count(DISTINCT seg) AS segment_count
     LIMIT 1
     """
@@ -185,15 +190,15 @@ def list_lectures(session: Session) -> List[Lecture]:
     List all lectures in the active graph + branch.
     If no lectures found in the active branch, also check other branches in the same graph.
     """
-    ensure_graph_scoping_initialized(session)
     graph_id, branch_id = get_active_graph_context(session)
 
     # First try to get lectures in the active branch
+    # First try to get lectures in the active branch
+    # Optimized query using count{} subquery for segments
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
     MATCH (l:Lecture {graph_id: $graph_id})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(l.on_branches, [])
-    OPTIONAL MATCH (l)-[:HAS_SEGMENT]->(seg:LectureSegment)
     RETURN l.lecture_id AS lecture_id,
            l.title AS title,
            l.description AS description,
@@ -203,7 +208,7 @@ def list_lectures(session: Session) -> List[Lecture]:
            l.slug AS slug,
            l.raw_text AS raw_text,
            l.metadata_json AS metadata_json,
-           count(DISTINCT seg) AS segment_count
+           count { (l)-[:HAS_SEGMENT]->(:LectureSegment) } AS segment_count
     ORDER BY l.title
     """
 
@@ -230,7 +235,6 @@ def list_lectures(session: Session) -> List[Lecture]:
         fallback_query = """
         MATCH (g:GraphSpace {graph_id: $graph_id})
         MATCH (l:Lecture {graph_id: $graph_id})-[:BELONGS_TO]->(g)
-        OPTIONAL MATCH (l)-[:HAS_SEGMENT]->(seg:LectureSegment)
         RETURN l.lecture_id AS lecture_id,
                l.title AS title,
                l.description AS description,
@@ -240,7 +244,7 @@ def list_lectures(session: Session) -> List[Lecture]:
                l.slug AS slug,
                l.raw_text AS raw_text,
                l.metadata_json AS metadata_json,
-               count(DISTINCT seg) AS segment_count
+               count { (l)-[:HAS_SEGMENT]->(:LectureSegment) } AS segment_count
         ORDER BY l.title
         """
         fallback_result = session.run(fallback_query, graph_id=graph_id)
@@ -312,9 +316,9 @@ def get_lecture_steps(session: Session, lecture_id: str) -> List[LectureStep]:
     return steps
 
 
-def update_lecture(session: Session, lecture_id: str, title: Optional[str] = None, raw_text: Optional[str] = None, metadata_json: Optional[str] = None) -> Optional[Lecture]:
+def update_lecture(session: Session, lecture_id: str, title: Optional[str] = None, slug: Optional[str] = None, raw_text: Optional[str] = None, metadata_json: Optional[str] = None, annotations: Optional[str] = None) -> Optional[Lecture]:
     """
-    Update a lecture's title, raw_text, and/or metadata_json.
+    Update a lecture's title, raw_text, metadata_json, and/or annotations.
     Returns the updated lecture or None if not found.
     """
     ensure_graph_scoping_initialized(session)
@@ -340,6 +344,10 @@ def update_lecture(session: Session, lecture_id: str, title: Optional[str] = Non
         set_clauses.append("l.metadata_json = $metadata_json")
         params["metadata_json"] = metadata_json
 
+    if annotations is not None:
+        set_clauses.append("l.annotations = $annotations")
+        params["annotations"] = annotations
+
     if not set_clauses:
         # Nothing to update, just return the lecture
         return get_lecture_by_id(session, lecture_id)
@@ -357,7 +365,8 @@ def update_lecture(session: Session, lecture_id: str, title: Optional[str] = Non
            l.estimated_time AS estimated_time,
            l.slug AS slug,
            l.raw_text AS raw_text,
-           l.metadata_json AS metadata_json
+           l.metadata_json AS metadata_json,
+           l.annotations AS annotations
     LIMIT 1
     """
 
@@ -365,3 +374,93 @@ def update_lecture(session: Session, lecture_id: str, title: Optional[str] = Non
     if not record:
         return None
     return Lecture(**record.data())
+
+
+def get_notebook_pages(session: Session, lecture_id: str) -> List[NotebookPage]:
+    """
+    Get all notebook pages for a lecture, ordered by page number.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, _ = get_active_graph_context(session)
+
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (l:Lecture {lecture_id: $lecture_id, graph_id: $graph_id})-[:HAS_PAGE]->(p:NotebookPage)
+    RETURN p.page_id AS page_id,
+           p.lecture_id AS lecture_id,
+           p.page_number AS page_number,
+           p.content AS content,
+           COALESCE(p.ink_data, "[]") AS ink_data_json,
+           p.paper_type AS paper_type,
+           p.created_at AS created_at,
+           p.updated_at AS updated_at
+    ORDER BY p.page_number
+    """
+    results = session.run(query, graph_id=graph_id, lecture_id=lecture_id)
+    
+    pages = []
+    import json
+    for rec in results:
+        data = rec.data()
+        # Convert ink_data from JSON string back to list
+        ink_data_json = data.pop("ink_data_json", "[]")
+        try:
+            data["ink_data"] = json.loads(ink_data_json)
+        except:
+            data["ink_data"] = []
+        pages.append(NotebookPage(**data))
+    
+    return pages
+
+
+def upsert_notebook_page(session: Session, lecture_id: str, page_number: int, content: str, ink_data: List[Dict[str, Any]], paper_type: str = "ruled") -> NotebookPage:
+    """
+    Create or update a notebook page.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, _ = get_active_graph_context(session)
+    
+    import json
+    ink_data_json = json.dumps(ink_data)
+    
+    # Try to find existing page by number
+    query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (l:Lecture {lecture_id: $lecture_id, graph_id: $graph_id})
+    MERGE (l)-[:HAS_PAGE]->(p:NotebookPage {lecture_id: $lecture_id, page_number: $page_number})
+    ON CREATE SET p.page_id = $page_id,
+                  p.created_at = datetime(),
+                  p.updated_at = datetime(),
+                  p.content = $content,
+                  p.ink_data = $ink_data_json,
+                  p.paper_type = $paper_type
+    ON MATCH SET p.content = $content,
+                 p.ink_data = $ink_data_json,
+                 p.paper_type = $paper_type,
+                 p.updated_at = datetime()
+    RETURN p.page_id AS page_id,
+           p.lecture_id AS lecture_id,
+           p.page_number AS page_number,
+           p.content AS content,
+           p.ink_data AS ink_data_json,
+           p.paper_type AS paper_type,
+           p.created_at AS created_at,
+           p.updated_at AS updated_at
+    """
+    
+    page_id = f"PAGE_{uuid4().hex[:8].upper()}"
+    params = {
+        "graph_id": graph_id,
+        "lecture_id": lecture_id,
+        "page_number": page_number,
+        "page_id": page_id,
+        "content": content,
+        "ink_data_json": ink_data_json,
+        "paper_type": paper_type
+    }
+    
+    rec = session.run(query, **params).single()
+    data = rec.data()
+    ink_data_json = data.pop("ink_data_json", "[]")
+    data["ink_data"] = json.loads(ink_data_json)
+    return NotebookPage(**data)

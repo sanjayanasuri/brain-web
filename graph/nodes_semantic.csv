@@ -27,11 +27,11 @@ N017,Product,Software Architecture,concept,,,product,default
 N018,User Research,Software Architecture,concept,,,user-research,default
 N020,Authentication,Software Architecture,concept,,,authentication,default
 N021,Microservices,Software Architecture,concept,,LECTURE_A2087FFC,microservices,default
-N022,Docker,Software Architecture,concept,,LECTURE_4B7A252B,docker,default
+N022,Docker,Software Architecture,concept,,LECTURE_D7E37430,docker,default
 N023,Containers,Software Architecture,concept,,,containers,default
 N024,Containerization,Software Architecture,concept,,,containerization,default
 N0247D0D9,CSRF,Application Security,concept,,LECTURE_4A7A895C,csrf,default
-N025,Kubernetes,Software Architecture,concept,,LECTURE_4B7A252B,kubernetes,default
+N025,Kubernetes,Software Architecture,concept,,LECTURE_D7E37430,kubernetes,default
 N026,Observability,Software Architecture,concept,,,observability,default
 N027,Databases,Databases,domain,,,databases,default
 N028,Relational Databases,Databases,concept,,,relational-databases,default
@@ -73,7 +73,7 @@ N052,Deep Learning,Machine Learning,concept,,,deep-learning,default
 N052ED1A8,Real-Time Transcription,Education Technology,concept,,LECTURE_F504B342,real-time-transcription,default
 N053,Reinforcement Learning,Machine Learning,concept,,,reinforcement-learning,default
 N054,Computer Vision,Machine Learning,concept,,,computer-vision,default
-N055,Sentiment Analysis,Machine Learning,concept,,,sentiment-analysis,default
+N055,Sentiment Analysis,Machine Learning,concept,,LECTURE_3029917B,sentiment-analysis,default
 N056,Natural Language Processing,Machine Learning,concept,,,natural-language-processing,default
 N057,Python,Machine Learning,concept,,LECTURE_4B7A252B,python,default
 N058,Pandas,Machine Learning,concept,,,pandas,default
@@ -125,6 +125,7 @@ N087,Recommendation Systems,Recommendation Systems,domain,,,recommendation-syste
 N088,Netflix,Recommendation Systems,concept,,,netflix,default
 N08AD1C13,Artistic Expression,Art,concept,,LECTURE_CE20B295,artistic-expression,default
 N08AE098A,Agent Orchestration,AI Workflow Management,concept,,LECTURE_38EFB3AD,agent-orchestration,default
+N08C0E68C,Post-Training Phase,generated,concept,,,post-training-phase,default
 N08FAC800,Dynamic Content,Web Development,concept,,LECTURE_FF5AA022,dynamic-content,default
 N092FAD67,Regionalism in Italy,Geography,concept,,LECTURE_9F3BA88D,regionalism-in-italy,default
 N09543278,Software,Software Engineering,concept,,LECTURE_1C32754A,software,default
@@ -171,6 +172,7 @@ N13C5C04D,Dimensionality Reduction,Data Science,concept,,LECTURE_47D8F90C,dimens
 N13E9786E,Prompt Compiler,Software Engineering,concept,,LECTURE_103A28B8,prompt-compiler,default
 N13F354E3,Agentic Memory,AI Personalization,concept,,LECTURE_38EFB3AD,agentic-memory,default
 N141C2451,Sugarcane Industry,Agriculture,concept,,LECTURE_086E22BB,sugarcane-industry,default
+N141CD215,CNN,Machine Learning,tool,,LECTURE_D7E37430,cnn,default
 N14556BD0,Encryption,Cybersecurity,concept,,LECTURE_0FB0854B,encryption,default
 N1461905D,Wyzant,Software Engineering,concept,,LECTURE_7144E561,wyzant,default
 N1489E73F,Work Breakdown Structure (WBS),Project Management,concept,,LECTURE_04B1750C,work-breakdown-structure-wbs,default
@@ -329,6 +331,7 @@ N3C4C3FD3,Non-Determinism,Machine Learning,concept,,LECTURE_3118CDD4,non-determi
 N3C95293F,Penetration Testing,Software Engineering,concept,,LECTURE_64DC0590,penetration-testing,default
 N3C9902B6,Topological Ordering,Graph Theory,concept,,LECTURE_AC2155EE,topological-ordering,default
 N3CBC0687,Handwriting-Based AI Assistant,Human-Computer Interaction,concept,,LECTURE_F504B342,handwriting-based-ai-assistant,default
+N3CCF1666,Neuromorphic Computing,generated,concept,,,neuromorphic-computing,default
 N3D3B4A2E,MVP Build Suggestion,Product Development,concept,,LECTURE_BC8B2DFD,mvp-build-suggestion,default
 N3DB1006A,Vitamin D,Nutrition,concept,,LECTURE_E65B3313,vitamin-d,default
 N3E3B27B2,O(n),Computer Science,concept,,LECTURE_67A7F7C6,on,default
@@ -338,10 +341,12 @@ N3E8F7096,Stack Operations,Data Structures,concept,,LECTURE_B395341E,stack-opera
 N3EE79F5E,Cluster Analysis,Data Analysis,concept,,LECTURE_FA9195CB,cluster-analysis,default
 N3F770756,Anxiety,Mental Health,concept,,LECTURE_A1EA8BC0,anxiety,default
 N3FF4C102,Indianapolis,Urban Planning,concept,,LECTURE_AEB97E63,indianapolis,default
+N40362A79,Agentic AI,generated,concept,,,agentic-ai,default
 N40C4B9A6,EditTaskName,Software Engineering,method,,LECTURE_6070C36A,edittaskname,default
 N40DFCF5C,Echo Chamber,Social Media,concept,,LECTURE_31D3A660,echo-chamber,default
 N410857EB,Goals,Personal Development,concept,,LECTURE_785DEF4D,goals,default
-N4137B64F,Recommendation System,Machine Learning,concept,,LECTURE_FA9195CB,recommendation-system,default
+N4137B64F,Recommendation System,Machine Learning,concept,,LECTURE_3029917B,recommendation-system,default
+N41538909,Chaos Theory,Physics,concept,,LECTURE_2BF3C3A4,chaos-theory,default
 N419551A0,Mental Illness,Psychology,concept,,LECTURE_72469D9D,mental-illness,default
 N41A6F95F,Garden Bench,Film Narrative,concept,,LECTURE_8928C1C9,garden-bench,default
 N41F2C085,Asexual Reproduction,Biology,concept,,LECTURE_1ED9F306,asexual-reproduction,default
@@ -384,6 +389,7 @@ N49AC31B9,Mental Health,Psychology,concept,,LECTURE_F4C41356,mental-health,defau
 N49B2256E,Open Borders,Political Science,concept,,LECTURE_E0A909D1,open-borders,default
 N49D68BAF,Architecture Improvement,Software Engineering,concept,,LECTURE_87D7CB99,architecture-improvement,default
 N4A2061FE,High Fructose Corn Syrup,Food Science,concept,,LECTURE_086E22BB,high-fructose-corn-syrup,default
+N4A603458,Butterfly Effect,Physics,concept,,LECTURE_2BF3C3A4,butterfly-effect,default
 N4A99901B,The Mom Test,Entrepreneurship,concept,,LECTURE_1D71FF6C,the-mom-test,default
 N4B0368B1,Agent Drift,AI Reliability,concept,,LECTURE_38EFB3AD,agent-drift,default
 N4B2AB10C,Transparency,Communication,concept,,LECTURE_41473ABA,transparency,default
@@ -468,7 +474,7 @@ N5D50D49D,Cloud / SaaS Vendors and Partners,Cloud Computing,concept,,LECTURE_E6D
 N5D990B49,Streamlit,Software Engineering,tool,,LECTURE_FD6F681E,streamlit,default
 N5DB2B1F0,Tagging,Software Engineering,concept,,LECTURE_1C32754A,tagging,default
 N5DF993D4,Scope Management,Project Management,concept,,LECTURE_04B1750C,scope-management,default
-N5DFF72B2,Data Science,Software Engineering,concept,,LECTURE_7144E561,data-science,default
+N5DFF72B2,Data Science,Software Engineering,concept,,LECTURE_D7E37430,data-science,default
 N5ECF7934,Web Scraping,Data Science,concept,,LECTURE_208EFBD5,web-scraping,default
 N5EE54EE7,RAG (Retrieval-Augmented Generation),Machine Learning,concept,,LECTURE_38EFB3AD,rag-retrieval-augmented-generation,default
 N5F8A2C4D,Port Number,Networking,concept,,LECTURE_4A7A895C,port-number,default
@@ -779,6 +785,7 @@ NB96CC487,Temporary Connections,Psychology,concept,,LECTURE_B86739F5,temporary-c
 NB993F250,Model Evaluation,Machine Learning,concept,,LECTURE_47D8F90C,model-evaluation,default
 NB9A7000D,Minimalism,Design,concept,,LECTURE_208EFBD5,minimalism,default
 NB9B56408,Leonardo Da Vinci,Art,concept,,LECTURE_2F7C8FAA,leonardo-da-vinci,default
+NB9FACFD0,Contextual Intelligence,generated,concept,,,contextual-intelligence,default
 NBA4AEB5E,Abstraction,Software Engineering,concept,,LECTURE_9C6D40CF,abstraction,default
 NBA93473F,Creative Reuse,Content Creation,concept,,LECTURE_712DFF13,creative-reuse,default
 NBAD12C99,HIV-1 Protease,Pharmaceuticals,concept,,LECTURE_E93CD605,hiv-1-protease,default
@@ -808,9 +815,10 @@ NBFF9B4A7,Policing,Law Enforcement,concept,,LECTURE_0B86DC14,policing,default
 NBFFBCB44,Self-Reflection,Psychology,concept,,LECTURE_1D71FF6C,self-reflection,default
 NC05193F8,Natural Selection,Evolutionary Biology,concept,,LECTURE_1ED9F306,natural-selection,default
 NC0555567,Automated Workflows,Software Engineering,concept,,LECTURE_9C6D40CF,automated-workflows,default
-NC08316E1,AWS,Cloud Computing,concept,,LECTURE_4B7A252B,aws,default
+NC08316E1,AWS,Cloud Computing,concept,,LECTURE_D7E37430,aws,default
 NC0E396FC,Leetcode,Software Engineering,platform,,LECTURE_4B7A252B,leetcode,default
 NC1185D85,Cyclical Graph,Graph Theory,concept,,LECTURE_AC2155EE,cyclical-graph,default
+NC11FEAB7,Sensitivity to Initial Conditions,Physics,concept,,LECTURE_2BF3C3A4,sensitivity-to-initial-conditions,default
 NC1917450,Momentum,Personal Development,concept,,LECTURE_41473ABA,momentum,default
 NC1BA9EEE,AI Screening,Software Engineering,concept,,LECTURE_15BCED5A,ai-screening,default
 NC1EFAC6B,Political Fragmentation,Political Science,concept,,LECTURE_6FCAA10B,political-fragmentation,default
@@ -835,7 +843,7 @@ NC5F2027C,AWS Cloud,Cloud Computing,concept,,LECTURE_ADD11BA5,aws-cloud,default
 NC6429C45,Highlighting Insights,Literature,concept,,LECTURE_208EFBD5,highlighting-insights,default
 NC693BA47,Data Structure,Software Engineering,concept,,LECTURE_6070C36A,data-structure,default
 NC6E08498,HDBSCAN,Machine Learning,tool,,LECTURE_FD6F681E,hdbscan,default
-NC73A8AB5,FAISS,Machine Learning,tool,,LECTURE_FA9195CB,faiss,default
+NC73A8AB5,FAISS,Machine Learning,tool,,LECTURE_2866A200,faiss,default
 NC75448EE,Bloom Filter,Data Structures,data structure,,LECTURE_AC2155EE,bloom-filter,default
 NC75B564D,Framweworks,Software Architecture,concept,,,framweworks,default
 NC76D1B0C,DHCP,Networking,concept,,LECTURE_4A7A895C,dhcp,default
@@ -914,7 +922,7 @@ NDAE0D59C,PyTorch,Machine Learning,tool,,LECTURE_4B7A252B,pytorch,default
 NDBCB22C8,Pelvic Floor Therapy,Health,concept,,LECTURE_848696D7,pelvic-floor-therapy,default
 NDBDF51B7,Client-Server Architecture,Software Engineering,concept,,LECTURE_519CABB9,client-server-architecture,default
 NDC0B5B2B,Personas,User Experience,concept,,LECTURE_AAA53727,personas,default
-NDC5423E9,BERT,Machine Learning,tool,,LECTURE_FD6F681E,bert,default
+NDC5423E9,BERT,Machine Learning,tool,,LECTURE_D7E37430,bert,default
 NDC67F6F2,HashiCorp,Cloud Computing,example,,LECTURE_E6D27EEF,hashicorp,default
 NDC7BE684,Implicit Feedback,Machine Learning,concept,,LECTURE_9A05F004,implicit-feedback,default
 NDCCF845F,Appetite for Sin,Psychology,concept,,LECTURE_A1084227,appetite-for-sin,default
@@ -939,7 +947,7 @@ NDFE4EC9C,Binary Search Tree (BST),Data Structures,concept,,LECTURE_F43ACB64,bin
 NDFFF974B,Transport Layer Security (TLS),Security,protocol,,LECTURE_0FB0854B,transport-layer-security-tls,default
 NE000FE25,Doomscrolling,Mental Health,concept,,LECTURE_208EFBD5,doomscrolling,default
 NE0C20963,Stemming and Lemmatization,Natural Language Processing,concept,,LECTURE_7DB408EE,stemming-and-lemmatization,default
-NE13B0E04,Collaborative Filtering,Machine Learning,concept,,LECTURE_DC4552D3,collaborative-filtering,default
+NE13B0E04,Collaborative Filtering,Machine Learning,concept,,LECTURE_D7E37430,collaborative-filtering,default
 NE17DB88C,Union-Find,Data Structures,data structure,,LECTURE_F43ACB64,union-find,default
 NE1A1DCBE,Deployment,Web Development,concept,,LECTURE_DC4552D3,deployment,default
 NE1ADEDE1,MacBook,Software Engineering,tool,,LECTURE_15BCED5A,macbook,default
@@ -951,6 +959,7 @@ NE43948FB,Virtual Graffiti,Virtual Reality,concept,,LECTURE_6CEC7531,virtual-gra
 NE45BB6D6,Sexual Reproduction,Biology,concept,,LECTURE_1ED9F306,sexual-reproduction,default
 NE52E5275,Identifying Pain Points,Product Development,concept,,LECTURE_4E1F4103,identifying-pain-points,default
 NE53309A7,Count Elements Differ By One,Computer Science,function,,LECTURE_51C9C7E4,count-elements-differ-by-one,default
+NE58A36E0,Chapter 1: Foundations,Physics,topic,,LECTURE_342BA768,chapter-1-foundations,default
 NE593C637,Procurement Management,Project Management,concept,,LECTURE_2A607A0A,procurement-management,default
 NE5AEBA34,SAP Software Solutions,Enterprise Software,concept,,LECTURE_5508256E,sap-software-solutions,default
 NE5B1F0C1,Latency Reduction,Software Engineering,concept,,LECTURE_87D7CB99,latency-reduction,default
@@ -961,6 +970,7 @@ NE6C07994,Music Prompts,Music Technology,concept,,LECTURE_6CEC7531,music-prompts
 NE6C6DC0C,Target Persona,User Research,concept,,LECTURE_712DFF13,target-persona,default
 NE6C8D4E8,Triple,Software Engineering,concept,,LECTURE_E82F7226,triple,default
 NE6EB88CD,Selection Sort,Algorithms,algorithm,,LECTURE_4EEEE106,selection-sort,default
+NE735B454,Understanding: what is deep learning...,learning,understanding,,,understanding-what-is-deep-learning,default
 NE75AD39E,Root Cause Analysis,Operations,concept,,LECTURE_51C9C7E4,root-cause-analysis,default
 NE7E94828,In-Q-Tel,Government,organization,,LECTURE_85899DEF,in-q-tel,default
 NE7FF4AB6,Maven,Software Engineering,tool,,LECTURE_4B7A252B,maven,default
@@ -973,6 +983,7 @@ NEA298681,Hardy-Weinberg Equilibrium,Genetics,concept,,LECTURE_1ED9F306,hardy-we
 NEA641823,Autonomous Operation,Software Engineering,concept,,LECTURE_87D7CB99,autonomous-operation,default
 NEB28716E,Decentralized Physical Infrastructure Network (DePIN),Infrastructure,concept,,LECTURE_28A0E794,decentralized-physical-infrastructure-network-depin,default
 NEB468E0B,Identity and Access Management (IAM),Security,concept,,LECTURE_0FB0854B,identity-and-access-management-iam,default
+NEBD41FD5,Scientific Discovery,generated,concept,,,scientific-discovery,default
 NEBD83B04,Internal Struggles,Psychology,concept,,LECTURE_8424A28F,internal-struggles,default
 NEC240EF5,Change Control,Project Management,concept,,LECTURE_2A607A0A,change-control,default
 NECB4F1C7,UMAP,Machine Learning,tool,,LECTURE_FD6F681E,umap,default
@@ -1039,10 +1050,15 @@ NFC98A387,Standardized Feedback,User Experience,concept,,LECTURE_4E1F4103,standa
 NFE083D3C,Colorful Living,Personal Experience,concept,,LECTURE_62CDE37E,colorful-living,default
 NFE453A23,Splunk,Data Engineering,example,,LECTURE_E6D27EEF,splunk,default
 NFE828A98,Attention Mechanism,Machine Learning,concept,,LECTURE_9A05F004,attention-mechanism,default
-NFE9D0CF4,Next.js,Software Architecture,concept,,LECTURE_F7E3C74F,nextjs,default
+NFE9D0CF4,Next.js,Software Architecture,concept,,LECTURE_2866A200,nextjs,default
 NFEA664D6,Vices,Psychology,concept,,LECTURE_A1EA8BC0,vices,default
 NFEBD3CBC,Lawmaker,Software Engineering,tool,,LECTURE_B398FCB7,lawmaker,default
 NFEDFC11D,Monitor and Control Project Work,Project Management,concept,,LECTURE_04B1750C,monitor-and-control-project-work,default
 NFEF185F5,Written Prompting,Human-Computer Interaction,concept,,LECTURE_103A28B8,written-prompting,default
 NFF11CB8B,sklearn,Machine Learning,tool,,LECTURE_FD6F681E,sklearn,default
 NFF5A25F6,QA Automation Engineer,Quality Assurance,concept,,LECTURE_E6D27EEF,qa-automation-engineer,default
+N366FBD70,Grad-CAM,Machine Learning,tool,,LECTURE_3029917B,grad-cam,demo
+N515EA562,CNN (Convolutional Neural Network),Machine Learning,concept,,LECTURE_3029917B,cnn-convolutional-neural-network,demo
+N63614D69,FastAPI,Web Development,tool,,LECTURE_D7E37430,fastapi,demo
+NBC09F9FD,Sanjay Anasuri,General,concept,,LECTURE_3029917B,sanjay-anasuri,demo
+NC992F2A7,Power BI,Business Intelligence,tool,,LECTURE_D7E37430,power-bi,demo

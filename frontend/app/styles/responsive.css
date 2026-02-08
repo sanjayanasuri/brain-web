@@ -1,0 +1,224 @@
+/* Responsive Layout Utilities */
+
+/* Main layout containers */
+:root {
+    --breakpoint-ipad: 1024px;
+    --breakpoint-mobile: 768px;
+}
+
+.explorer-overlay-container {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    pointer-events: none;
+}
+
+.custom-scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+
+.custom-scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+
+.explorer-toolbar-container {
+    padding: 12px 16px;
+    background: var(--background);
+    z-index: 100;
+    pointer-events: auto;
+}
+
+.explorer-panels-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    gap: 16px;
+    padding: 0 16px 16px;
+    pointer-events: none;
+    justify-content: flex-end;
+    /* Align panels to the right */
+}
+
+.explorer-panels-group {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    pointer-events: auto;
+    max-width: 100%;
+}
+
+/* Individual Panel Adjustments */
+.responsive-panel {
+    width: 100%;
+    height: 85vh;
+    flex-shrink: 1;
+    min-width: 0;
+    border-radius: 20px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(20px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Page-level Containers */
+.page-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--spacing-lg);
+    width: 100%;
+}
+
+.content-padding {
+    padding: 24px 32px;
+}
+
+/* Media Queries for Responsiveness */
+
+/* Tablets / Smaller Laptops */
+@media (max-width: 1024px) {
+    .explorer-panels-layout {
+        gap: 12px;
+        padding: 0 12px 12px;
+    }
+
+    .explorer-panels-group {
+        gap: 12px;
+    }
+}
+
+/* Mobile Devices */
+@media (max-width: 768px) {
+    .page-container {
+        padding: var(--spacing-md);
+    }
+
+    .content-padding {
+        padding: 16px;
+    }
+
+    .explorer-panels-layout {
+        flex-direction: column;
+        justify-content: flex-end;
+        overflow-y: auto;
+        padding: 8px;
+        pointer-events: auto;
+        /* Enable touch on the layout area to allow scrolling */
+    }
+
+    .explorer-panels-group {
+        flex-direction: column;
+        width: 100%;
+        align-items: stretch;
+        height: auto;
+        max-height: 100%;
+    }
+
+    .responsive-panel {
+        height: auto;
+        max-height: 80vh;
+        width: 100% !important;
+        max-width: none !important;
+    }
+
+    /* Toolbar adjustments */
+    .explorer-toolbar__row {
+        gap: 8px !important;
+    }
+
+    .explorer-toolbar__group {
+        width: 100%;
+        justify-content: space-between;
+    }
+}
+
+/* Fix for overlapping on very small heights */
+@media (max-height: 600px) {
+    .responsive-panel {
+        height: 90vh;
+    }
+}
+
+/* Typography and touch target responsiveness */
+@media (max-width: 768px) {
+    h1 {
+        font-size: 24px;
+    }
+
+    h2 {
+        font-size: 20px;
+    }
+
+    h3 {
+        font-size: 18px;
+    }
+
+    .responsive-header-stack {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 16px !important;
+    }
+
+    button,
+    .btn,
+    a.btn,
+    select,
+    input,
+    .pill {
+        min-height: 44px !important;
+        min-width: 44px;
+    }
+}
+
+/* iPad Touch Target Enhancements (Specific for Tablet) */
+@media (min-width: 769px) and (max-width: 1024px) {
+
+    button,
+    .btn,
+    a.btn,
+    select,
+    input,
+    .pill,
+    .nav-link,
+    .session-item {
+        min-height: 44px !important;
+    }
+}
+
+
+/* Page Transition Overlay */
+.transition-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(8px);
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.page-transitioning .transition-overlay {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.transition-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(37, 99, 235, 0.1);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

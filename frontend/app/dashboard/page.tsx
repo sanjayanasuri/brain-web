@@ -11,28 +11,16 @@ import LandingPage from '../components/landing/LandingPage';
 import { useState, useEffect } from 'react';
 
 export default function DashboardPage() {
-  const [showLanding, setShowLanding] = useState(true);
-  const [hasVisited, setHasVisited] = useState(false);
+  /* Landing page logic removed to fix Study link routing issues */
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    // Check if user has visited before
-    const visited = sessionStorage.getItem('brain-web-visited');
-    if (visited === 'true') {
-      setShowLanding(false);
-      setHasVisited(true);
-    }
+    const checkMobile = () => setIsMobile(window.innerWidth < 1100);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
-
-  const handleEnter = () => {
-    sessionStorage.setItem('brain-web-visited', 'true');
-    setShowLanding(false);
-  };
-
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  if (showLanding) {
-    return <LandingPage onEnter={handleEnter} />;
-  }
 
   const handleTaskCreated = () => {
     // Trigger refresh of suggestions
@@ -45,8 +33,8 @@ export default function DashboardPage() {
       background: 'var(--page-bg)',
     }}>
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: '1fr 400px',
+        display: 'flex',
+        flexDirection: isMobile ? 'column' : 'row',
         gap: '24px',
         padding: '24px',
         maxWidth: '1600px',
@@ -54,9 +42,11 @@ export default function DashboardPage() {
       }}>
         {/* Main Dashboard */}
         <div style={{
+          flex: 1,
           display: 'flex',
           flexDirection: 'column',
           gap: '24px',
+          minWidth: 0,
         }}>
           <div>
             <TaskQuickAdd onTaskCreated={handleTaskCreated} />
@@ -68,9 +58,11 @@ export default function DashboardPage() {
 
         {/* Sidebar with Exam Manager and Workflow Status */}
         <div style={{
+          flex: isMobile ? '1' : '0 0 400px',
           display: 'flex',
           flexDirection: 'column',
           gap: '24px',
+          minWidth: 0,
         }}>
           <ExamManager />
           <WorkflowStatusView />

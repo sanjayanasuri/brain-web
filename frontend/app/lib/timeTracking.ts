@@ -9,7 +9,7 @@ const SignalType = {
   TIME: 'TIME',
 } as const;
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface TimeTrackingSession {
   documentId?: string;
@@ -41,12 +41,12 @@ export function startTimeTracking(
   action: 'read' | 'write' | 'review' | 'revisit' = 'read'
 ): string {
   const sessionKey = `${documentId || ''}_${blockId || ''}_${segmentId || ''}_${conceptId || ''}_${action}`;
-  
+
   // If already tracking, don't restart
   if (activeSessions.has(sessionKey)) {
     return sessionKey;
   }
-  
+
   const session: TimeTrackingSession = {
     documentId,
     blockId,
@@ -55,7 +55,7 @@ export function startTimeTracking(
     startTime: Date.now(),
     action,
   };
-  
+
   activeSessions.set(sessionKey, session);
   return sessionKey;
 }
@@ -68,10 +68,10 @@ export function stopTimeTracking(sessionKey: string): void {
   if (!session) {
     return;
   }
-  
+
   const duration = Date.now() - session.startTime;
   activeSessions.delete(sessionKey);
-  
+
   // Only track if duration is meaningful
   if (duration >= MIN_DURATION_MS) {
     pendingSignals.push({ session, duration });
@@ -101,7 +101,7 @@ function scheduleFlush(): void {
   if (flushTimer) {
     return; // Already scheduled
   }
-  
+
   flushTimer = setTimeout(() => {
     flushSignals();
     flushTimer = null;
@@ -115,13 +115,13 @@ async function flushSignals(): Promise<void> {
   if (pendingSignals.length === 0) {
     return;
   }
-  
+
   const signalsToSend = [...pendingSignals];
   pendingSignals = [];
-  
+
   // Get session ID from localStorage or generate one
   const sessionId = getOrCreateSessionId();
-  
+
   // Send signals in batch
   try {
     for (const { session, duration } of signalsToSend) {
@@ -172,7 +172,7 @@ async function createTimeSignal(payload: {
       session_id: payload.session_id,
     }),
   });
-  
+
   if (!response.ok) {
     throw new Error(`Failed to create time signal: ${response.statusText}`);
   }
@@ -185,7 +185,7 @@ function getOrCreateSessionId(): string {
   if (typeof window === 'undefined') {
     return 'unknown';
   }
-  
+
   let sessionId = localStorage.getItem('bw_session_id');
   if (!sessionId) {
     sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -199,7 +199,7 @@ function getOrCreateSessionId(): string {
  */
 if (typeof window !== 'undefined') {
   let visibilityStartTime: number | null = null;
-  
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       // Page hidden - pause all tracking
@@ -217,7 +217,7 @@ if (typeof window !== 'undefined') {
       }
     }
   });
-  
+
   // Flush on page unload
   window.addEventListener('beforeunload', () => {
     stopAllTracking();
@@ -242,23 +242,23 @@ export function useTimeTracking(
   // The actual hook implementation is in ./useTimeTracking.ts
   // This function is kept for backward compatibility
   console.warn('useTimeTracking from timeTracking.ts is deprecated. Use the hook from ./useTimeTracking.ts instead.');
-  
+
   if (typeof window === 'undefined' || !enabled) {
     return;
   }
-  
+
   // Use a simple interval-based tracking
   const trackingKey = `${documentId || ''}_${blockId || ''}_${segmentId || ''}_${conceptId || ''}_${action}`;
-  
+
   // Start tracking when component mounts or dependencies change
   const startKey = startTimeTracking(documentId, blockId, segmentId, conceptId, action);
-  
+
   // Store in a way that can be cleaned up
   if (typeof window !== 'undefined') {
     (window as any).__timeTracking = (window as any).__timeTracking || {};
     (window as any).__timeTracking[trackingKey] = startKey;
   }
-  
+
   // Note: This function cannot return a cleanup function because it's not a React hook
   // Components using this should manually call stopTimeTracking on unmount
 }

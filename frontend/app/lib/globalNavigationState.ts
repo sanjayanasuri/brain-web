@@ -21,7 +21,6 @@ const globalNavigationState: GlobalNavigationState = {
  * Register chat reset function (called from GraphVisualization)
  */
 export function registerChatResetFunction(resetFn: ChatResetFunction) {
-  console.log('Global Nav: Registering chat reset function');
   globalNavigationState.chatResetFunction = resetFn;
 }
 
@@ -29,7 +28,6 @@ export function registerChatResetFunction(resetFn: ChatResetFunction) {
  * Register mobile sidebar close function
  */
 export function registerMobileSidebarCloseFunction(closeFn: MobileSidebarCloseFunction) {
-  console.log('Global Nav: Registering mobile sidebar close function');
   globalNavigationState.mobileSidebarCloseFunction = closeFn;
 }
 

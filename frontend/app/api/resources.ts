@@ -2,7 +2,7 @@
  * Resource related API methods
  */
 
-import { API_BASE_URL, getApiHeaders } from './base';
+import { API_BASE_URL, getApiHeaders, getAuthToken } from './base';
 import {
     Resource,
     Claim,
@@ -36,7 +36,8 @@ export async function searchResources(
         params.set('graph_id', graphId);
     }
     params.set('limit', actualLimit.toString());
-    const response = await fetch(`${API_BASE_URL}/resources/search?${params.toString()}`);
+    const headers = await getApiHeaders();
+    const response = await fetch(`${API_BASE_URL}/resources/search?${params.toString()}`, { headers });
     if (!response.ok) {
         throw new Error(`Failed to search resources: ${response.statusText}`);
     }
@@ -47,7 +48,8 @@ export async function searchResources(
  * Fetch all claims that mention a concept
  */
 export async function getClaimsForConcept(nodeId: string, limit: number = 50): Promise<Claim[]> {
-    const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/claims?limit=${limit}`);
+    const headers = await getApiHeaders();
+    const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/claims?limit=${limit}`, { headers });
     if (!response.ok) {
         throw new Error(`Failed to fetch claims: ${response.statusText}`);
     }
@@ -58,7 +60,8 @@ export async function getClaimsForConcept(nodeId: string, limit: number = 50): P
  * Get all sources (documents/chunks) that mention a concept
  */
 export async function getSourcesForConcept(nodeId: string, limit: number = 100): Promise<Source[]> {
-    const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/sources?limit=${limit}`);
+    const headers = await getApiHeaders();
+    const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}/sources?limit=${limit}`, { headers });
     if (!response.ok) {
         throw new Error(`Failed to fetch sources: ${response.statusText}`);
     }
@@ -80,7 +83,8 @@ export async function getResourcesForConcept(conceptId: string): Promise<Resourc
     }
 
     try {
-        const res = await fetch(`${API_BASE_URL}/resources/by-concept/${encodeURIComponent(conceptId)}`);
+        const headers = await getApiHeaders();
+        const res = await fetch(`${API_BASE_URL}/resources/by-concept/${encodeURIComponent(conceptId)}`, { headers });
         if (!res.ok) {
             const { getResourcesForConceptOffline } = await import('../../lib/offline/api_wrapper');
             const cached = await getResourcesForConceptOffline(conceptId);
@@ -110,8 +114,13 @@ export async function uploadResourceForConcept(
     if (conceptId) formData.append('concept_id', conceptId);
     if (title) formData.append('title', title);
 
+    const headers: Record<string, string> = {};
+    const token = await getAuthToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch(`${API_BASE_URL}/resources/upload`, {
         method: 'POST',
+        headers,
         body: formData,
     });
 
@@ -130,11 +139,10 @@ export async function fetchConfusionsForConcept(
     sources: string[] = ['stackoverflow', 'github', 'docs', 'blogs'],
     limit: number = 8,
 ): Promise<Resource> {
+    const headers = await getApiHeaders();
     const res = await fetch(`${API_BASE_URL}/resources/fetch/confusions`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
             query,
             concept_id: conceptId,
@@ -154,7 +162,8 @@ export async function fetchConfusionsForConcept(
  * Get an artifact by its artifact_id
  */
 export async function getArtifact(artifactId: string): Promise<any> {
-    const response = await fetch(`${API_BASE_URL}/artifacts/${encodeURIComponent(artifactId)}`);
+    const headers = await getApiHeaders();
+    const response = await fetch(`${API_BASE_URL}/artifacts/${encodeURIComponent(artifactId)}`, { headers });
     if (!response.ok) {
         throw new Error(`Failed to fetch artifact: ${response.statusText}`);
     }
@@ -173,9 +182,10 @@ export async function createOrGetArtifact(payload: {
     metadata?: any;
     graph_id?: string;
 }): Promise<any> {
+    const headers = await getApiHeaders();
     const response = await fetch(`${API_BASE_URL}/artifacts/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
     });
     if (!response.ok) {

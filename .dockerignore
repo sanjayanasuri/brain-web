@@ -1,30 +1,25 @@
-# Ignore all for Docker context
-**
-
-# Allow backend specifically
-!backend/**
-
-# Standard excludes for backend
-backend/__pycache__/
-backend/*.pyc
-backend/.pytest_cache/
-backend/.mypy_cache/
-backend/.venv/
-backend/venv/
-backend/.env
-backend/.env.local
-backend/uploaded_resources/
-backend/embeddings_cache.json
-backend/notion_*.json
-backend/logs/
-
-# Specifically exclude other large repo folders
+# Simplified Root-level .dockerignore
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+.DS_Store
 frontend/
 browser-extension/
 docs/
 graph/
 infra/
-services/
-.git/
-.github/
-node_modules/
+infra_docker/
+tests/
+.env.local
+**/backend/.venv/
+**/backend/__pycache__/
+**/backend/uploaded_resources/
+**/backend/embeddings_cache.json
+**/backend/notion_sync_state.json
+**/backend/logs/
+**/backend/server_debug.log
+**/backend/events.db

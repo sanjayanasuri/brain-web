@@ -1,35 +1,66 @@
 """
-Simple in-memory caching utilities for API responses.
-Provides TTL-based caching to speed up frequently accessed data.
-
-Usage:
-    from cache_utils import get_cached, set_cached
-    
-    # Try to get from cache
-    result = get_cached("graph_overview", graph_id)
-    if result is None:
-        # Compute expensive operation
-        result = expensive_operation()
-        # Cache for 5 minutes
-        set_cached("graph_overview", graph_id, result, ttl_seconds=300)
-    return result
+Multi-level caching utilities for API responses.
+Provides Memory -> Disk -> Redis (optional) caching to speed up transitions and minimize latency.
 """
 import time
-from typing import Any, Optional, Dict
+import json
+import logging
+from typing import Any, Optional, Dict, Union
 from threading import Lock
+from pathlib import Path
 
-# In-memory cache storage
-# Structure: {cache_key: {"value": Any, "expires_at": float}}
-_cache: Dict[str, Dict[str, Any]] = {}
+try:
+    import redis
+    from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, USE_REDIS
+except ImportError:
+    USE_REDIS = False
+
+try:
+    from diskcache import Cache
+    HAS_DISKCACHE = True
+except ImportError:
+    HAS_DISKCACHE = False
+
+from config import repo_root
+
+logger = logging.getLogger("brain_web")
+
+# In-memory cache storage (Level 1)
+_memory_cache: Dict[str, Dict[str, Any]] = {}
 _cache_lock = Lock()
+
+# Disk cache storage (Level 2)
+_disk_cache = None
+if HAS_DISKCACHE:
+    cache_dir = repo_root / ".cache" / "api_data"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _disk_cache = Cache(str(cache_dir))
+
+# Redis cache (Level 3)
+_redis_client = None
+if USE_REDIS:
+    try:
+        _redis_client = redis.Redis(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            db=REDIS_DB,
+            password=REDIS_PASSWORD,
+            socket_timeout=2,
+            decode_responses=False # Keep bytes for pickling if needed, but we prefer JSON
+        )
+        _redis_client.ping()
+        logger.info(f"Connected to Redis for caching at {REDIS_HOST}:{REDIS_PORT}")
+    except Exception as e:
+        logger.warning(f"Failed to connect to Redis: {e}. Falling back to Disk/Memory cache.")
+        _redis_client = None
 
 # Cache statistics
 _cache_stats = {
-    "hits": 0,
+    "hits_l1": 0, # Memory
+    "hits_l2": 0, # Disk
+    "hits_l3": 0, # Redis
     "misses": 0,
-    "evictions": 0,
 }
-
 
 def _make_key(cache_name: str, *args, **kwargs) -> str:
     """Create a cache key from cache name and arguments."""
@@ -37,119 +68,155 @@ def _make_key(cache_name: str, *args, **kwargs) -> str:
     if args:
         key_parts.extend(str(arg) for arg in args)
     if kwargs:
-        # Sort kwargs for consistent key generation
         sorted_kwargs = sorted(kwargs.items())
         key_parts.extend(f"{k}={v}" for k, v in sorted_kwargs)
     return ":".join(key_parts)
 
-
-def get_cached(cache_name: str, *args, ttl_seconds: int = 300, **kwargs) -> Optional[Any]:
+def get_cached(cache_name: str, *args, **kwargs) -> Optional[Any]:
     """
-    Get a value from cache.
-    
-    Args:
-        cache_name: Name of the cache (e.g., "graph_overview")
-        *args: Positional arguments to include in cache key
-        ttl_seconds: TTL for the cache entry (default: 5 minutes)
-        **kwargs: Keyword arguments to include in cache key
-    
-    Returns:
-        Cached value if found and not expired, None otherwise
+    Get a value from multi-level cache.
     """
     cache_key = _make_key(cache_name, *args, **kwargs)
     
+    # 1. Try Memory (L1)
     with _cache_lock:
-        entry = _cache.get(cache_key)
-        if entry is None:
-            _cache_stats["misses"] += 1
-            return None
-        
-        # Check if expired
-        if time.time() > entry["expires_at"]:
-            del _cache[cache_key]
-            _cache_stats["misses"] += 1
-            _cache_stats["evictions"] += 1
-            return None
-        
-        _cache_stats["hits"] += 1
-        return entry["value"]
+        entry = _memory_cache.get(cache_key)
+        if entry and time.time() <= entry["expires_at"]:
+            _cache_stats["hits_l1"] += 1
+            return entry["value"]
+        elif entry:
+            del _memory_cache[cache_key]
 
+    # 2. Try Redis (L3) if enabled
+    if _redis_client:
+        try:
+            data = _redis_client.get(cache_key)
+            if data:
+                value = json.loads(data)
+                _cache_stats["hits_l3"] += 1
+                # Promote to Memory
+                set_cached(cache_name, value, *args, **kwargs)
+                return value
+        except Exception:
+            pass
+
+    # 3. Try Disk (L2)
+    if _disk_cache:
+        try:
+            value = _disk_cache.get(cache_key)
+            if value is not None:
+                _cache_stats["hits_l2"] += 1
+                # Promote to Memory/Redis
+                set_cached(cache_name, value, *args, **kwargs)
+                return value
+        except Exception:
+            pass
+
+    _cache_stats["misses"] += 1
+    return None
 
 def set_cached(cache_name: str, value: Any, *args, ttl_seconds: int = 300, **kwargs) -> None:
     """
-    Set a value in cache.
-    
-    Args:
-        cache_name: Name of the cache (e.g., "graph_overview")
-        value: Value to cache
-        *args: Positional arguments to include in cache key
-        ttl_seconds: Time to live in seconds (default: 5 minutes)
-        **kwargs: Keyword arguments to include in cache key
+    Set a value in multi-level cache.
     """
     cache_key = _make_key(cache_name, *args, **kwargs)
-    
+    expires_at = time.time() + ttl_seconds
+
+    # 1. Set Memory (L1)
     with _cache_lock:
-        _cache[cache_key] = {
+        _memory_cache[cache_key] = {
             "value": value,
-            "expires_at": time.time() + ttl_seconds,
+            "expires_at": expires_at,
         }
 
+    # 2. Set Disk (L2)
+    if _disk_cache:
+        try:
+            _disk_cache.set(cache_key, value, expire=ttl_seconds)
+        except Exception:
+            pass
+
+    # 3. Set Redis (L3)
+    if _redis_client:
+        try:
+            _redis_client.setex(cache_key, ttl_seconds, json.dumps(value))
+        except Exception:
+            pass
 
 def invalidate_cache(cache_name: str, *args, **kwargs) -> None:
-    """
-    Invalidate a specific cache entry.
-    
-    Args:
-        cache_name: Name of the cache
-        *args: Positional arguments to match cache key
-        **kwargs: Keyword arguments to match cache key
-    """
+    """Invalidate a specific cache entry across all levels."""
     cache_key = _make_key(cache_name, *args, **kwargs)
     
     with _cache_lock:
-        if cache_key in _cache:
-            del _cache[cache_key]
-
-
-def invalidate_cache_pattern(cache_name_prefix: str) -> None:
-    """
-    Invalidate all cache entries matching a prefix.
-    Useful for invalidating all entries for a specific cache type.
+        _memory_cache.pop(cache_key, None)
     
-    Args:
-        cache_name_prefix: Prefix to match (e.g., "graph_overview" will invalidate all graph overviews)
-    """
-    with _cache_lock:
-        keys_to_delete = [
-            key for key in _cache.keys()
-            if key.startswith(cache_name_prefix + ":")
-        ]
-        for key in keys_to_delete:
-            del _cache[key]
+    if _disk_cache:
+        _disk_cache.delete(cache_key)
+        
+    if _redis_client:
+        try:
+            _redis_client.delete(cache_key)
+        except Exception:
+            pass
 
+def invalidate_cache_pattern(pattern: str) -> None:
+    """Invalidate all cache entries matching a prefix pattern."""
+    # 1. Memory
+    with _cache_lock:
+        keys_to_delete = [k for k in _memory_cache.keys() if k.startswith(pattern)]
+        for k in keys_to_delete:
+            del _memory_cache[k]
+    
+    # 2. Disk
+    if _disk_cache:
+        try:
+            # diskcache doesn't have a direct pattern delete, so we clear if it's too much
+            # or just iterate which might be slow. For now, simple iteration.
+            keys_to_delete = [k for k in _disk_cache if isinstance(k, str) and k.startswith(pattern)]
+            for k in keys_to_delete:
+                _disk_cache.delete(k)
+        except Exception:
+            pass
+            
+    # 3. Redis
+    if _redis_client:
+        try:
+            # Use SCAN to find keys without blocking
+            cursor = 0
+            while True:
+                cursor, keys = _redis_client.scan(cursor=cursor, match=f"{pattern}*", count=100)
+                if keys:
+                    _redis_client.delete(*keys)
+                if cursor == 0:
+                    break
+        except Exception:
+            pass
 
 def clear_cache() -> None:
-    """Clear all cache entries."""
+    """Clear all cache entries across all levels."""
     with _cache_lock:
-        _cache.clear()
-
+        _memory_cache.clear()
+    
+    if _disk_cache:
+        _disk_cache.clear()
+        
+    if _redis_client:
+        try:
+            _redis_client.flushdb()
+        except Exception:
+            pass
 
 def get_cache_stats() -> Dict[str, Any]:
-    """
-    Get cache statistics.
+    """Get multi-level cache statistics."""
+    total_hits = _cache_stats["hits_l1"] + _cache_stats["hits_l2"] + _cache_stats["hits_l3"]
+    total = total_hits + _cache_stats["misses"]
+    hit_rate = total_hits / total if total > 0 else 0.0
     
-    Returns:
-        Dict with hits, misses, evictions, and current cache size
-    """
-    with _cache_lock:
-        total = _cache_stats["hits"] + _cache_stats["misses"]
-        hit_rate = _cache_stats["hits"] / total if total > 0 else 0.0
-        
-        return {
-            "hits": _cache_stats["hits"],
-            "misses": _cache_stats["misses"],
-            "evictions": _cache_stats["evictions"],
-            "hit_rate": hit_rate,
-            "cache_size": len(_cache),
-        }
+    return {
+        **_cache_stats,
+        "total_hits": total_hits,
+        "hit_rate": hit_rate,
+        "memory_size": len(_memory_cache),
+        "disk_size": len(_disk_cache) if _disk_cache else 0,
+    }
 

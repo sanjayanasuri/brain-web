@@ -27,7 +27,8 @@ def run_plan(
     graph_id: str,
     branch_id: str,
     limit: int = 5,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """
     Run the appropriate retrieval plan based on intent.
@@ -48,24 +49,26 @@ def run_plan(
     intent_enum = Intent(intent)
     
     if intent_enum == Intent.DEFINITION_OVERVIEW:
-        return plan_definition_overview(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_definition_overview(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.TIMELINE:
-        return plan_timeline(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_timeline(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.CAUSAL_CHAIN:
-        return plan_causal_chain(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_causal_chain(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.COMPARE:
-        return plan_compare(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_compare(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.WHO_NETWORK:
-        return plan_who_network(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_who_network(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.EVIDENCE_CHECK:
-        return plan_evidence_check(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_evidence_check(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.EXPLORE_NEXT:
-        return plan_explore_next(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_explore_next(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     elif intent_enum == Intent.WHAT_CHANGED:
-        return plan_what_changed(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_what_changed(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
+    elif intent_enum == Intent.SELF_KNOWLEDGE:
+        return plan_self_knowledge(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     else:
         # Fallback to definition overview
-        return plan_definition_overview(session, query, graph_id, branch_id, limit, detail_level)
+        return plan_definition_overview(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
 
 
 def plan_definition_overview(
@@ -74,7 +77,8 @@ def plan_definition_overview(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 1: DEFINITION_OVERVIEW"""
     trace = []
@@ -100,7 +104,7 @@ def plan_definition_overview(
         counts={}
     ))
     claims = retrieve_claims_for_community_ids(
-        session, graph_id, branch_id, community_ids, limit_per=15
+        session, graph_id, branch_id, community_ids, limit_per=15, ingestion_run_id=ingestion_run_id
     )
     trace[-1].counts = {"claims": len(claims)}
     
@@ -172,7 +176,8 @@ def plan_timeline(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 2: TIMELINE"""
     trace = []
@@ -188,9 +193,8 @@ def plan_timeline(
     community_ids = [c["community_id"] for c in communities]
     
     # Step 2: Retrieve claims
-    trace.append(RetrievalTraceStep(step="retrieve_claims", params={"limit_per": 20}, counts={}))
     claims = retrieve_claims_for_community_ids(
-        session, graph_id, branch_id, community_ids, limit_per=20
+        session, graph_id, branch_id, community_ids, limit_per=20, ingestion_run_id=ingestion_run_id
     )
     trace[-1].counts = {"claims": len(claims)}
     
@@ -294,7 +298,8 @@ def plan_causal_chain(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 3: CAUSAL_CHAIN"""
     trace = []
@@ -312,7 +317,7 @@ def plan_causal_chain(
     # Step 2: Retrieve claims
     trace.append(RetrievalTraceStep(step="retrieve_claims", params={"limit_per": 30}, counts={}))
     claims = retrieve_claims_for_community_ids(
-        session, graph_id, branch_id, community_ids, limit_per=30
+        session, graph_id, branch_id, community_ids, limit_per=30, ingestion_run_id=ingestion_run_id
     )
     trace[-1].counts = {"claims": len(claims)}
     
@@ -421,7 +426,8 @@ def plan_compare(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 4: COMPARE"""
     trace = []
@@ -468,10 +474,10 @@ def plan_compare(
     # Step 3: Retrieve claims
     trace.append(RetrievalTraceStep(step="retrieve_claims", params={"limit_per": 20}, counts={}))
     claims_a = retrieve_claims_for_community_ids(
-        session, graph_id, branch_id, [c["community_id"] for c in communities_a], limit_per=20
+        session, graph_id, branch_id, [c["community_id"] for c in communities_a], limit_per=20, ingestion_run_id=ingestion_run_id
     )
     claims_b = retrieve_claims_for_community_ids(
-        session, graph_id, branch_id, [c["community_id"] for c in communities_b], limit_per=20
+        session, graph_id, branch_id, [c["community_id"] for c in communities_b], limit_per=20, ingestion_run_id=ingestion_run_id
     )
     all_claims = claims_a + claims_b
     trace[-1].counts = {"claims": len(all_claims)}
@@ -555,7 +561,8 @@ def plan_who_network(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 5: WHO_NETWORK"""
     trace = []
@@ -584,7 +591,7 @@ def plan_who_network(
     community_ids = [c["community_id"] for c in communities]
     
     claims = retrieve_claims_for_community_ids(
-        session, graph_id, branch_id, community_ids, limit_per=20
+        session, graph_id, branch_id, community_ids, limit_per=20, ingestion_run_id=ingestion_run_id
     )
     trace[-1].counts = {"claims": len(claims)}
     
@@ -657,7 +664,8 @@ def plan_evidence_check(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 6: EVIDENCE_CHECK"""
     trace = []
@@ -665,7 +673,7 @@ def plan_evidence_check(
     # Step 1: Retrieve claims directly by query embedding
     trace.append(RetrievalTraceStep(step="retrieve_claims_by_embedding", params={"limit": 25}, counts={}))
     claims = retrieve_top_claims_by_query_embedding(
-        session, graph_id, branch_id, query, limit=25
+        session, graph_id, branch_id, query, limit=25, ingestion_run_id=ingestion_run_id
     )
     trace[-1].counts = {"claims": len(claims)}
     
@@ -744,14 +752,15 @@ def plan_explore_next(
     graph_id: str,
     branch_id: str,
     limit: int,
-    detail_level: str = "summary"
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
 ) -> RetrievalResult:
     """Plan 7: EXPLORE_NEXT"""
     trace = []
     
     # Step 1: Run DEFINITION_OVERVIEW plan first
     trace.append(RetrievalTraceStep(step="run_definition_overview", params={}, counts={}))
-    overview_result = plan_definition_overview(session, query, graph_id, branch_id, limit, detail_level)
+    overview_result = plan_definition_overview(session, query, graph_id, branch_id, limit, detail_level, ingestion_run_id)
     trace[-1].counts = {
         "concepts": len(overview_result.context.get("focus_entities", [])),
         "claims": len(overview_result.context.get("claims", []))
@@ -901,6 +910,175 @@ def plan_what_changed(
     
     return RetrievalResult(
         intent=Intent.WHAT_CHANGED.value,
+        trace=trace,
+        context=context
+    )
+
+
+def plan_self_knowledge(
+    session: Session,
+    query: str,
+    graph_id: str,
+    branch_id: str,
+    limit: int,
+    detail_level: str = "summary",
+    ingestion_run_id: Optional[Any] = None
+) -> RetrievalResult:
+    """Plan 9: SELF_KNOWLEDGE - Focusing on what the user already has in their graph."""
+    trace = []
+    
+    # Step 1: Semantic search for nodes in the user's graph
+    trace.append(RetrievalTraceStep(
+        step="semantic_search_nodes",
+        params={"limit": limit},
+        counts={}
+    ))
+    # Note: semantic_search_nodes needs graph_id/branch_id for better results usually
+    # but here we rely on the internal implementation's scoping if available.
+    search_results = semantic_search_nodes(query, session, limit=limit)
+    top_nodes = [r["node"] for r in search_results]
+    trace[-1].counts = {"concepts": len(top_nodes)}
+    
+    if not top_nodes:
+        # If no concepts found, try searching claims directly by embedding
+        trace.append(RetrievalTraceStep(step="fallback_semantic_claims", params={"limit": 10}, counts={}))
+        from services_retrieval_helpers import retrieve_top_claims_by_query_embedding
+        claims = retrieve_top_claims_by_query_embedding(session, graph_id, branch_id, query, limit=10)
+        trace[-1].counts = {"claims": len(claims)}
+        
+        if not claims:
+            return _empty_result(Intent.SELF_KNOWLEDGE.value, trace)
+            
+        # Build subgraph from these claims
+        subgraph = build_evidence_subgraph_from_claim_ids(session, graph_id, branch_id, [c["claim_id"] for c in claims])
+        
+        context = {
+            "focus_entities": subgraph.get("concepts", [])[:10],
+            "claims": claims,
+            "chunks": fetch_source_chunks_by_ids(session, graph_id, branch_id, [c.get("chunk_id") for c in claims if c.get("chunk_id")]),
+            "subgraph": subgraph,
+            "suggestions": [],
+            "warnings": ["No direct concepts found; showing semantically relevant notes."]
+        }
+        return RetrievalResult(intent=Intent.SELF_KNOWLEDGE.value, trace=trace, context=context)
+
+    node_ids = [n.node_id for n in top_nodes]
+    
+    # Step 2: Get neighboring relationships for these nodes
+    trace.append(RetrievalTraceStep(
+        step="get_subgraph_for_nodes",
+        params={"node_ids": node_ids},
+        counts={}
+    ))
+    
+    # Find all relationships between these nodes or their immediate neighbors with proper scoping
+    subgraph_query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (n:Concept {graph_id: $graph_id})-[:BELONGS_TO]->(g)
+    WHERE n.node_id IN $node_ids
+      AND $branch_id IN COALESCE(n.on_branches, [])
+    MATCH (n)-[r]-(m:Concept)-[:BELONGS_TO]->(g)
+    WHERE $branch_id IN COALESCE(m.on_branches, [])
+      AND $branch_id IN COALESCE(r.on_branches, [])
+    RETURN n.node_id AS src_id, n.name AS src_name,
+           m.node_id AS dst_id, m.name AS dst_name,
+           type(r) AS predicate,
+           COALESCE(r.confidence, 1.0) AS confidence
+    LIMIT 50
+    """
+    subgraph_result = session.run(subgraph_query, graph_id=graph_id, branch_id=branch_id, node_ids=node_ids)
+    
+    concepts_dict = {n.node_id: {"node_id": n.node_id, "name": n.name, "domain": n.domain, "type": n.type} for n in top_nodes}
+    edges = []
+    
+    for record in subgraph_result:
+        src_id = record["src_id"]
+        dst_id = record["dst_id"]
+        
+        if dst_id not in concepts_dict:
+            concepts_dict[dst_id] = {
+                "node_id": dst_id,
+                "name": record["dst_name"],
+                "type": "concept"
+            }
+            
+        edges.append({
+            "src": src_id,
+            "dst": dst_id,
+            "predicate": record["predicate"],
+            "confidence": record["confidence"]
+        })
+    
+    trace[-1].counts = {
+        "concepts": len(concepts_dict),
+        "edges": len(edges)
+    }
+    
+    # Step 3: Fetch claims related to these concepts (using correct :MENTIONS relationship)
+    trace.append(RetrievalTraceStep(
+        step="retrieve_claims_for_concepts",
+        params={"limit": 30},
+        counts={}
+    ))
+    
+    claims_query = """
+    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (n:Concept {graph_id: $graph_id})-[:BELONGS_TO]->(g)
+    WHERE n.node_id IN $node_ids
+      AND $branch_id IN COALESCE(n.on_branches, [])
+    MATCH (claim:Claim {graph_id: $graph_id})-[:MENTIONS]->(n)
+    WHERE $branch_id IN COALESCE(claim.on_branches, [])
+    RETURN claim.claim_id AS claim_id,
+           claim.text AS text,
+           claim.source_id AS source_id,
+           claim.chunk_id AS chunk_id
+    LIMIT 30
+    """
+    claims_result = session.run(claims_query, graph_id=graph_id, branch_id=branch_id, node_ids=list(concepts_dict.keys()))
+    claims = []
+    for record in claims_result:
+        claims.append({
+            "claim_id": record["claim_id"],
+            "text": record["text"],
+            "source_id": record.get("source_id"),
+            "chunk_id": record.get("chunk_id")
+        })
+    
+    # Hybrid Step: Also add semantic search for claims to be sure
+    from services_retrieval_helpers import retrieve_top_claims_by_query_embedding
+    semantic_claims = retrieve_top_claims_by_query_embedding(session, graph_id, branch_id, query, limit=10)
+    # Merge and dedupe
+    existing_claim_ids = {c["claim_id"] for c in claims}
+    for sc in semantic_claims:
+        if sc["claim_id"] not in existing_claim_ids:
+            claims.append(sc)
+            existing_claim_ids.add(sc["claim_id"])
+    
+    trace[-1].counts = {"claims": len(claims)}
+    
+    # Step 4: Fetch chunks if available
+    trace.append(RetrievalTraceStep(step="fetch_chunks", params={}, counts={}))
+    chunk_ids = [c.get("chunk_id") for c in claims if c.get("chunk_id")]
+    chunks = fetch_source_chunks_by_ids(session, graph_id, branch_id, chunk_ids)
+    trace[-1].counts = {"chunks": len(chunks)}
+    
+    context = {
+        "focus_entities": list(concepts_dict.values())[:15],
+        "claims": claims[:30],
+        "chunks": chunks[:15],
+        "subgraph": {
+            "concepts": list(concepts_dict.values()),
+            "edges": edges
+        },
+        "suggestions": [
+            {"label": "Explore Connections", "query": f"How is {top_nodes[0].name} connected to other things?", "intent": Intent.WHO_NETWORK.value},
+            {"label": "Detailed Timeline", "query": f"Timeline of {top_nodes[0].name}", "intent": Intent.TIMELINE.value}
+        ],
+        "warnings": []
+    }
+    
+    return RetrievalResult(
+        intent=Intent.SELF_KNOWLEDGE.value,
         trace=trace,
         context=context
     )

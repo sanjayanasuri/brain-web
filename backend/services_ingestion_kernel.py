@@ -24,6 +24,8 @@ from services_ingestion_runs import (
 from services_graph import (
     create_or_get_artifact,
     link_artifact_mentions_concept,
+    normalize_text_for_hash,
+    canonicalize_url,
 )
 from services_lecture_ingestion import (
     run_lecture_extraction_engine,
@@ -141,6 +143,53 @@ def ingest_artifact(
         source_label=source_label,
     )
     run_id = ingestion_run.run_id
+    
+    # ===== OPTIMIZATION: Check for Content Hash Match =====
+    # If the exact same content exists for this URL, skip expensive processing.
+    try:
+        if payload.source_url:
+            import hashlib
+            normalized_text = normalize_text_for_hash(text)
+            content_hash = hashlib.sha256(normalized_text.encode('utf-8')).hexdigest()
+            canonical = canonicalize_url(payload.source_url, strip_query=payload.policy.strip_url_query)
+            
+            # Check for latest artifact at this URL
+            check_query = """
+            MATCH (g:GraphSpace {graph_id: $graph_id})
+            MATCH (a:Artifact {graph_id: $graph_id, canonical_url: $canonical})
+            RETURN a.content_hash as stored_hash, a.artifact_id as artifact_id
+            ORDER BY a.created_at DESC
+            LIMIT 1
+            """
+            result = session.run(check_query, graph_id=graph_id, canonical=canonical)
+            record = result.single()
+            
+            if record and record["stored_hash"] == content_hash:
+                print(f"[Ingestion Kernel] SKIPPING: Content unsync for {canonical} (Hash Match)")
+                
+                # Close the empty run as SKIPPED
+                update_ingestion_run_status(
+                    session=session,
+                    run_id=run_id,
+                    status="SKIPPED",
+                    summary_counts={"skipped_reason": "content_unchanged"},
+                )
+                
+                return IngestionResult(
+                    run_id=run_id,
+                    artifact_id=record["artifact_id"],
+                    status="SKIPPED",
+                    reused_existing=True,
+                    summary_counts={"skipped": True},
+                    warnings=["Content unchanged, skipped processing"],
+                    errors=[],
+                    nodes_created=[],
+                    nodes_updated=[],
+                    links_created=[],
+                    segments=[],
+                )
+    except Exception as e:
+        print(f"[Ingestion Kernel] Warning: Failed to check content hash: {e}")
     
     try:
         # ===== STEP 4: Create or Reuse Artifact Node =====

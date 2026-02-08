@@ -12,10 +12,9 @@ export const metadata: Metadata = {
   title: 'Brain Web - AI Study Assistant',
   description: 'Your comprehensive study assistant for organizing documents, taking notes, tracking timelines, and exploring knowledge gaps',
   manifest: '/manifest.json',
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'default',
-    title: 'Brain Web',
+  icons: {
+    icon: '/favicon.ico',
+    apple: '/icon-192.png',
   },
 };
 
@@ -34,6 +33,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&display=swap" rel="stylesheet" />
+      </head>
       <body>
         <ThemeProvider>
           <QueryProvider>

@@ -15,6 +15,7 @@ from models import (
     LectureStepCreate,
     LectureStep,
     LectureIngestRequest,
+    HandwritingIngestRequest,
     LectureIngestResult,
     LectureSegment,
     LectureSegmentUpdate,
@@ -23,6 +24,8 @@ from models import (
     LectureMention,
     Concept,
     Analogy,
+    NotebookPage,
+    NotebookPageUpdate,
 )
 from services_lectures import (
     create_lecture,
@@ -31,13 +34,17 @@ from services_lectures import (
     add_lecture_step,
     get_lecture_steps,
     list_lectures,
+    get_notebook_pages,
+    upsert_notebook_page,
 )
 from services_graph import update_lecture_segment
 from services_lecture_blocks import upsert_lecture_blocks, list_lecture_blocks
-from services_lecture_ingestion import ingest_lecture
+from services_lecture_ingestion import ingest_lecture, ingest_handwriting
 from services_lecture_mentions import list_lecture_mentions
 from services_lecture_draft import draft_next_lecture
 from services_sync import auto_export_csv
+from services_branch_explorer import get_active_graph_context
+from cache_utils import get_cached, set_cached, invalidate_cache_pattern
 
 router = APIRouter(prefix="/lectures", tags=["lectures"])
 
@@ -101,6 +108,9 @@ def ingest_lecture_endpoint(
     # Schedule AI processing in background
     background_tasks.add_task(process_ai_background)
     
+    # Invalidate lecture-related caches
+    invalidate_cache_pattern("lectures")
+    
     # Step 3: Return immediately with lecture info
     # Return a minimal result indicating the lecture was saved and AI is processing
     return LectureIngestResult(
@@ -116,12 +126,36 @@ def ingest_lecture_endpoint(
     )
 
 
+@router.post("/ingest-ink", response_model=LectureIngestResult)
+def ingest_ink_endpoint(
+    payload: HandwritingIngestRequest,
+    session=Depends(get_neo4j_session),
+):
+    """
+    Ingest handwritten notes or sketches from a canvas image.
+    Uses GPT-4o Vision for transcription and graph extraction.
+    """
+    try:
+        result = ingest_handwriting(session, payload)
+        return result
+    except Exception as e:
+        print(f"ERROR: Handwriting ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/", response_model=List[Lecture])
 def list_lectures_endpoint(session=Depends(get_neo4j_session)):
     """
     List all lectures in the active graph + branch.
     """
-    return list_lectures(session)
+    cache_key = ("lectures", "list")
+    cached = get_cached(*cache_key)
+    if cached:
+        return [Lecture(**l) for l in cached]
+        
+    lectures = list_lectures(session)
+    set_cached(cache_key[0], [l.dict() for l in lectures], *cache_key[1:], ttl_seconds=300)
+    return lectures
 
 
 @router.post("/", response_model=Lecture)
@@ -133,14 +167,23 @@ def create_lecture_endpoint(
     lecture = create_lecture(session, payload)
     # Auto-export to CSV after creating lecture
     auto_export_csv(background_tasks)
+    # Invalidate lecture-related caches
+    invalidate_cache_pattern("lectures")
     return lecture
 
 
 @router.get("/{lecture_id}", response_model=Lecture)
 def read_lecture(lecture_id: str, session=Depends(get_neo4j_session)):
+    cache_key = ("lectures", "detail", lecture_id)
+    cached = get_cached(*cache_key)
+    if cached:
+        return Lecture(**cached)
+        
     lecture = get_lecture_by_id(session, lecture_id)
     if not lecture:
         raise HTTPException(status_code=404, detail="Lecture not found")
+    
+    set_cached(cache_key[0], lecture.dict(), *cache_key[1:], ttl_seconds=600)
     return lecture
 
 
@@ -152,7 +195,7 @@ def update_lecture_endpoint(
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """
-    Update a lecture's title and/or raw_text.
+    Update a lecture's title, raw_text, metadata_json, and/or annotations.
     This endpoint is used by the editor for auto-save and manual updates.
     """
     lecture = update_lecture(
@@ -161,11 +204,14 @@ def update_lecture_endpoint(
         title=payload.title,
         raw_text=payload.raw_text,
         metadata_json=payload.metadata_json,
+        annotations=payload.annotations,
     )
     if not lecture:
         raise HTTPException(status_code=404, detail="Lecture not found")
     # Auto-export to CSV after updating lecture
     auto_export_csv(background_tasks)
+    # Invalidate lecture-related caches
+    invalidate_cache_pattern("lectures")
     return lecture
 
 
@@ -194,7 +240,14 @@ def list_mentions_endpoint(lecture_id: str, session=Depends(get_neo4j_session)):
     """
     List linked mentions for a lecture.
     """
-    return list_lecture_mentions(session, lecture_id)
+    cache_key = ("lectures", "mentions", lecture_id)
+    cached = get_cached(*cache_key)
+    if cached:
+        return [LectureMention(**m) for m in cached]
+
+    mentions = list_lecture_mentions(session, lecture_id)
+    set_cached(cache_key[0], [m.dict() for m in mentions], *cache_key[1:], ttl_seconds=300)
+    return mentions
 
 
 @router.post("/{lecture_id}/steps", response_model=LectureStep)
@@ -208,6 +261,8 @@ def add_lecture_step_endpoint(
         step = add_lecture_step(session, lecture_id, payload)
         # Auto-export to CSV after adding lecture step
         auto_export_csv(background_tasks)
+        # Invalidate steps/outline cache
+        invalidate_cache_pattern(f"lectures:steps:{lecture_id}")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return step
@@ -215,12 +270,48 @@ def add_lecture_step_endpoint(
 
 @router.get("/{lecture_id}/steps", response_model=List[LectureStep])
 def read_lecture_steps(lecture_id: str, session=Depends(get_neo4j_session)):
+    cache_key = ("lectures", "steps", lecture_id)
+    cached = get_cached(*cache_key)
+    if cached:
+        return [LectureStep(**s) for s in cached]
+
     steps = get_lecture_steps(session, lecture_id)
     if not steps:
-        # Could be lecture missing or just no steps; we keep it simple for now.
-        # Caller can check separately if they need to distinguish.
         return []
+    
+    set_cached(cache_key[0], [s.dict() for s in steps], *cache_key[1:], ttl_seconds=600)
     return steps
+
+
+@router.get("/{lecture_id}/pages", response_model=List[NotebookPage])
+def read_notebook_pages(lecture_id: str, session=Depends(get_neo4j_session)):
+    """
+    Get all notebook pages for a lecture.
+    """
+    return get_notebook_pages(session, lecture_id)
+
+
+@router.post("/{lecture_id}/pages", response_model=NotebookPage)
+def update_notebook_page_endpoint(
+    lecture_id: str,
+    payload: NotebookPage,
+    session=Depends(get_neo4j_session),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
+    """
+    Create or update a notebook page.
+    """
+    page = upsert_notebook_page(
+        session=session,
+        lecture_id=lecture_id,
+        page_number=payload.page_number,
+        content=payload.content,
+        ink_data=payload.ink_data,
+        paper_type=payload.paper_type
+    )
+    # Auto-export to CSV after updating
+    auto_export_csv(background_tasks)
+    return page
 
 
 @router.get("/segments/by-concept/{concept_name}", response_model=List[LectureSegment])
@@ -246,6 +337,7 @@ def get_segments_by_concept(concept_name: str, session=Depends(get_neo4j_session
            seg.text AS text,
            seg.summary AS summary,
            seg.style_tags AS style_tags,
+           seg.ink_url AS ink_url,
            lec.title AS lecture_title,
            collect(DISTINCT {
              node_id: other_c.node_id,
@@ -310,31 +402,24 @@ def get_segments_by_concept(concept_name: str, session=Depends(get_neo4j_session
     return segments
 
 
-@router.get("/{lecture_id}/segments", response_model=List[LectureSegment])
-def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
-    """
-    Get all segments for a lecture, including their covered concepts and analogies.
-    """
+def get_lecture_segments(lecture_id: str, session) -> List[LectureSegment]:
     from services_graph import _normalize_concept_from_db
     
     query = """
-    MATCH (lec:Lecture {lecture_id: $lecture_id})-[:HAS_SEGMENT]->(seg:LectureSegment)
-    WITH lec, seg
-    ORDER BY seg.segment_index
+    MATCH (l:Lecture {lecture_id: $lecture_id})
+    MATCH (l)-[:HAS_SEGMENT]->(seg:LectureSegment)
     OPTIONAL MATCH (seg)-[:COVERS]->(c:Concept)
-    WITH lec, seg, collect(DISTINCT c) AS concept_nodes
     OPTIONAL MATCH (seg)-[:USES_ANALOGY]->(a:Analogy)
-    WITH lec, seg, concept_nodes, collect(DISTINCT a) AS analogy_nodes
     RETURN seg.segment_id AS segment_id,
-           seg.lecture_id AS lecture_id,
+           l.lecture_id AS lecture_id,
            seg.segment_index AS segment_index,
            seg.start_time_sec AS start_time_sec,
            seg.end_time_sec AS end_time_sec,
            seg.text AS text,
            seg.summary AS summary,
            seg.style_tags AS style_tags,
-           lec.title AS lecture_title,
-           [c IN concept_nodes WHERE c IS NOT NULL | {
+           l.title AS lecture_title,
+           collect(DISTINCT {
              node_id: c.node_id,
              name: c.name,
              domain: c.domain,
@@ -347,23 +432,22 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
              lecture_sources: COALESCE(c.lecture_sources, []),
              created_by: c.created_by,
              last_updated_by: c.last_updated_by
-           }] AS concepts,
-           [a IN analogy_nodes WHERE a IS NOT NULL | {
+           }) AS concepts,
+           collect(DISTINCT {
              analogy_id: a.analogy_id,
              label: a.label,
              description: a.description,
              tags: a.tags
-           }] AS analogies
+           }) AS analogies
     ORDER BY seg.segment_index
     """
     records = session.run(query, lecture_id=lecture_id)
-
+    
     segments: List[LectureSegment] = []
     for rec in records:
-        # Extract segment data
         seg_data = {
             "segment_id": rec["segment_id"],
-            "lecture_id": rec["lecture_id"] or lecture_id,
+            "lecture_id": rec["lecture_id"],
             "segment_index": rec["segment_index"] or 0,
             "start_time_sec": rec["start_time_sec"],
             "end_time_sec": rec["end_time_sec"],
@@ -372,22 +456,19 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
             "style_tags": rec["style_tags"] or [],
         }
         
-        # Add lecture_title if available
         if rec.get("lecture_title"):
             seg_data["lecture_title"] = rec["lecture_title"]
-        
-        # Extract concepts (filter out None and empty dicts)
+
         concepts = rec["concepts"] or []
         concept_models = []
         for c_data in concepts:
-            if c_data and c_data.get("node_id"):  # Only process if node_id exists
+            if c_data and c_data.get("node_id"):
                 concept_models.append(_normalize_concept_from_db(c_data))
         
-        # Extract analogies (filter out None and empty dicts)
         analogies = rec["analogies"] or []
         analogy_models = []
         for a_data in analogies:
-            if a_data and a_data.get("analogy_id"):  # Only process if analogy_id exists
+            if a_data and a_data.get("analogy_id"):
                 analogy_models.append(Analogy(**a_data))
 
         segments.append(
@@ -398,6 +479,36 @@ def get_lecture_segments(lecture_id: str, session=Depends(get_neo4j_session)):
             )
         )
     return segments
+
+
+@router.get("/{lecture_id}/segments", response_model=List[LectureSegment])
+def get_lecture_segments_endpoint(lecture_id: str, session=Depends(get_neo4j_session)):
+    """
+    Get all segments for a lecture, including their covered concepts and analogies.
+    """
+    cache_key = ("lectures", "segments", lecture_id)
+    cached = get_cached(*cache_key)
+    if cached:
+        return [LectureSegment(**s) for s in cached]
+        
+    segments = get_lecture_segments(lecture_id, session) # Note: order of args in function is (lecture_id, session)
+    set_cached(cache_key[0], [s.dict() for s in segments], *cache_key[1:], ttl_seconds=600)
+    return segments
+
+
+@router.get("/{lecture_id}/pages", response_model=List[NotebookPage])
+def read_notebook_pages_endpoint(lecture_id: str, session=Depends(get_neo4j_session)):
+    """
+    Get all notebook pages for a lecture.
+    """
+    cache_key = ("lectures", "pages", lecture_id)
+    cached = get_cached(*cache_key)
+    if cached:
+        return [NotebookPage(**p) for p in cached]
+        
+    pages = read_notebook_pages(lecture_id, session)
+    set_cached(cache_key[0], [p.dict() for p in pages], *cache_key[1:], ttl_seconds=600)
+    return pages
 
 
 @router.put("/segments/{segment_id}", response_model=LectureSegment)

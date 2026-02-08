@@ -46,18 +46,39 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
   const recognitionRef = useRef<any>(null);
   const finalTranscriptRef = useRef<string>('');
 
-  // Initialize recognition
+  // Stabilize callbacks using refs so useEffect doesn't need to re-run
+  const onResultRef = useRef(onResult);
+  const onErrorRef = useRef(onError);
+  const onStartRef = useRef(onStart);
+  const onStopRef = useRef(onStop);
+
+  useEffect(() => {
+    onResultRef.current = onResult;
+    onErrorRef.current = onError;
+    onStartRef.current = onStart;
+    onStopRef.current = onStop;
+  }, [onResult, onError, onStart, onStop]);
+
+  // Initialize recognition only when configuration changes
   useEffect(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setState((prev) => ({
+      setState((prev) => prev.isSupported ? prev : ({
         ...prev,
         isSupported: false,
         error: 'Speech recognition is not supported in this browser',
       }));
       return;
+    }
+
+    // If recognitionRef.current already exists and is configured with the same settings,
+    // we might not need to re-initialize it. However, the current dependencies
+    // (continuous, interimResults, lang) already ensure re-initialization if these change.
+    // The main goal here is to ensure `isSupported` is set correctly once.
+    if (!state.isSupported) {
+      setState(prev => ({ ...prev, isSupported: true }));
     }
 
     const recognition = new SpeechRecognition();
@@ -71,7 +92,7 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
         isListening: true,
         error: null,
       }));
-      onStart?.();
+      onStartRef.current?.();
     };
 
     recognition.onresult = (event: any) => {
@@ -95,7 +116,7 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
         transcript: fullTranscript.trim(),
       }));
 
-      onResult?.(fullTranscript.trim(), interimTranscript === '');
+      onResultRef.current?.(fullTranscript.trim(), interimTranscript === '');
     };
 
     recognition.onerror = (event: any) => {
@@ -105,7 +126,7 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
         error: error.message,
         isListening: false,
       }));
-      onError?.(error);
+      onErrorRef.current?.(error);
     };
 
     recognition.onend = () => {
@@ -113,21 +134,20 @@ export function useVoiceRecognition(options: VoiceRecognitionOptions = {}) {
         ...prev,
         isListening: false,
       }));
-      onStop?.();
+      onStopRef.current?.();
     };
 
     recognitionRef.current = recognition;
-    setState((prev) => ({
-      ...prev,
-      isSupported: true,
-    }));
+
+    // Set isSupported only if it wasn't set to avoid redundant renders
+    setState(prev => prev.isSupported ? prev : ({ ...prev, isSupported: true }));
 
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
     };
-  }, [continuous, interimResults, lang, onResult, onError, onStart, onStop]);
+  }, [continuous, interimResults, lang]); // Dependencies simplified
 
   const start = useCallback(() => {
     if (!recognitionRef.current) {

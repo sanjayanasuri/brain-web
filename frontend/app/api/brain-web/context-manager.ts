@@ -112,6 +112,15 @@ export async function buildOptimizedContext(
   totalTokens: number;
   excludedChunks: ContextChunk[];
 }> {
+  // Heuristic: If we have very few chunks, skip AI scoring to save latency
+  if (chunks.length <= 3) {
+    return {
+      selectedChunks: chunks,
+      totalTokens: chunks.reduce((acc, c) => acc + Math.ceil(c.content.length / 4), 0),
+      excludedChunks: [],
+    };
+  }
+
   // Score all chunks
   const scored = await scoreContextImportance(chunks, question, maxTokens, apiKey);
 

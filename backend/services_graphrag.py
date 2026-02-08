@@ -6,7 +6,7 @@ from neo4j import Session
 import math
 import re
 
-from services_search import embed_text, cosine_similarity
+from services_search import embed_text, cosine_similarity, semantic_search_nodes
 from services_graph import (
     get_claims_for_communities,
     get_evidence_subgraph,
@@ -236,71 +236,44 @@ def detect_anchor_concepts(
     Returns:
         Tuple of (anchor_node_ids, is_two_entity_question)
     """
-    # Heuristic 1: Extract quoted strings
-    quoted_strings = re.findall(r'"([^"]+)"', question) + re.findall(r"'([^']+)'", question)
-    
-    # Heuristic 2: Semantic search for top concepts
-    all_concepts = get_all_concepts(session)
-    if not all_concepts:
+    # Optimized: Use semantic_search_nodes which has disk caching
+    # This prevents making sequential OpenAI calls for every concept in the graph
+    try:
+        results = semantic_search_nodes(question, session, limit=10)
+    except Exception as e:
+        print(f"[GraphRAG] ERROR: detect_anchor_concepts failed: {e}")
         return ([], False)
     
-    # Build concept embeddings and compute similarity
-    concept_scores = []
-    for concept in all_concepts:
-        # Build text representation
-        text_parts = [concept.name]
-        if concept.description:
-            text_parts.append(concept.description)
-        if concept.tags:
-            text_parts.append(", ".join(concept.tags))
-        concept_text = "\n".join(text_parts)
-        
-        try:
-            concept_embedding = embed_text(concept_text)
-            score = cosine_similarity(question_embedding, concept_embedding)
-            concept_scores.append({
-                "node_id": concept.node_id,
-                "name": concept.name,
-                "score": score
-            })
-        except Exception as e:
-            print(f"[GraphRAG] WARNING: Failed to embed concept {concept.node_id}: {e}")
-            continue
+    if not results:
+        return ([], False)
     
-    # Sort by score
-    concept_scores.sort(key=lambda x: x["score"], reverse=True)
-    
-    # Check for two-entity question
-    high_scoring = [c for c in concept_scores if c["score"] > 0.3]
+    # Check for two-entity question based on top scores
+    high_scoring = [r for r in results if r["score"] > 0.35]
     is_two_entity = len(high_scoring) >= 2
     
-    # Resolve quoted strings to node_ids
+    # Resolve quoted strings to node_ids (higher precision)
+    quoted_strings = re.findall(r'"([^"]+)"', question) + re.findall(r"'([^']+)'", question)
     anchor_node_ids = []
+    
     if quoted_strings:
+        # Match quoted strings against result names
         for quoted in quoted_strings:
-            # Try to find concept by name (case-insensitive)
-            for concept in all_concepts:
-                if quoted.lower() in concept.name.lower() or concept.name.lower() in quoted.lower():
-                    anchor_node_ids.append(concept.node_id)
+            quoted_lower = quoted.lower()
+            for r in results:
+                name_lower = r["node"].name.lower()
+                if quoted_lower in name_lower or name_lower in quoted_lower:
+                    anchor_node_ids.append(r["node"].node_id)
                     break
     
-    # If two-entity question, use top 2 concepts
-    if is_two_entity and len(anchor_node_ids) < 2:
-        for c in concept_scores[:2]:
-            if c["node_id"] not in anchor_node_ids:
-                anchor_node_ids.append(c["node_id"])
-                if len(anchor_node_ids) >= 2:
-                    break
+    # Fill in from semantic search results if not enough anchors from quotes
+    limit = 2 if is_two_entity else 3
+    for r in results:
+        if len(anchor_node_ids) >= limit:
+            break
+        if r["node"].node_id not in anchor_node_ids:
+            anchor_node_ids.append(r["node"].node_id)
     
-    # Otherwise, use top 3 concepts
-    if not is_two_entity and len(anchor_node_ids) < 3:
-        for c in concept_scores[:3]:
-            if c["node_id"] not in anchor_node_ids:
-                anchor_node_ids.append(c["node_id"])
-                if len(anchor_node_ids) >= 3:
-                    break
-    
-    return (anchor_node_ids[:3], is_two_entity)
+    return (anchor_node_ids, is_two_entity)
 
 
 def find_shortest_path_edges(
@@ -502,7 +475,7 @@ def retrieve_graphrag_context(
             graph_id=graph_id,
             branch_id=branch_id,
             question=question,
-            question_embedding=question_embedding
+            question_embedding=None
         )
         print(f"[GraphRAG] Detected {len(anchor_node_ids)} anchor concepts, is_two_entity={is_two_entity}")
     
@@ -617,7 +590,6 @@ def retrieve_graphrag_context(
     
     sorted_mentioned = sorted(concept_mentions.items(), key=lambda x: x[1], reverse=True)
     candidate_concept_ids = [node_id for node_id, _ in sorted_mentioned[:30]]
-    
     # Build path-based evidence graph
     path_edges = []
     path_node_ids = set()
@@ -808,13 +780,13 @@ def retrieve_graphrag_context(
             try:
                 resources = get_resources_for_concept(session, concept["node_id"])
                 if resources:
-                    # Filter for browser_use resources (finance snapshots)
-                    browser_use_resources = [
+                    # Filter for finance resources
+                    finance_resources = [
                         r for r in resources
-                        if r.source == "browser_use" and r.metadata and isinstance(r.metadata, dict)
+                        if r.source == "web" and r.metadata and isinstance(r.metadata, dict)
                     ]
-                    if browser_use_resources:
-                        for resource in browser_use_resources[:2]:  # Limit to 2 per concept
+                    if finance_resources:
+                        for resource in finance_resources[:2]:  # Limit to 2 per concept
                             if resource.caption:
                                 context_parts.append(f"Resource: {resource.caption[:200]}")  # Truncate long captions
                             # Include key metadata for finance resources

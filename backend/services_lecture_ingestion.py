@@ -7,6 +7,8 @@ import json
 import re
 from typing import Optional, List, Dict, Any, Callable
 from uuid import uuid4
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from neo4j import Session
 from openai import OpenAI
 import os
@@ -14,6 +16,7 @@ from pathlib import Path
 
 from models import (
     LectureIngestRequest,
+    HandwritingIngestRequest,
     LectureIngestResult,
     LectureExtraction,
     ExtractedNode,
@@ -23,6 +26,7 @@ from models import (
     RelationshipCreate,
     LectureSegment,
     Analogy,
+    HierarchicalTopic,
 )
 from services_graph import (
     get_concept_by_name,
@@ -36,6 +40,7 @@ from services_graph import (
     upsert_source_chunk,
     upsert_claim,
     link_claim_mentions,
+    normalize_text_for_hash,
 )
 from services_ingestion_runs import (
     create_ingestion_run,
@@ -44,7 +49,7 @@ from services_ingestion_runs import (
 from services_claims import extract_claims_from_chunk, normalize_claim_text
 from services_search import embed_text
 from services_branch_explorer import get_active_graph_context, ensure_graph_scoping_initialized
-from prompts import LECTURE_TO_GRAPH_PROMPT, LECTURE_SEGMENTATION_PROMPT
+from prompts import LECTURE_TO_GRAPH_PROMPT, LECTURE_SEGMENTATION_PROMPT, HANDWRITING_INGESTION_PROMPT
 from config import OPENAI_API_KEY
 import hashlib
 
@@ -611,6 +616,102 @@ Extract the concepts and relationships from this lecture and return them as JSON
         raise
 
 
+def _process_structure_recursive(
+    session: Session,
+    topic: HierarchicalTopic,
+    parent_id: Optional[str],
+    lecture_id: str,
+    run_id: str,
+    node_name_to_id: Dict[str, str],
+    domain: Optional[str]
+) -> None:
+    """Recursively create topic nodes and link them."""
+    
+    # 1. Create/Get Topic Node
+    topic_name_normalized = normalize_name(topic.name)
+    existing_topic = find_concept_by_name_and_domain(session, topic.name, domain)
+    
+    topic_id = None
+    
+    if existing_topic:
+        topic_id = existing_topic.node_id
+        # Ensure it's marked as a topic if not already? (Optional)
+    else:
+        # Create new Topic Concept
+        topic_payload = ConceptCreate(
+            name=topic.name,
+            domain=domain or "Structure",
+            type="topic",
+            description=f"Topic from lecture",
+            tags=["Structure"],
+            lecture_key=lecture_id,
+            lecture_sources=[lecture_id],
+            created_by_run_id=run_id
+        )
+        new_topic = create_concept(session, topic_payload)
+        topic_id = new_topic.node_id
+        
+    # 2. Link Parent -> Topic (CONTAINS)
+    if parent_id and topic_id:
+        create_relationship_by_ids(
+            session=session,
+            source_id=parent_id,
+            target_id=topic_id,
+            predicate="CONTAINS",
+            confidence=1.0,
+            method="structure_extraction",
+            ingestion_run_id=run_id
+        )
+        
+    # 3. Link Topic -> Concepts (CONTAINS)
+    for concept_name in topic.concepts:
+        c_norm = normalize_name(concept_name)
+        c_id = node_name_to_id.get(c_norm)
+        
+        # If not found in current ingestion, try DB lookup
+        if not c_id:
+             existing_c = find_concept_by_name_and_domain(session, concept_name, domain)
+             if existing_c:
+                 c_id = existing_c.node_id
+        
+        if c_id and topic_id:
+             create_relationship_by_ids(
+                session=session,
+                source_id=topic_id,
+                target_id=c_id,
+                predicate="CONTAINS", # Topic CONTAINS Concept
+                confidence=1.0,
+                method="structure_extraction",
+                ingestion_run_id=run_id
+            )
+            
+    # 4. Recurse for Subtopics
+    for subtopic in topic.subtopics:
+        _process_structure_recursive(
+            session, subtopic, topic_id, lecture_id, run_id, node_name_to_id, domain
+        )
+
+
+def process_structure(
+    session: Session,
+    extraction: LectureExtraction,
+    lecture_id: str,
+    run_id: str,
+    node_name_to_id: Dict[str, str],
+    domain: Optional[str]
+) -> None:
+    """Process the hierarchical structure (AST) if present."""
+    if not extraction.structure:
+        return
+
+    print(f"[Lecture Ingestion] Processing {len(extraction.structure)} root topics from structure...")
+    
+    for root_topic in extraction.structure:
+        _process_structure_recursive(
+            session, root_topic, None, lecture_id, run_id, node_name_to_id, domain
+        ) 
+
+
 def run_lecture_extraction_engine(
     session: Session,
     lecture_title: str,
@@ -844,6 +945,23 @@ def run_lecture_extraction_engine(
             errors.append(error_msg)
             print(f"[Lecture Ingestion] ERROR: {error_msg}")
     
+    
+    # Step 4: Process Hierarchical Structure (AST)
+    if extraction.structure:
+        try:
+            process_structure(
+                session=session,
+                extraction=extraction,
+                lecture_id=lecture_id,
+                run_id=run_id,
+                node_name_to_id=node_name_to_id,
+                domain=domain
+            )
+            print(f"[Lecture Ingestion] AST Structure processed successfully")
+        except Exception as e:
+            print(f"[Lecture Ingestion] WARNING: Failed to process AST structure: {e}")
+            errors.append(f"Structure processing info: {e}")
+
     print(f"[Lecture Ingestion] Completed: {len(nodes_created)} created, {len(nodes_updated)} updated, {len(links_created)} links created")
     
     return {
@@ -856,6 +974,44 @@ def run_lecture_extraction_engine(
         "relationships_proposed": relationships_proposed,
         "errors": errors,
         "extraction": extraction,  # Store extraction for status calculation
+    }
+
+
+def process_chunk_atomic(chunk_data: Dict[str, Any], known_concepts_dict: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Process a single chunk atomically (no DB side effects).
+    - Extracts claims (LLM)
+    - Computes embeddings (LLM)
+    
+    Returns:
+        Dict with 'chunk': chunk_data, 'claims': list_of_claims_with_embeddings, 'errors': list
+    """
+    errors = []
+    claims_with_embeddings = []
+    
+    try:
+        # Extract claims
+        claims = extract_claims_from_chunk(chunk_data["text"], known_concepts_dict)
+        
+        for claim_data in claims:
+            # Compute embedding
+            try:
+                embedding = embed_text(claim_data["claim_text"])
+            except Exception as e:
+                print(f"[Lecture Ingestion] WARNING: Failed to embed claim, continuing without embedding: {e}")
+                embedding = None
+            
+            # Attach embedding to claim data
+            claim_data["embedding"] = embedding
+            claims_with_embeddings.append(claim_data)
+            
+    except Exception as e:
+        errors.append(f"Failed to process chunk {chunk_data.get('index')}: {e}")
+    
+    return {
+        "chunk": chunk_data,
+        "claims": claims_with_embeddings,
+        "errors": errors
     }
 
 
@@ -928,8 +1084,12 @@ def run_chunk_and_claims_engine(
         existing_concepts = get_all_concepts(session)
         existing_concept_map = {normalize_name(c.name): c.node_id for c in existing_concepts}
     
+    # Create all SourceChunks first (Sequential DB Write)
+    chunk_map = {} # chunk_index -> chunk_id
+    
     for chunk in chunks:
         chunk_id = f"CHUNK_{uuid4().hex[:8].upper()}"
+        chunk["chunk_id"] = chunk_id  # Store logic id
         
         # Create SourceChunk with PDF page references if available
         metadata = {
@@ -956,16 +1116,50 @@ def run_chunk_and_claims_engine(
             )
             chunks_created += 1
             chunk_ids.append(chunk_id)
+            chunk_map[chunk["index"]] = chunk_id
         except Exception as e:
             error_msg = f"Failed to create SourceChunk {chunk_id}: {e}"
             errors.append(error_msg)
             print(f"[Lecture Ingestion] ERROR: {error_msg}")
             continue
+
+    # Process Chunks in Parallel (LLM Calls)
+    print(f"[Lecture Ingestion] Parallel processing {len(chunks)} chunks with 5 workers...")
+    processed_claims_results = []
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        # Submit all tasks
+        future_to_chunk = {
+            executor.submit(process_chunk_atomic, chunk, known_concepts_dict): chunk 
+            for chunk in chunks
+        }
         
-        # Extract claims from chunk
-        claims = extract_claims_from_chunk(chunk["text"], known_concepts_dict)
+        for future in as_completed(future_to_chunk):
+            try:
+                result = future.result()
+                processed_claims_results.append(result)
+                if result["errors"]:
+                    errors.extend(result["errors"])
+            except Exception as exc:
+                print(f"[Lecture Ingestion] Chunk processing generated an exception: {exc}")
+                errors.append(str(exc))
+    
+    # Sort results by index to maintain logical order (though not strictly required for claims)
+    processed_claims_results.sort(key=lambda x: x["chunk"]["index"])
+
+    # Persist Claims (Sequential DB Write)
+    for result in processed_claims_results:
+        chunk = result["chunk"]
+        chunk_id = chunk.get("chunk_id") # Retrieved from our earlier enrichment
         
-        for claim_data in claims:
+        if not chunk_id: 
+            # Should have been set in the first loop
+            # If creating source chunk failed, we might skip this
+            continue
+            
+        claims_data_list = result["claims"]
+        
+        for claim_data in claims_data_list:
             # Create deterministic claim_id
             normalized_claim_text = normalize_claim_text(claim_data["claim_text"])
             claim_id_hash = hashlib.sha256(
@@ -990,12 +1184,7 @@ def run_chunk_and_claims_engine(
                 if found_id:
                     mentioned_node_ids.append(found_id)
             
-            # Compute claim embedding
-            try:
-                claim_embedding = embed_text(claim_data["claim_text"])
-            except Exception as e:
-                print(f"[Lecture Ingestion] WARNING: Failed to embed claim, continuing without embedding: {e}")
-                claim_embedding = None
+            claim_embedding = claim_data.get("embedding")
             
             # Create Claim
             try:
@@ -1234,6 +1423,46 @@ def ingest_lecture(
     # Use existing lecture_id if provided, otherwise generate new one
     lecture_id = existing_lecture_id or f"LECTURE_{uuid4().hex[:8].upper()}"
     
+    # ===== OPTIMIZATION: Check for Content Hash Match =====
+    normalized_text = normalize_text_for_hash(lecture_text)
+    content_hash = hashlib.sha256(normalized_text.encode('utf-8')).hexdigest()
+    
+    # Check for existing lecture with same content hash
+    check_query = """
+    MATCH (l:Lecture)
+    WHERE l.content_hash = $content_hash
+    RETURN l.lecture_id AS lecture_id
+    LIMIT 1
+    """
+    result = session.run(check_query, content_hash=content_hash)
+    record = result.single()
+    
+    if record and not existing_lecture_id:
+        print(f"[Lecture Ingestion] SKIPPING: Content match for lecture (Hash: {content_hash[:8]})")
+        existing_id = record["lecture_id"]
+        
+        # Close the empty run as SKIPPED
+        update_ingestion_run_status(
+            session=session,
+            run_id=run_id,
+            status="SKIPPED",
+            summary_counts={"skipped_reason": "content_unchanged_hash_match"},
+        )
+        
+        return LectureIngestResult(
+            lecture_id=existing_id,
+            nodes_created=[],
+            nodes_updated=[],
+            links_created=[],
+            segments=[],
+            run_id=run_id,
+            created_concept_ids=[],
+            updated_concept_ids=[],
+            created_relationship_count=0,
+            created_claim_ids=[],
+            reused_existing=True,
+        )
+
     # Step 1: Run extraction engine
     extraction_result = run_lecture_extraction_engine(
         session=session,
@@ -1275,9 +1504,10 @@ def ingest_lecture(
         # Just verify it exists
         query = """
         MATCH (l:Lecture {lecture_id: $lecture_id})
+        SET l.content_hash = $content_hash 
         RETURN l.lecture_id AS lecture_id
         """
-        result = session.run(query, lecture_id=lecture_id)
+        result = session.run(query, lecture_id=lecture_id, content_hash=content_hash)
         if not result.single():
             raise ValueError(f"Lecture {lecture_id} not found - cannot process AI for non-existent lecture")
     else:
@@ -1289,7 +1519,8 @@ def ingest_lecture(
                       l.primary_concept = $primary_concept,
                       l.level = $level,
                       l.estimated_time = $estimated_time,
-                      l.slug = $slug
+                      l.slug = $slug,
+                      l.content_hash = $content_hash
         RETURN l.lecture_id AS lecture_id
         """
         session.run(
@@ -1301,6 +1532,7 @@ def ingest_lecture(
             level=None,
             estimated_time=None,
             slug=None,
+            content_hash=content_hash
         )
     
     # Step 4: Run segments and analogies engine
@@ -1366,3 +1598,170 @@ def ingest_lecture(
         created_relationship_count=created_relationship_count,
         created_claim_ids=created_claim_ids,
     )
+
+def ingest_handwriting(
+    session: Session,
+    payload: HandwritingIngestRequest,
+) -> LectureIngestResult:
+    """
+    Ingest a handwriting image using GPT-4o Vision.
+    Processes the image to extract concepts, links, and segments.
+    """
+    if not client:
+        raise ValueError("OpenAI client not initialized.")
+
+    # 1. Prepare the image for GPT-4o Vision
+    # Remove prefix if present (e.g., "data:image/png;base64,")
+    base64_image = payload.image_data
+    if "," in base64_image:
+        base64_image = base64_image.split(",")[1]
+
+    # 2. Call OpenAI Vision
+    print(f"[Handwriting Ingestion] Calling GPT-4o Vision for: {payload.lecture_title}")
+    
+    user_content = [
+        {
+            "type": "text",
+            "text": f"OCR Hint: {payload.ocr_hint}\n\nDomain: {payload.domain or 'General'}\n\nAnalyze this handwritten note/sketch."
+        },
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{base64_image}"
+            }
+        }
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": HANDWRITING_INGESTION_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=4000,
+        )
+        
+        content = response.choices[0].message.content.strip()
+        
+        # Clean up JSON if it has markdown blocks
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        data = json.loads(content)
+        
+        # 3. Persistence
+        # We'll create a new lecture for this handwriting capture
+        # Combine all transcribed text for the raw_text field
+        transcribed_text = "\n\n".join([seg.get("text", "") for seg in data.get("segments", [])])
+        if not transcribed_text and payload.ocr_hint:
+            transcribed_text = payload.ocr_hint
+            
+        from services_lectures import create_lecture
+        from models import LectureCreate
+        
+        lecture = create_lecture(
+            session=session,
+            payload=LectureCreate(
+                title=payload.lecture_title or data.get("lecture_title", "Handwritten Notes"),
+                description=f"Ingested from handwriting/sketch. Generated on {data.get('lecture_title', '')}",
+                raw_text=transcribed_text,
+            )
+        )
+        
+        # Now use the existing run_lecture_extraction_engine-like logic to save concepts/links
+        # But data is already in LectureExtraction format (mostly)
+        
+        nodes_created = []
+        nodes_updated = []
+        node_name_to_id = {}
+        
+        # Normalize data into extraction format
+        extraction = LectureExtraction(
+            lecture_title=lecture.title,
+            nodes=[ExtractedNode(**n) for n in data.get("nodes", [])],
+            links=[ExtractedLink(**l) for l in data.get("links", [])]
+        )
+        
+        # We can't easily call the full engine because it expects a run_id etc.
+        # Let's do a simplified version or just create a dummy run_id
+        dummy_run_id = f"ink-ingest-{uuid4().hex[:8]}"
+        
+        # Process nodes
+        for en in extraction.nodes:
+            normalized_name = normalize_name(en.name)
+            existing = find_concept_by_name_and_domain(session, en.name, en.domain)
+            
+            if existing:
+                updated = update_concept_description_if_better(session, existing, en.description)
+                # Update multi-source tracking
+                current_sources = updated.lecture_sources or []
+                if lecture.lecture_id not in current_sources:
+                    current_sources.append(lecture.lecture_id)
+                
+                # Update in DB
+                session.run(
+                    "MATCH (c:Concept {node_id: $node_id}) SET c.lecture_sources = $sources",
+                    node_id=updated.node_id, sources=current_sources
+                )
+                
+                nodes_updated.append(updated)
+                node_name_to_id[normalized_name] = updated.node_id
+            else:
+                new_concept = create_concept(session, ConceptCreate(
+                    name=en.name,
+                    domain=en.domain or payload.domain or "General",
+                    type=en.type or "concept",
+                    description=en.description,
+                    tags=en.tags or [],
+                    lecture_key=lecture.lecture_id,
+                    lecture_sources=[lecture.lecture_id]
+                ))
+                nodes_created.append(new_concept)
+                node_name_to_id[normalized_name] = new_concept.node_id
+                
+        # Process links
+        links_persisted = []
+        for el in extraction.links:
+            src_id = node_name_to_id.get(normalize_name(el.source_name))
+            dst_id = node_name_to_id.get(normalize_name(el.target_name))
+            if src_id and dst_id:
+                create_relationship_by_ids(session, src_id, dst_id, el.predicate, el.explanation)
+                links_persisted.append({"source_id": src_id, "target_id": dst_id, "predicate": el.predicate})
+                
+        # Process segments
+        segments_persisted = []
+        for i, seg_data in enumerate(data.get("segments", [])):
+            seg = create_lecture_segment(
+                session=session,
+                lecture_id=lecture.lecture_id,
+                segment_index=i,
+                text=seg_data.get("text", ""),
+                summary=seg_data.get("summary", ""),
+            )
+            
+            # Link concepts mentioned in segment
+            for c_name in seg_data.get("covered_concepts", []):
+                cid = node_name_to_id.get(normalize_name(c_name))
+                if cid:
+                    link_segment_to_concept(session, seg.segment_id, cid)
+            
+            segments_persisted.append(seg)
+
+        return LectureIngestResult(
+            lecture_id=lecture.lecture_id,
+            nodes_created=nodes_created,
+            nodes_updated=nodes_updated,
+            links_created=links_persisted,
+            segments=segments_persisted,
+            run_id=dummy_run_id,
+            created_concept_ids=[n.node_id for n in nodes_created],
+            updated_concept_ids=[n.node_id for n in nodes_updated],
+            created_relationship_count=len(links_persisted)
+        )
+
+    except Exception as e:
+        print(f"[Handwriting Ingestion] ERROR: {e}")
+        raise e

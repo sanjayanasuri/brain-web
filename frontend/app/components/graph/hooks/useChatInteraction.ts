@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
-import { useChatState, ChatMessage } from './useChatState';
-import { useUIState } from './useUIState';
+import { useCallback, useRef, useMemo } from 'react';
+import { useChat, ChatMessage } from './useChatState';
+import { useUI } from './useUIState';
 import { useGraph } from '../GraphContext';
 import { VisualNode, VisualGraph } from '../GraphTypes';
 import { Concept } from '../../../api-client';
@@ -20,8 +20,8 @@ export function useChatInteraction(
     clearEvidenceHighlight: () => void,
     applyEvidenceHighlightWithRetry: (evidenceItems: EvidenceItem[], retrievalMeta: any) => Promise<void>
 ) {
-    const chat = useChatState();
-    const ui = useUIState();
+    const chat = useChat();
+    const ui = useUI();
     const graph = useGraph();
     const {
         activeGraphId,
@@ -88,7 +88,8 @@ export function useChatInteraction(
         clearEvidenceHighlight();
 
         try {
-            const chatHistoryForAPI = chat.state.chatHistory.map(msg => ({
+            // Manually include the pending message to avoid stale state issues
+            const chatHistoryForAPI = [...chat.state.chatHistory, pendingMessage].map(msg => ({
                 id: msg.id,
                 question: msg.question,
                 answer: msg.answer,
@@ -125,6 +126,73 @@ export function useChatInteraction(
             const data = await response.json();
             if (data.error) throw new Error(data.error);
 
+            // Handle extracted graph data from Perplexica
+            if (data.graph_data) {
+                console.log('[Chat] Received graph data from search:', data.graph_data);
+                setGraphData(prev => {
+                    const newNodes = [...prev.nodes];
+                    const newLinks = [...prev.links];
+                    let nodesAdded = 0;
+                    let linksAdded = 0;
+
+                    if (Array.isArray(data.graph_data.nodes)) {
+                        data.graph_data.nodes.forEach((n: any) => {
+                            // Map Perplexica format (id, label) to VisualNode (node_id, name)
+                            const nodeId = n.id || n.node_id;
+                            if (nodeId && !newNodes.some(existing => existing.node_id === nodeId)) {
+                                newNodes.push({
+                                    node_id: nodeId,
+                                    name: n.label || n.name || nodeId,
+                                    type: n.type || 'concept',
+                                    domain: 'general',
+                                    ...n, // Include other props
+                                    val: 2, // Default size
+                                    color: n.color || '#4285F4',
+                                    __isNew: true,
+                                    __createdAt: Date.now()
+                                });
+                                nodesAdded++;
+                            }
+                        });
+                    }
+
+                    if (Array.isArray(data.graph_data.edges)) {
+                        data.graph_data.edges.forEach((e: any) => {
+                            const source = e.from || e.source;
+                            const target = e.to || e.target;
+                            // We don't store ID on VisualLink, so just check source/target uniqueness
+
+                            if (source && target) {
+                                const exists = newLinks.some(l => {
+                                    const s = typeof l.source === 'object' ? (l.source as any).node_id : l.source;
+                                    const t = typeof l.target === 'object' ? (l.target as any).node_id : l.target;
+                                    return s === source && t === target;
+                                });
+
+                                if (!exists) {
+                                    newLinks.push({
+                                        source, // ID string, D3 will resolve
+                                        target, // ID string, D3 will resolve
+                                        predicate: e.label || e.type || e.predicate || 'related_to',
+                                        ...e,
+                                        __isNew: true,
+                                        __createdAt: Date.now()
+                                    } as any); // Cast as any to bypass strict VisualLink type temporarily during merge
+                                    linksAdded++;
+                                }
+                            }
+                        });
+                    }
+
+                    if (nodesAdded > 0 || linksAdded > 0) {
+                        console.log(`[Chat] Merged ${nodesAdded} nodes and ${linksAdded} links from search.`);
+                        return { ...prev, nodes: newNodes, links: newLinks };
+                    }
+                    return prev;
+                });
+            }
+
+            // ... (Auto-action logic remains same)
             const isActionRequest = message.toLowerCase().match(/\b(add|create|link|connect)\b.*\b(node|graph|concept)\b/i) ||
                 message.toLowerCase().match(/\badd\s+\w+\s+to\s+(graph|the\s+graph)\b/i);
 
@@ -165,7 +233,8 @@ export function useChatInteraction(
                         await loadGraph(activeGraphId);
 
                         setTimeout(() => {
-                            const updatedGraphData = graphRef.current?.graphData();
+                            const fg = graphRef.current;
+                            const updatedGraphData = fg ? (typeof fg.graphData === 'function' ? fg.graphData() : (fg.graphData || graph.graphData)) : graph.graphData;
                             const conceptInGraph = updatedGraphData?.nodes?.find((n: any) => n.node_id === newConcept.node_id) || visualNode;
                             setSelectedNode(conceptInGraph);
                             updateSelectedPosition(conceptInGraph);
@@ -193,26 +262,21 @@ export function useChatInteraction(
 
             let normalizedEvidence = data.evidence ? normalizeEvidence(data.evidence) : (data.evidenceUsed || []);
 
-            const messageIdToFind = currentMessageIdRef.current || userMessageId;
-            const currentHistory = chat.state.chatHistory;
-            let messageIndex = currentHistory.findIndex(msg => msg.id === messageIdToFind);
+            const messageIdToUpdate = currentMessageIdRef.current || userMessageId;
 
-            if (messageIndex >= 0) {
-                const updatedHistory = currentHistory.map((msg, idx) =>
-                    idx === messageIndex ? {
-                        ...msg,
-                        answer: data.answer,
-                        answerId: data.answerId || null,
-                        answerSections: data.answer_sections || data.sections || null,
-                        suggestedQuestions: data.suggestedQuestions || [],
-                        usedNodes: data.usedNodes || [],
-                        suggestedActions: data.suggestedActions || [],
-                        retrievalMeta: data.retrievalMeta || null,
-                        evidenceUsed: normalizedEvidence,
-                    } : msg
-                );
-                chat.actions.setChatHistory(updatedHistory);
-            }
+            // Use updateChatMessage to ensure we don't rely on stale state for the full history
+            chat.actions.updateChatMessage(messageIdToUpdate, {
+                answer: data.answer,
+                answerId: data.answerId || null,
+                answerSections: data.answer_sections || data.sections || null,
+                suggestedQuestions: data.suggestedQuestions || [],
+                usedNodes: data.usedNodes || [],
+                suggestedActions: data.suggestedActions || [],
+                retrievalMeta: data.retrievalMeta || null,
+                evidenceUsed: normalizedEvidence,
+                extractedGraphData: data.graph_data, // Store for "Save" button
+                webSearchResults: data.webSearchResults
+            });
 
             chat.actions.setAnswerSections(data.answer_sections || data.sections || null);
             chat.actions.setUsedNodes(data.usedNodes || []);
@@ -237,17 +301,14 @@ export function useChatInteraction(
                     message,
                     answer: data.answer,
                     answer_summary: data.answer.slice(0, 500),
-                    message_id: messageIdToFind,
+                    message_id: messageIdToUpdate,
                 });
                 const emittedEventId = eventResult?.event_id || null;
 
                 addMessageToSession(sessionId, message, data.answer, data.answerId || null, data.suggestedQuestions || [], normalizedEvidence, emittedEventId);
 
                 if (emittedEventId) {
-                    const updatedHistory = chat.state.chatHistory.map((msg) =>
-                        msg.id === messageIdToFind ? { ...msg, eventId: emittedEventId } : msg
-                    );
-                    chat.actions.setChatHistory(updatedHistory);
+                    chat.actions.updateChatMessage(messageIdToUpdate, { eventId: emittedEventId });
                 }
             }
 
@@ -268,8 +329,8 @@ export function useChatInteraction(
         }
     }, [chat, activeGraphId, activeBranchId, loadGraph, centerNodeInVisibleArea, updateSelectedPosition, resolveConceptByName, clearEvidenceHighlight, applyEvidenceHighlightWithRetry, setGraphData, setSelectedNode]);
 
-    return {
+    return useMemo(() => ({
         handleChatSubmit,
         isSubmittingChat: isSubmittingChatRef.current
-    };
+    }), [handleChatSubmit]);
 }

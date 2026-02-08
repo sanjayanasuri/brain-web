@@ -19,12 +19,6 @@ if env_file.exists():
 if env_local.exists():
     load_dotenv(dotenv_path=env_local, override=True)
 
-# Neo4j configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")  # required - no default
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
-
 # Load in priority order: backend first, then repo root (with override=True for repo files)
 if backend_env.exists():
     load_dotenv(dotenv_path=backend_env, override=False)
@@ -33,18 +27,27 @@ if env_file.exists():
 if env_local.exists():
     load_dotenv(dotenv_path=env_local, override=True)  # Repo .env.local has highest priority
 
-# Neo4j configuration - read from environment variables
-# For Docker dev, these should match docker-compose.yml settings
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+# For cloud deployments (Railway/Aura), we prefer the single URI
+# Local fallback remains bolt://127.0.0.1:7687
+NEO4J_URI = os.getenv("NEO4J_URI") or os.getenv("NEO4J_URL") or "bolt://127.0.0.1:7687"
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")  # Required - no default for security
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # For future AI integration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Supermemory AI integration
+SUPERMEMORY_API_KEY = os.getenv("SUPERMEMORY_API_KEY")
+
+# PersonaPlex / Voice Streaming configuration
+PERSONAPLEX_URL = os.getenv("PERSONAPLEX_URL")
+VOICE_AGENT_NAME = os.getenv("VOICE_AGENT_NAME", "Learning Companion")
+
 # Notion API integration
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 BRAINWEB_API_BASE = os.getenv("BRAINWEB_API_BASE", "http://127.0.0.1:8000")
+PERPLEXICA_URL = os.getenv("PERPLEXICA_URL", "http://127.0.0.1:3000")
 
 # Notion sync configuration
 NOTION_DATABASE_IDS_STR = os.getenv("NOTION_DATABASE_IDS", "")
@@ -76,11 +79,7 @@ PDF_RATE_LIMIT_PER_MINUTE = int(os.getenv("PDF_RATE_LIMIT_PER_MINUTE", "10"))  #
 # SEC EDGAR API User-Agent (required by SEC)
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "BrainWeb/1.0 contact@example.com")
 
-# Browser Use Cloud API configuration
-BROWSER_USE_API_KEY = os.getenv("BROWSER_USE_API_KEY")
-BROWSER_USE_CONFUSION_SKILL_ID = os.getenv("BROWSER_USE_CONFUSION_SKILL_ID")
-BROWSER_USE_BASE = os.getenv("BROWSER_USE_BASE", "https://api.browser-use.com/api/v2")
-# Finance skill IDs
+# Finance skill IDs (kept for reference, or remove if unused)
 BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID")
 BROWSER_USE_FINANCE_TRACKER_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_TRACKER_SKILL_ID")
 
@@ -93,7 +92,7 @@ S3_PREFIX = os.getenv("S3_PREFIX", "resources")  # S3 key prefix for all resourc
 
 # Qdrant Vector Database configuration
 # Support Railway's service discovery via environment variables
-QDRANT_HOST = os.getenv("QDRANT_HOST") or os.getenv("QDRANT_PRIVATE_HOST") or "localhost"
+QDRANT_HOST = os.getenv("QDRANT_HOST") or os.getenv("QDRANT_PRIVATE_HOST") or os.getenv("RAILWAY_TCP_PROXY_DOMAIN") or "127.0.0.1"
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "concepts")
 USE_QDRANT = os.getenv("USE_QDRANT", "true").lower() in ("true", "1", "yes")  # Enable Qdrant by default
@@ -104,7 +103,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL:
     # Parse Railway's DATABASE_URL format
     parsed = urlparse(DATABASE_URL)
-    POSTGRES_HOST = parsed.hostname or os.getenv("POSTGRES_HOST", "localhost")
+    POSTGRES_HOST = parsed.hostname or os.getenv("POSTGRES_HOST", "127.0.0.1")
     POSTGRES_PORT = parsed.port or int(os.getenv("POSTGRES_PORT", "5432"))
     POSTGRES_DB = parsed.path.lstrip("/") or os.getenv("POSTGRES_DB", "brainweb")
     POSTGRES_USER = parsed.username or os.getenv("POSTGRES_USER", "brainweb")
@@ -112,7 +111,7 @@ if DATABASE_URL:
     POSTGRES_CONNECTION_STRING = DATABASE_URL
 else:
     # Fallback to individual env vars
-    POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+    POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
     POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
     POSTGRES_DB = os.getenv("POSTGRES_DB", "brainweb")
     POSTGRES_USER = os.getenv("POSTGRES_USER", "brainweb")
@@ -124,15 +123,22 @@ else:
 
 # Redis configuration (for caching)
 # Support Railway's REDIS_URL format: redis://:password@host:port
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_PRIVATE_URL")
 if REDIS_URL:
-    parsed = urlparse(REDIS_URL)
-    REDIS_HOST = parsed.hostname or os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT = parsed.port or int(os.getenv("REDIS_PORT", "6379"))
-    REDIS_PASSWORD = parsed.password or None
-    REDIS_DB = int(parsed.path.lstrip("/") or os.getenv("REDIS_DB", "0"))
+    try:
+        parsed = urlparse(REDIS_URL)
+        REDIS_HOST = parsed.hostname or os.getenv("REDIS_HOST", "localhost")
+        REDIS_PORT = parsed.port or int(os.getenv("REDIS_PORT", "6379"))
+        REDIS_PASSWORD = parsed.password or None
+        REDIS_DB = int(parsed.path.lstrip("/") or os.getenv("REDIS_DB", "0"))
+    except Exception:
+        # If parsing fails, fall back to simple individual vars
+        REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
+        REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+        REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+        REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 else:
-    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+    REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
     REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
     REDIS_DB = int(os.getenv("REDIS_DB", "0"))

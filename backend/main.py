@@ -1,18 +1,22 @@
-from fastapi import FastAPI, Request, HTTPException, Response
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from fastapi.staticfiles import StaticFiles
-from contextlib import asynccontextmanager
-import logging
-import traceback
+import sys
 import os
 import socket
+import logging
+import traceback
 import time
 import uuid
 import json
 from pathlib import Path
 from urllib.parse import urlparse
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
+
+
 
 from api_health import router as health_router
 from api_concepts import router as concepts_router
@@ -25,7 +29,6 @@ from api_admin import router as admin_router
 from api_notion import router as notion_router
 from api_preferences import router as preferences_router
 from api_feedback import router as feedback_router
-from api_teaching_style import router as teaching_style_router
 # Debug router - only include in development
 debug_router = None
 if os.getenv("NODE_ENV", "development") != "production":
@@ -58,6 +61,7 @@ from api_quotes import router as quotes_router
 from api_claims_from_quotes import router as claims_from_quotes_router
 from api_signals import router as signals_router
 from api_voice import router as voice_router
+from api_voice_agent import router as voice_agent_router
 from api_extend import router as extend_router
 from api_trails import router as trails_router
 from api_offline import router as offline_router
@@ -66,6 +70,12 @@ from api_dashboard import router as dashboard_router
 from api_exams import router as exams_router
 from api_calendar import router as calendar_router
 from api_scheduler import tasks_router, schedule_router
+
+# Phase 4: Analytics router
+try:
+    from routers.analytics import router as analytics_router
+except ImportError:
+    analytics_router = None
 
 
 from auth import (
@@ -132,7 +142,7 @@ async def lifespan(app: FastAPI):
     from config import ENABLE_NOTION_AUTO_SYNC
     if ENABLE_NOTION_AUTO_SYNC:
         import asyncio
-        from notion_sync import sync_once
+        from service_notion_sync import sync_once
         
         async def notion_sync_loop():
             """
@@ -203,6 +213,8 @@ app = FastAPI(
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
     "https://sanjayanasuri.com",
     "https://demo.sanjayanasuri.com",
     "https://www.demo.sanjayanasuri.com",
@@ -212,7 +224,14 @@ origins = [
     # Railway domains (will be auto-detected)
     os.getenv("RAILWAY_PUBLIC_DOMAIN", ""),
     os.getenv("RAILWAY_STATIC_URL", ""),
+    os.getenv("FRONTEND_URL", ""),
+    # Ensure Railway domains are prefixed with https:// if not already
 ]
+
+# Ensure Railway domains have schemes
+for i, domain in enumerate(origins):
+    if domain and not domain.startswith("http"):
+        origins[i] = f"https://{domain}"
 
 # Allow additional origins via env (comma-separated)
 extra_origins = [
@@ -223,48 +242,11 @@ extra_origins = [
 origins.extend(extra_origins)
 origins = [origin for origin in origins if origin]  # Remove empty strings
 
-# CORS configuration
-cors_kwargs = {
-    "allow_origins": origins,
-    "allow_credentials": True,
-    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    "allow_headers": ["*"],
-    "expose_headers": ["x-request-id", "x-session-id"],
-    "max_age": 600,  # Cache preflight requests for 10 minutes
-}
+# Filter out '*' if credentials are True (FastAPI requirement)
+if "*" in origins:
+    origins = [o for o in origins if o != "*"]
 
-# Add regex patterns for Chrome extensions, localhost, local network IPs,
-# and production frontend domains (to avoid brittle allowlists).
-from config import ENABLE_EXTENSION_DEV
-origin_regexes = [
-    # Prod frontends (allow optional ports)
-    r"https://.*\.sanjayanasuri\.com(?::\d+)?",
-    r"https://.*\.vercel\.app(?::\d+)?",
-    r"https://.*\.up\.railway\.app(?::\d+)?",
-]
-
-if ENABLE_EXTENSION_DEV:
-    origin_regexes.append(r"chrome-extension://.*")
-    origin_regexes.append(r"http://localhost:\d+")
-    origin_regexes.append(r"http://127\.0\.0\.1:\d+")
-    origin_regexes.append(r"http://192\.168\.\d+\.\d+:\d+")
-else:
-    # Always allow local network IPs for mobile development
-    origin_regexes.append(r"http://192\.168\.\d+\.\d+:\d+")
-    origin_regexes.append(r"http://10\.\d+\.\d+\.\d+:\d+")
-    origin_regexes.append(r"http://172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+")
-
-extra_origin_regex = os.getenv("CORS_ALLOW_ORIGIN_REGEX", "").strip()
-if extra_origin_regex:
-    origin_regexes.append(extra_origin_regex)
-
-if origin_regexes:
-    cors_kwargs["allow_origin_regex"] = "(" + "|".join(origin_regexes) + ")"
-
-app.add_middleware(
-    CORSMiddleware,
-    **cors_kwargs,
-)
+# CORS configuration added later to ensure it wraps all other middlewares
 
 # Add timeout middleware (after CORS, before auth)
 app.add_middleware(TimeoutMiddleware)
@@ -279,7 +261,6 @@ app.include_router(lecture_sections_router)
 app.include_router(mentions_router)
 app.include_router(preferences_router)
 app.include_router(feedback_router)
-app.include_router(teaching_style_router)
 app.include_router(answers_router)
 app.include_router(resources_router)
 app.include_router(gaps_router)
@@ -306,6 +287,7 @@ app.include_router(claims_from_quotes_router)
 # Learning State Engine: Signals and Voice
 app.include_router(signals_router)
 app.include_router(voice_router)
+app.include_router(voice_agent_router)
 # Phase 3: Extend system
 app.include_router(extend_router)
 # Phase 4: Trails system
@@ -328,10 +310,9 @@ app.include_router(workflows_router)
 # Session events and context API
 from api_sessions_events import router as sessions_events_router
 app.include_router(sessions_events_router)
+# Session websocket API
 from api_sessions_websocket import router as sessions_websocket_router
 app.include_router(sessions_websocket_router)
-# Session events and context API
-app.include_router(sessions_events_router)
 # Web search API (native Brain Web web search)
 from api_web_search import router as web_search_router
 app.include_router(web_search_router)
@@ -339,6 +320,14 @@ app.include_router(web_search_router)
 # Deep Research API
 from api_deep_research import router as deep_research_router
 app.include_router(deep_research_router)
+
+# Adaptive Learning System (Phase 1: Selection → Context → Clarify)
+from routers.study import router as study_router
+app.include_router(study_router)
+
+# Phase 4: Analytics
+if analytics_router:
+    app.include_router(analytics_router)
 
 # Include all routers
 app.include_router(admin_router)
@@ -413,22 +402,37 @@ async def auth_middleware(request: Request, call_next):
     request.state.session_id = session_id
     request.state.client_ip = client_ip
 
-    # Check authentication for non-public endpoints
-    path = request.url.path
-    user_context = None
+    # demo_settings moved up to check before 401
+    from demo_mode import load_demo_settings, enforce_demo_mode_request, FixedWindowRateLimiter
     
-    if is_public_endpoint(path):
-        # Public endpoint - no auth required
+    # Simple global limiter for the middleware
+    if not hasattr(app.state, "demo_limiter"):
+        app.state.demo_limiter = FixedWindowRateLimiter()
+    
+    demo_settings = load_demo_settings()
+    path = request.url.path
+
+    is_public = is_public_endpoint(path)
+    if is_public:
+        # Public endpoint - no auth strictly required by middleware
         user_context = {
-            "user_id": None,
-            "tenant_id": None,
+            "user_id": "public",
+            "tenant_id": "public",
             "is_authenticated": False,
         }
     else:
         # Extract user context from auth token
         user_context = get_user_context_from_request(request)
         
-        # If not authenticated, require auth
+        # In Demo Mode, elevate unauthenticated users BEFORE the strict 401 check
+        if demo_settings.demo_mode and not user_context["is_authenticated"]:
+            user_context = {
+                "user_id": "guest",
+                "tenant_id": demo_settings.tenant_id,
+                "is_authenticated": True, # Elevate to allowed for demo purposes
+            }
+        
+        # If still not authenticated and not a public endpoint, require auth
         if not user_context["is_authenticated"]:
             return JSONResponse(
                 status_code=401,
@@ -440,24 +444,9 @@ async def auth_middleware(request: Request, call_next):
     request.state.tenant_id = user_context.get("tenant_id") or request.headers.get("x-tenant-id")
     request.state.is_authenticated = user_context.get("is_authenticated", False)
 
-    # Demo Mode enforcement
-    from demo_mode import load_demo_settings, enforce_demo_mode_request, FixedWindowRateLimiter
-    
-    # Simple global limiter for the middleware
-    if not hasattr(app.state, "demo_limiter"):
-        app.state.demo_limiter = FixedWindowRateLimiter()
-    
-    demo_settings = load_demo_settings()
     if demo_settings.demo_mode:
         try:
             enforce_demo_mode_request(request, demo_settings, app.state.demo_limiter)
-            
-            # ALLOW unauthenticated users in demo mode by forcing them into the 'demo' tenant
-            # This makes the entire app 'public' but sandboxed to the demo data
-            if not request.state.is_authenticated:
-                request.state.user_id = "guest"
-                request.state.tenant_id = demo_settings.tenant_id
-                request.state.is_authenticated = True # Elevate to allowed for demo purposes
         except HTTPException as e:
             return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
 
@@ -504,77 +493,135 @@ app.mount("/static/resources", StaticFiles(directory=str(upload_path)), name="st
 async def http_exception_handler(request: Request, exc: HTTPException):
     """
     Handle HTTP exceptions (4xx, 5xx).
-    Logs the error with appropriate level and returns JSON response.
+    Logs the error with appropriate level and returns JSON response with CORS headers.
     """
-    # Log 4xx errors at WARNING level, 5xx at ERROR level
     if exc.status_code >= 500:
-        logger.error(
-            f"HTTP {exc.status_code} error on {request.method} {request.url.path}",
-            extra={
-                "status_code": exc.status_code,
-                "method": request.method,
-                "path": request.url.path,
-                "detail": exc.detail,
-            },
-            exc_info=True,
-        )
+        logger.error(f"HTTP {exc.status_code} error on {request.method} {request.url.path}: {exc.detail}")
     else:
-        logger.warning(
-            f"HTTP {exc.status_code} error on {request.method} {request.url.path}: {exc.detail}",
-            extra={
-                "status_code": exc.status_code,
-                "method": request.method,
-                "path": request.url.path,
-                "detail": exc.detail,
-            },
-        )
+        logger.warning(f"HTTP {exc.status_code} error on {request.method} {request.url.path}: {exc.detail}")
     
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    
+    # Ensure CORS visibility
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """
     Handle request validation errors (422).
-    These are client errors, so log at WARNING level.
     """
-    logger.warning(
-        f"Validation error on {request.method} {request.url.path}",
-        extra={
-            "method": request.method,
-            "path": request.url.path,
-            "errors": exc.errors(),
-        },
-    )
-    return JSONResponse(
-        status_code=422,
-        content={"detail": exc.errors()},
-    )
+    logger.warning(f"Validation error on {request.method} {request.url.path}")
+    response = JSONResponse(status_code=422, content={"detail": exc.errors()})
+    
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """
     Catch-all handler for unhandled exceptions.
-    Logs full stack trace but returns sanitized error message to client.
+    Detects Neo4j connection issues and returns a graceful fallback in Demo mode.
     """
-    logger.exception(
-        f"Unhandled exception on {request.method} {request.url.path}",
-        extra={
-            "method": request.method,
-            "path": request.url.path,
-            "exception_type": type(exc).__name__,
-            "exception_message": str(exc),
-        },
-    )
+    # Detect Neo4j connection issues
+    exc_name = type(exc).__name__
+    is_neo4j_error = "neo4j" in str(type(exc)).lower() or "ServiceUnavailable" in exc_name or "ConnectionRefused" in exc_name
     
-    # Return sanitized error message (don't leak internal details)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "Internal server error"},
-    )
+    if is_neo4j_error:
+        logger.warning(f"Neo4j connection error detected: {exc}")
+        response = JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Knowledge graph database (Neo4j) is unreachable. Running in offline/demo mode.",
+                "code": "DATABASE_UNREACHABLE",
+                "nodes": [], 
+                "edges": [],
+                "meta": {"total_nodes": 0, "total_edges": 0, "offline": True}
+            }
+        )
+    else:
+        logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+        response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    
+    # Ensure CORS headers are present even when bypassing middleware
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        
+    return response
+
+
+
+# Finalize CORS as the outermost middleware
+# We add it last so that it wraps all other middlewares (including Auth and Timeout)
+# This ensures CORS headers are added even to 401 and 504 responses.
+from fastapi.middleware.cors import CORSMiddleware
+from config import ENABLE_EXTENSION_DEV
+
+# Add regex patterns for Chrome extensions, localhost, local network IPs,
+# and production frontend domains (to avoid brittle allowlists).
+origin_regexes = [
+    # Prod frontends (allow optional ports)
+    r"https?://.*\.sanjayanasuri\.com(?::\d+)?",
+    r"https?://.*\.vercel\.app(?::\d+)?",
+    r"https?://.*\.up\.railway\.app(?::\d+)?",
+    r"https?://brain-web-.*",
+]
+
+if ENABLE_EXTENSION_DEV:
+    origin_regexes.append(r"chrome-extension://.*")
+    origin_regexes.append(r"http://localhost:\d+")
+    origin_regexes.append(r"http://127\.0\.0\.1:\d+")
+    origin_regexes.append(r"http://192\.168\.\d+\.\d+:\d+")
+else:
+    # Always allow local network IPs for mobile development
+    origin_regexes.append(r"http://192\.168\.\d+\.\d+:\d+")
+    origin_regexes.append(r"http://10\.\d+\.\d+\.\d+:\d+")
+    origin_regexes.append(r"http://172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:\d+")
+
+extra_origin_regex = os.getenv("CORS_ALLOW_ORIGIN_REGEX", "").strip()
+if extra_origin_regex:
+    origin_regexes.append(extra_origin_regex)
+
+# Handle wildcard case for origin_regexes if it was in origins
+if os.getenv("CORS_ALLOW_ORIGINS") == "*":
+    # If wildcard is set, allow everything via regex BUT still allow credentials
+    # Use a broad regex that matches common schemes
+    origin_regexes.append(r"https?://.*")
+
+cors_kwargs = {
+    "allow_origins": origins,
+    "allow_credentials": True,
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["*"],
+    "expose_headers": ["x-request-id", "x-session-id"],
+    "max_age": 600,
+}
+if origin_regexes:
+    # Always allow localhost ports in development
+    origin_regexes.append(r"http://localhost:\d+")
+    origin_regexes.append(r"http://127\.0\.0\.1:\d+")
+    cors_kwargs["allow_origin_regex"] = "(" + "|".join(origin_regexes) + ")"
+
+app.add_middleware(
+    CORSMiddleware,
+    **cors_kwargs,
+)
 
 
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "Brain Web backend is running"}
+
+

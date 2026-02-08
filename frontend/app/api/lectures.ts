@@ -16,7 +16,8 @@ import {
     LectureLinkResolveResponse,
     LectureLink,
     LectureLinkSourceType,
-    LectureSection
+    LectureSection,
+    NotebookPage
 } from './types';
 
 /**
@@ -189,7 +190,7 @@ export async function createLecture(payload: {
 }
 
 /**
- * Update a lecture's title and/or raw_text
+ * Update a lecture's title, raw_text, metadata_json, and/or annotations
  */
 export async function updateLecture(
     lectureId: string,
@@ -197,6 +198,7 @@ export async function updateLecture(
         title?: string | null;
         raw_text?: string | null;
         metadata_json?: string | null;
+        annotations?: string | null;
     }
 ): Promise<Lecture> {
     const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}`, {
@@ -328,6 +330,37 @@ export async function getSegmentsByConcept(conceptName: string): Promise<Lecture
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch segments by concept: ${response.statusText} - ${errorText}`);
+    }
+    return response.json();
+}
+
+/**
+ * Fetch all notebook pages for a lecture
+ */
+export async function getNotebookPages(lectureId: string): Promise<NotebookPage[]> {
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/pages`);
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to fetch notebook pages: ${response.statusText} - ${errorText}`);
+    }
+    return response.json();
+}
+
+/**
+ * Update or create a notebook page
+ */
+export async function updateNotebookPage(
+    lectureId: string,
+    payload: Partial<NotebookPage> & { page_number: number }
+): Promise<NotebookPage> {
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/pages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, lecture_id: lectureId }),
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to update notebook page: ${response.statusText} - ${errorText}`);
     }
     return response.json();
 }

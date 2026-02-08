@@ -1,6 +1,6 @@
 'use client';
 
-import { useReducer, useCallback } from 'react';
+import { useReducer, useCallback, useMemo } from 'react';
 import type { FinanceTrackingConfig, LatestSnapshotMetadata } from '../../../api-client';
 
 interface FinanceState {
@@ -113,7 +113,7 @@ function financeReducer(state: FinanceState, action: FinanceAction): FinanceStat
 
 export function useFinanceState() {
   const [state, dispatch] = useReducer(financeReducer, initialState);
-  
+
   const actions = {
     setFinanceLensEnabled: useCallback((enabled: boolean) => {
       dispatch({ type: 'SET_FINANCE_LENS_ENABLED', payload: enabled });
@@ -167,7 +167,7 @@ export function useFinanceState() {
       dispatch({ type: 'SET_SHOW_ALL_NEWS', payload: show });
     }, []),
   };
-  
+
   return { state, actions };
 }
 

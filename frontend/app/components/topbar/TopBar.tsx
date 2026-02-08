@@ -6,11 +6,11 @@ import Link from 'next/link';
 import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, createConcept, deleteConcept, createRelationshipByIds, type CreateGraphOptions, type GraphSummary, type Concept, type Resource } from '../../api-client';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { useTheme } from '../context-providers/ThemeProvider';
-import { setLastSession, getRecentConceptViews, pushRecentConceptView, getLastSession } from '../../lib/sessionState';
+import { setLastSession, getRecentConceptViews, pushRecentConceptView, getLastSession, togglePinConcept, isConceptPinned } from '../../lib/sessionState';
 import { logEvent, fetchRecentEvents } from '../../lib/eventsClient';
 import { fetchEvidenceForConcept } from '../../lib/evidenceFetch';
-import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
 import { searchAll } from '@/lib/search/search_router';
+import NewNoteModal from '../modals/NewNoteModal';
 
 interface ConceptSearchResult {
   type: 'concept';
@@ -266,10 +266,10 @@ function renderGroupedResults(
     <>
       {commands.length > 0 && (
         <>
-          <div style={{ 
-            padding: '6px 16px', 
-            fontSize: '11px', 
-            fontWeight: 600, 
+          <div style={{
+            padding: '6px 16px',
+            fontSize: '11px',
+            fontWeight: 600,
             color: 'var(--muted)',
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
@@ -293,7 +293,7 @@ function renderGroupedResults(
                 }}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
-                <span style={{ fontSize: '16px' }}>{result.icon || '⚡'}</span>
+                <span style={{ fontSize: '16px' }}></span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--ink)' }}>
                     {result.label}
@@ -303,9 +303,9 @@ function renderGroupedResults(
                   </div>
                 </div>
                 {result.command && (
-                  <div style={{ 
-                    fontSize: '11px', 
-                    color: 'var(--muted)', 
+                  <div style={{
+                    fontSize: '11px',
+                    color: 'var(--muted)',
                     fontFamily: 'monospace',
                     padding: '2px 6px',
                     backgroundColor: 'var(--background)',
@@ -322,10 +322,10 @@ function renderGroupedResults(
 
       {concepts.length > 0 && (
         <>
-          <div style={{ 
-            padding: '6px 16px', 
-            fontSize: '11px', 
-            fontWeight: 600, 
+          <div style={{
+            padding: '6px 16px',
+            fontSize: '11px',
+            fontWeight: 600,
             color: 'var(--muted)',
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
@@ -349,7 +349,7 @@ function renderGroupedResults(
                 }}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
-                <span style={{ fontSize: '16px' }}>🔷</span>
+                <span style={{ fontSize: '16px', color: 'var(--accent)' }}>■</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--ink)' }}>
                     {result.concept.name}
@@ -367,10 +367,10 @@ function renderGroupedResults(
       {evidence.length > 0 && (
         <>
           {(commands.length > 0 || concepts.length > 0) && <div style={{ height: '8px' }} />}
-          <div style={{ 
-            padding: '6px 16px', 
-            fontSize: '11px', 
-            fontWeight: 600, 
+          <div style={{
+            padding: '6px 16px',
+            fontSize: '11px',
+            fontWeight: 600,
             color: 'var(--muted)',
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
@@ -394,7 +394,7 @@ function renderGroupedResults(
                 }}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
-                <span style={{ fontSize: '16px' }}>📄</span>
+                <span style={{ fontSize: '16px' }}></span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--ink)' }}>
                     {result.resource.title || 'Untitled Resource'}
@@ -412,10 +412,10 @@ function renderGroupedResults(
       {graphs.length > 0 && (
         <>
           {(commands.length > 0 || concepts.length > 0 || evidence.length > 0) && <div style={{ height: '8px' }} />}
-          <div style={{ 
-            padding: '6px 16px', 
-            fontSize: '11px', 
-            fontWeight: 600, 
+          <div style={{
+            padding: '6px 16px',
+            fontSize: '11px',
+            fontWeight: 600,
             color: 'var(--muted)',
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
@@ -441,7 +441,7 @@ function renderGroupedResults(
                 }}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
-                <span style={{ fontSize: '16px' }}>📊</span>
+                <span style={{ fontSize: '16px' }}></span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--ink)' }}>
                     {graph.name || graph.graph_id}
@@ -459,10 +459,10 @@ function renderGroupedResults(
       {actions.length > 0 && (
         <>
           {(commands.length > 0 || concepts.length > 0 || evidence.length > 0 || graphs.length > 0) && <div style={{ height: '8px' }} />}
-          <div style={{ 
-            padding: '6px 16px', 
-            fontSize: '11px', 
-            fontWeight: 600, 
+          <div style={{
+            padding: '6px 16px',
+            fontSize: '11px',
+            fontWeight: 600,
             color: 'var(--muted)',
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
@@ -486,7 +486,7 @@ function renderGroupedResults(
                 }}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >
-                <span style={{ fontSize: '16px' }}>{result.icon || '⚡'}</span>
+                <span style={{ fontSize: '16px' }}></span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: '14px', fontWeight: 500, color: 'var(--ink)' }}>
                     {result.label}
@@ -496,9 +496,9 @@ function renderGroupedResults(
                   </div>
                 </div>
                 {result.command && (
-                  <div style={{ 
-                    fontSize: '11px', 
-                    color: 'var(--muted)', 
+                  <div style={{
+                    fontSize: '11px',
+                    color: 'var(--muted)',
                     fontFamily: 'monospace',
                     padding: '2px 6px',
                     backgroundColor: 'var(--background)',
@@ -525,7 +525,7 @@ function formatRelativeTime(isoString: string | null | undefined): string {
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
-    
+
     if (diffMins < 1) return 'just now';
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
@@ -579,7 +579,7 @@ function renderPreviewPanel(
             </div>
           )}
         </div>
-        
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 'auto' }}>
           <button
             onClick={onPrimaryAction}
@@ -677,7 +677,7 @@ function renderPreviewPanel(
             </div>
           )}
         </div>
-        
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 'auto' }}>
           <button
             onClick={onPrimaryAction}
@@ -741,7 +741,7 @@ function renderPreviewPanel(
             {selectedResult.description}
           </div>
         </div>
-        
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 'auto' }}>
           <button
             onClick={onPrimaryAction}
@@ -770,7 +770,7 @@ function renderPreviewPanel(
     const graph = selectedResult.graph;
     const metaLine = `${graph.node_count ?? 0} nodes · ${graph.edge_count ?? 0} edges`;
     const updated = formatRelativeTime(graph.updated_at);
-    
+
     return (
       <div style={{
         width: '300px',
@@ -794,7 +794,7 @@ function renderPreviewPanel(
             </div>
           )}
         </div>
-        
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 'auto' }}>
           <button
             onClick={onPrimaryAction}
@@ -858,17 +858,17 @@ export default function TopBar() {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
-  
+
   const [graphs, setGraphs] = useState<GraphSummary[]>([]);
   const [activeGraphId, setActiveGraphId] = useState<string>('');
   const [loadingGraphs, setLoadingGraphs] = useState(true);
-  
+
   // Scope state for omnibox
   const [searchScope, setSearchScope] = useState<'current' | 'all' | string>('current'); // 'current', 'all', or graph_id
   const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
   const [scopePickerOpen, setScopePickerOpen] = useState(false);
   const scopeMenuRef = useRef<HTMLDivElement>(null);
-  
+
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchFocused, setSearchFocused] = useState(false);
@@ -878,12 +878,12 @@ export default function TopBar() {
   const createGraphInputRef = useRef<HTMLInputElement>(null);
   const searchDropdownRef = useRef<HTMLDivElement>(null);
   const searchAbortControllerRef = useRef<AbortController | null>(null);
-  
+
   // Preview panel state
   const [previewConcept, setPreviewConcept] = useState<Concept | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const conceptCacheRef = useRef<Map<string, Concept>>(new Map());
-  
+
   const [graphSwitcherOpen, setGraphSwitcherOpen] = useState(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const [createGraphOpen, setCreateGraphOpen] = useState(false);
@@ -896,7 +896,8 @@ export default function TopBar() {
   const [scopePickerSearchQuery, setScopePickerSearchQuery] = useState('');
   const graphSwitcherRef = useRef<HTMLDivElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
-  
+  const [isNewNoteModalOpen, setNewNoteModalOpen] = useState(false);
+
 
   // Load graphs on mount
   useEffect(() => {
@@ -906,7 +907,7 @@ export default function TopBar() {
         const data = await listGraphs();
         setGraphs(data.graphs || []);
         setActiveGraphId(data.active_graph_id || '');
-        
+
         // Track current graph as recent
         if (data.active_graph_id) {
           addRecentGraph(data.active_graph_id);
@@ -972,7 +973,7 @@ export default function TopBar() {
         searchInputRef.current?.focus();
         setSearchFocused(true);
         // Log telemetry
-        logEvent({ type: 'GRAPH_SWITCHED', payload: { event: 'OMNIBOX_OPENED' } }).catch(() => {});
+        logEvent({ type: 'GRAPH_SWITCHED', payload: { event: 'OMNIBOX_OPENED' } }).catch(() => { });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -983,7 +984,7 @@ export default function TopBar() {
   useEffect(() => {
     if (searchFocused) {
       // Use a generic event type since OMNIBOX_OPENED is not in the EventType union
-      logEvent({ type: 'GRAPH_SWITCHED', payload: { event: 'OMNIBOX_OPENED' } }).catch(() => {});
+      logEvent({ type: 'GRAPH_SWITCHED', payload: { event: 'OMNIBOX_OPENED' } }).catch(() => { });
     }
   }, [searchFocused]);
 
@@ -993,7 +994,7 @@ export default function TopBar() {
       // Get recent concepts from localStorage (fallback to event log)
       const recentConceptViews = getRecentConceptViews().slice(0, 6);
       const recentConcepts: ConceptSearchResult[] = [];
-      
+
       // Try to get concepts from event log first
       try {
         const events = await fetchRecentEvents({ limit: 20, graph_id: activeGraphId || undefined });
@@ -1009,7 +1010,7 @@ export default function TopBar() {
               type: '',
             } as Concept,
           }));
-        
+
         if (conceptEvents.length > 0) {
           recentConcepts.push(...conceptEvents);
         } else {
@@ -1103,10 +1104,10 @@ export default function TopBar() {
       try {
         const query = searchQuery.trim();
         const isCommand = query.startsWith('/') || query.startsWith('>');
-        
+
         // Get actions (frontend-defined)
         const actions = getActionsForQuery(query, activeGraphId);
-        
+
         // If it's a command, only show actions
         if (isCommand) {
           setSearchResults(actions);
@@ -1117,9 +1118,9 @@ export default function TopBar() {
 
         // Check if query matches graph patterns
         const queryLower = query.toLowerCase();
-        const isGraphQuery = queryLower.startsWith('g ') || queryLower.startsWith('graph ') || 
-          graphs.some(g => (g.name || '').toLowerCase().includes(queryLower) || 
-                          g.graph_id.toLowerCase().includes(queryLower));
+        const isGraphQuery = queryLower.startsWith('g ') || queryLower.startsWith('graph ') ||
+          graphs.some(g => (g.name || '').toLowerCase().includes(queryLower) ||
+            g.graph_id.toLowerCase().includes(queryLower));
 
         // Get graph results if relevant
         let graphResults: GraphSearchResult[] = [];
@@ -1141,12 +1142,12 @@ export default function TopBar() {
         // Get effective graph_id for search
         const searchGraphId = getSearchGraphId();
         const lastSession = getLastSession();
-        const branchId = typeof window !== 'undefined' 
+        const branchId = typeof window !== 'undefined'
           ? sessionStorage.getItem('brainweb:activeBranchId') || 'main'
           : 'main';
 
         // Check if offline search is enabled
-        const offlineSearchEnabled = typeof window !== 'undefined' 
+        const offlineSearchEnabled = typeof window !== 'undefined'
           ? localStorage.getItem('brainweb:offlineSearchEnabled') !== 'false'
           : true;
 
@@ -1172,7 +1173,7 @@ export default function TopBar() {
         const shouldUseServerSearch = !offlineSearchEnabled || offlineResources.length < 6;
         const [conceptsData, resourcesData] = await Promise.all([
           searchConcepts(query, searchGraphId, 8).catch(() => ({ results: [], count: 0 })),
-          shouldUseServerSearch 
+          shouldUseServerSearch
             ? searchResources(query, searchGraphId, 6).catch(() => [])
             : Promise.resolve([]),
         ]);
@@ -1220,14 +1221,14 @@ export default function TopBar() {
         searchAbortControllerRef.current.abort();
       }
     };
-      }, [searchQuery, activeGraphId, searchScope]);
+  }, [searchQuery, activeGraphId, searchScope]);
 
   // Helper function to get actions based on query
   function getActionsForQuery(query: string, graphId: string): ActionSearchResult[] {
     const normalizedQuery = query.toLowerCase().trim();
     const isCommand = normalizedQuery.startsWith('/') || normalizedQuery.startsWith('>');
     const commandPart = isCommand ? normalizedQuery.slice(1).trim() : normalizedQuery;
-    
+
     // Parse command with optional arguments (e.g., "/lens finance", "/review proposed")
     const [baseCommand, ...args] = commandPart.split(/\s+/);
     const argString = args.join(' ');
@@ -1498,7 +1499,7 @@ export default function TopBar() {
         // Parse: /add node "Name" [domain] or /add "Name" [domain] or /add node Name [domain]
         let nodeName = '';
         let domain = 'general';
-        
+
         if (baseCommand === 'add' && args.length > 0) {
           // Check if first arg is "node"
           if (args[0]?.toLowerCase() === 'node' && args.length > 1) {
@@ -1510,7 +1511,7 @@ export default function TopBar() {
             domain = args[1] || 'general';
           }
         }
-        
+
         if (!nodeName) {
           // Prompt user for node name
           const name = prompt('Enter node name:');
@@ -1519,7 +1520,7 @@ export default function TopBar() {
           const domainInput = prompt('Enter domain (optional, default: general):');
           if (domainInput) domain = domainInput.trim();
         }
-        
+
         if (nodeName && graphId) {
           try {
             await selectGraph(graphId);
@@ -1545,7 +1546,7 @@ export default function TopBar() {
         // Parse: /link "Source" to "Target" or /link "Source" "Target" or /link Source Target
         let sourceName = '';
         let targetName = '';
-        
+
         if (args.length >= 2) {
           sourceName = args[0];
           // Check if second arg is "to"
@@ -1555,17 +1556,17 @@ export default function TopBar() {
             targetName = args[1];
           }
         }
-        
+
         if (!sourceName || !targetName) {
           const sourceInput = prompt('Enter source node name:');
           if (!sourceInput) return;
           sourceName = sourceInput.trim();
-          
+
           const targetInput = prompt('Enter target node name:');
           if (!targetInput) return;
           targetName = targetInput.trim();
         }
-        
+
         if (sourceName && targetName && graphId) {
           try {
             await selectGraph(graphId);
@@ -1574,15 +1575,15 @@ export default function TopBar() {
               searchConcepts(sourceName, graphId, 5),
               searchConcepts(targetName, graphId, 5),
             ]);
-            
-            const sourceConcept = sourceResults.results.find(c => 
+
+            const sourceConcept = sourceResults.results.find(c =>
               c.name.toLowerCase() === sourceName.toLowerCase()
             ) || sourceResults.results[0];
-            
-            const targetConcept = targetResults.results.find(c => 
+
+            const targetConcept = targetResults.results.find(c =>
               c.name.toLowerCase() === targetName.toLowerCase()
             ) || targetResults.results[0];
-            
+
             if (!sourceConcept) {
               alert(`Source node "${sourceName}" not found`);
               return;
@@ -1591,14 +1592,14 @@ export default function TopBar() {
               alert(`Target node "${targetName}" not found`);
               return;
             }
-            
+
             // Create relationship (default predicate: "related_to")
             await createRelationshipByIds(
               sourceConcept.node_id,
               targetConcept.node_id,
               'related_to'
             );
-            
+
             // Navigate to show the link
             params.set('select', sourceConcept.node_id);
             router.push(`/?${params.toString()}`);
@@ -1614,7 +1615,7 @@ export default function TopBar() {
       case 'remove-node': {
         // Parse: /remove node "Name" or /delete node "Name" or /remove "Name" or /delete "Name"
         let nodeName = '';
-        
+
         if (args.length > 0) {
           // Check if first arg is "node"
           if (args[0]?.toLowerCase() === 'node' && args.length > 1) {
@@ -1623,32 +1624,32 @@ export default function TopBar() {
             nodeName = args[0];
           }
         }
-        
+
         if (!nodeName) {
           const name = prompt('Enter node name to remove:');
           if (!name) return;
           nodeName = name.trim();
         }
-        
+
         if (nodeName && graphId) {
           try {
             await selectGraph(graphId);
             // Search for the concept
             const searchResults = await searchConcepts(nodeName, graphId, 5);
-            const concept = searchResults.results.find(c => 
+            const concept = searchResults.results.find(c =>
               c.name.toLowerCase() === nodeName.toLowerCase()
             ) || searchResults.results[0];
-            
+
             if (!concept) {
               alert(`Node "${nodeName}" not found`);
               return;
             }
-            
+
             // Confirm deletion
             if (!confirm(`Are you sure you want to delete "${concept.name}"? This will remove the node and all its relationships.`)) {
               return;
             }
-            
+
             await deleteConcept(concept.node_id);
             // Dispatch event for confirmation button
             window.dispatchEvent(new CustomEvent('graph-action', { detail: { type: 'deleted' } }));
@@ -1676,11 +1677,11 @@ export default function TopBar() {
         event: 'OMNIBOX_RESULT_SELECTED',
         kind: result.type,
         id: result.type === 'concept' ? result.concept.node_id :
-            result.type === 'evidence' ? result.resource.resource_id :
+          result.type === 'evidence' ? result.resource.resource_id :
             result.type === 'graph' ? result.graph.graph_id :
-            result.id,
+              result.id,
       },
-    }).catch(() => {});
+    }).catch(() => { });
 
     if (result.type === 'concept') {
       if (isSecondary) {
@@ -1695,7 +1696,7 @@ export default function TopBar() {
           type: result.concept.type,
         });
         pushRecentConceptView({ id: result.concept.node_id, name: result.concept.name });
-        
+
         const params = new URLSearchParams();
         params.set('select', result.concept.node_id);
         const graphId = getSearchGraphId() || activeGraphId;
@@ -1723,7 +1724,7 @@ export default function TopBar() {
           concept_id: result.concept_id,
           concept_name: result.concept_name,
         });
-        
+
         const params = new URLSearchParams();
         params.set('resource_id', result.resource.resource_id);
         if (result.concept_id) {
@@ -1747,8 +1748,8 @@ export default function TopBar() {
       }
     } else if (result.type === 'action') {
       // Execute action - use the full search query if it's a command, otherwise use the base command
-      const fullCommand = searchQuery.trim().startsWith('/') || searchQuery.trim().startsWith('>') 
-        ? searchQuery.trim() 
+      const fullCommand = searchQuery.trim().startsWith('/') || searchQuery.trim().startsWith('>')
+        ? searchQuery.trim()
         : result.command;
       addOmniboxRecentCommand({
         id: result.id,
@@ -1768,7 +1769,7 @@ export default function TopBar() {
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedResultIndex(prev => 
+      setSelectedResultIndex(prev =>
         prev < searchResults.length - 1 ? prev + 1 : prev
       );
     } else if (e.key === 'ArrowUp') {
@@ -1802,20 +1803,20 @@ export default function TopBar() {
       await selectGraph(graphId);
       setActiveGraphId(graphId);
       addRecentGraph(graphId);
-      
+
       // Update session state
       const graph = graphs.find(g => g.graph_id === graphId);
       setLastSession({
         graph_id: graphId,
         graph_name: graph?.name || graphId,
       });
-      
+
       // Log graph switched event
       logEvent({
         type: 'GRAPH_SWITCHED',
         graph_id: graphId,
       });
-      
+
       // Navigate to explorer with graph_id
       const params = new URLSearchParams();
       params.set('graph_id', graphId);
@@ -1825,7 +1826,7 @@ export default function TopBar() {
       } else {
         router.push(`/?${params.toString()}`);
       }
-      
+
       setGraphSwitcherOpen(false);
     } catch (err) {
       console.error('Failed to switch graph:', err);
@@ -1902,12 +1903,12 @@ export default function TopBar() {
         setScopeMenuOpen(false);
         setScopePickerOpen(false);
       }
-      if (searchDropdownRef.current && !searchDropdownRef.current.contains(event.target as Node) && 
-          searchInputRef.current && !searchInputRef.current.contains(event.target as Node)) {
+      if (searchDropdownRef.current && !searchDropdownRef.current.contains(event.target as Node) &&
+        searchInputRef.current && !searchInputRef.current.contains(event.target as Node)) {
         setSearchFocused(false);
       }
     }
-    
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
@@ -1920,31 +1921,31 @@ export default function TopBar() {
 
   const recentGraphIds = getRecentGraphs();
   const pinnedGraphIds = getPinnedGraphs();
-  
+
   // Filter graphs by search query
   const filteredGraphs = graphs.filter(g => {
     if (!graphSearchQuery.trim()) return true;
     const query = graphSearchQuery.toLowerCase();
-    return (g.name || '').toLowerCase().includes(query) || 
-           (g.graph_id || '').toLowerCase().includes(query);
+    return (g.name || '').toLowerCase().includes(query) ||
+      (g.graph_id || '').toLowerCase().includes(query);
   });
-  
+
   const pinnedGraphs = pinnedGraphIds
     .map(id => filteredGraphs.find(g => g.graph_id === id))
     .filter((g): g is GraphSummary => !!g);
-  
+
   const recentGraphs = recentGraphIds
     .filter(id => !pinnedGraphIds.includes(id))
     .map(id => filteredGraphs.find(g => g.graph_id === id))
     .filter((g): g is GraphSummary => !!g);
-  
-  const otherGraphs = filteredGraphs.filter(g => 
+
+  const otherGraphs = filteredGraphs.filter(g =>
     !pinnedGraphIds.includes(g.graph_id) && !recentGraphIds.includes(g.graph_id)
   );
-  
+
   const currentGraph = graphs.find(g => g.graph_id === activeGraphId);
   const graphDisplayName = currentGraph?.name || activeGraphId || 'Default Graph';
-  
+
   // Format metadata line for graph
   const getGraphMetaLine = (graph: GraphSummary): string => {
     const nodes = graph.node_count ?? 0;
@@ -1956,568 +1957,565 @@ export default function TopBar() {
   return (
     <>
       <div style={{
-      height: '56px',
-      borderBottom: '1px solid var(--border)',
-      backgroundColor: 'var(--surface)',
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 16px',
-      position: 'sticky',
-      top: 0,
-      zIndex: 1000,
-      boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
-    }}>
-      {/* Left: Hamburger (mobile) + Logo + Explorer link */}
-      <div style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: isMobile ? '12px' : '16px', 
-        minWidth: isMobile ? 'auto' : '200px',
-        flexShrink: 0,
+        height: '56px',
+        borderBottom: '1px solid var(--border)',
+        backgroundColor: 'var(--surface)',
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 16px',
+        position: 'sticky',
+        top: 0,
+        zIndex: 1000,
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
       }}>
-        {isMobile && (pathname === '/' || pathname === '/home') && (
-          <button
-            onClick={() => setIsMobileSidebarOpen(true)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '10px',
-              borderRadius: '4px',
-              color: 'var(--ink)',
-              fontSize: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minWidth: '44px',
-              minHeight: '44px',
-            }}
-            aria-label="Open sidebar"
-            title="Open sidebar"
-          >
-            ☰
-          </button>
-        )}
-        <Link href="/" style={{ 
-          fontSize: isMobile ? '16px' : '18px', 
-          fontWeight: 600, 
-          color: 'var(--ink)',
-          textDecoration: 'none',
-          whiteSpace: 'nowrap',
+        {/* Left: Hamburger (mobile) + Logo + Explorer link */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: isMobile ? '12px' : '16px',
+          flexShrink: 0,
         }}>
-          Brain Web
-        </Link>
-        {!isMobile && (
-          <>
-            <Link href="/home" style={{
-              fontSize: '14px',
-              color: pathname === '/home' ? 'var(--ink)' : 'var(--muted)',
-              textDecoration: 'none',
-              transition: 'color 0.2s',
-              fontWeight: pathname === '/home' ? 500 : 400,
-            }}
-            onMouseEnter={(e) => {
-              if (pathname !== '/home') e.currentTarget.style.color = 'var(--ink)';
-            }}
-            onMouseLeave={(e) => {
-              if (pathname !== '/home') e.currentTarget.style.color = 'var(--muted)';
-            }}
+          {isMobile && (pathname === '/' || pathname === '/home') && (
+            <button
+              onClick={() => setIsMobileSidebarOpen(true)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '10px',
+                borderRadius: '4px',
+                color: 'var(--ink)',
+                fontSize: '20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minWidth: '44px',
+                minHeight: '44px',
+              }}
+              aria-label="Open sidebar"
+              title="Open sidebar"
             >
-              Home
-            </Link>
-            <Link href={`/?graph_id=${activeGraphId || 'default'}`} style={{
-              fontSize: '14px',
-              color: pathname === '/' ? 'var(--ink)' : 'var(--muted)',
-              textDecoration: 'none',
-              transition: 'color 0.2s',
-              fontWeight: pathname === '/' ? 500 : 400,
-            }}
-            onMouseEnter={(e) => {
-              if (pathname !== '/') e.currentTarget.style.color = 'var(--ink)';
-            }}
-            onMouseLeave={(e) => {
-              if (pathname !== '/') e.currentTarget.style.color = 'var(--muted)';
-            }}
-            >
-              Explorer
-            </Link>
-            <Link href="/lecture-studio" style={{
-              fontSize: '14px',
-              color: pathname === '/lecture-studio' ? 'var(--ink)' : 'var(--muted)',
-              textDecoration: 'none',
-              transition: 'color 0.2s',
-              fontWeight: pathname === '/lecture-studio' ? 500 : 400,
-            }}
-            onMouseEnter={(e) => {
-              if (pathname !== '/lecture-studio') e.currentTarget.style.color = 'var(--ink)';
-            }}
-            onMouseLeave={(e) => {
-              if (pathname !== '/lecture-studio') e.currentTarget.style.color = 'var(--muted)';
-            }}
-            >
-              Studio
-            </Link>
-            <Link href="/ingest" style={{
-              fontSize: '14px',
-              color: pathname === '/ingest' ? 'var(--ink)' : 'var(--muted)',
-              textDecoration: 'none',
-              transition: 'color 0.2s',
-              fontWeight: pathname === '/ingest' ? 500 : 400,
-            }}
-            onMouseEnter={(e) => {
-              if (pathname !== '/ingest') e.currentTarget.style.color = 'var(--ink)';
-            }}
-            onMouseLeave={(e) => {
-              if (pathname !== '/ingest') e.currentTarget.style.color = 'var(--muted)';
-            }}
-            >
-              Upload
-            </Link>
-          </>
-        )}
-      </div>
+              ☰
+            </button>
+          )}
+          <div style={{ width: '12px' }} />
+          {!isMobile && (
+            <>
+              <Link href="/home" style={{
+                fontSize: '14px',
+                color: pathname === '/home' ? 'var(--ink)' : 'var(--muted)',
+                textDecoration: 'none',
+                transition: 'all 0.2s',
+                fontWeight: pathname === '/home' ? 600 : 500,
+                padding: '6px 12px',
+                borderRadius: '6px',
+                backgroundColor: pathname === '/home' ? 'var(--panel)' : 'transparent',
+              }}
+              >
+                Home
+              </Link>
+              <Link href={`/?graph_id=${activeGraphId || 'default'}`} style={{
+                fontSize: '14px',
+                color: pathname === '/' ? 'var(--ink)' : 'var(--muted)',
+                textDecoration: 'none',
+                transition: 'all 0.2s',
+                fontWeight: pathname === '/' ? 600 : 500,
+                padding: '6px 12px',
+                borderRadius: '6px',
+                backgroundColor: pathname === '/' ? 'var(--panel)' : 'transparent',
+              }}
+              >
+                Explorer
+              </Link>
+              <Link href="/lecture-studio" style={{
+                fontSize: '14px',
+                color: pathname === '/lecture-studio' ? 'var(--ink)' : 'var(--muted)',
+                textDecoration: 'none',
+                transition: 'all 0.2s',
+                fontWeight: pathname === '/lecture-studio' ? 600 : 500,
+                padding: '6px 12px',
+                borderRadius: '6px',
+                backgroundColor: pathname === '/lecture-studio' ? 'var(--panel)' : 'transparent',
+              }}
+              >
+                Studio
+              </Link>
+            </>
+          )}
+        </div>
 
-      {/* Center: Empty - search moved to ExplorerToolbar */}
-      <div style={{ flex: 1 }} />
+        {/* Center: Empty - search moved to ExplorerToolbar */}
+        <div style={{ flex: 1 }} />
 
-      {/* Right: Graph switcher + New + Profile */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '300px', justifyContent: 'flex-end' }}>
-        {/* Graph Switcher */}
-        <div ref={graphSwitcherRef} style={{ position: 'relative' }}>
-          <button
-            onClick={() => setGraphSwitcherOpen(!graphSwitcherOpen)}
-            style={{
-              height: '36px',
-              padding: '0 12px',
-              borderRadius: '6px',
-              border: '1px solid var(--border)',
-              backgroundColor: 'var(--surface)',
-              fontSize: '14px',
-              fontWeight: 500,
-              color: 'var(--ink)',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              justifyContent: 'center',
-              gap: '2px',
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--surface)'}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
-              <span>{graphDisplayName}</span>
-              <span style={{ fontSize: '12px', color: 'var(--muted)' }}>▼</span>
-            </div>
-            {currentGraph && (
-              <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 400 }}>
-                {getGraphMetaLine(currentGraph)}
-              </span>
-            )}
-          </button>
-          
-          {graphSwitcherOpen && (
-            <div style={{
-              position: 'absolute',
-              top: '100%',
-              right: 0,
-              marginTop: '4px',
-              backgroundColor: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-              minWidth: '320px',
-              maxWidth: '400px',
-              maxHeight: '500px',
-              overflowY: 'auto',
-              zIndex: 1001,
-            }}>
-              {/* Search input */}
-              <div style={{ padding: '8px', borderBottom: '1px solid var(--border)' }}>
-                <input
-                  type="text"
-                  placeholder="Search graphs..."
-                  value={graphSearchQuery}
-                  onChange={(e) => setGraphSearchQuery(e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{
-                    width: '100%',
-                    height: '32px',
-                    padding: '0 12px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--border)',
-                    backgroundColor: 'var(--background)',
-                    fontSize: '14px',
-                    fontFamily: 'inherit',
-                    outline: 'none',
-                  }}
-                />
+        {/* Right: Graph switcher + New + Profile */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '300px', justifyContent: 'flex-end' }}>
+          {/* Graph Switcher */}
+          <div ref={graphSwitcherRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setGraphSwitcherOpen(!graphSwitcherOpen)}
+              style={{
+                height: '36px',
+                padding: '0 12px',
+                borderRadius: '6px',
+                border: '1px solid var(--border)',
+                backgroundColor: 'var(--surface)',
+                fontSize: '14px',
+                fontWeight: 500,
+                color: 'var(--ink)',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                justifyContent: 'center',
+                gap: '2px',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--surface)'}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
+                <span>{graphDisplayName}</span>
+                <span style={{ fontSize: '12px', color: 'var(--muted)' }}>▼</span>
               </div>
-              
-              {/* Pinned Graphs */}
-              {pinnedGraphs.length > 0 && (
-                <>
-                  <div style={{ 
-                    padding: '8px 16px', 
-                    fontSize: '11px', 
-                    fontWeight: 600, 
-                    color: 'var(--muted)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    Pinned
-                  </div>
-                  {pinnedGraphs.map(graph => (
-                    <div
-                      key={graph.graph_id}
-                      style={{
-                        padding: '10px 16px',
-                        cursor: 'pointer',
-                        backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        transition: 'background-color 0.1s',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = 'var(--panel)';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }
-                      }}
-                    >
-                      <div 
-                        style={{ flex: 1, cursor: 'pointer' }}
-                        onClick={() => handleSelectGraph(graph.graph_id)}
-                      >
-                        <div style={{ fontSize: '14px', fontWeight: graph.graph_id === activeGraphId ? 600 : 500, color: 'var(--ink)' }}>
-                          {graph.name || graph.graph_id}
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
-                          {getGraphMetaLine(graph)}
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          togglePinGraph(graph.graph_id);
-                          // Force re-render by updating state
-                          setGraphs([...graphs]);
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          padding: '4px 8px',
-                          color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
-                          fontSize: '16px',
-                        }}
-                        title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
-                      >
-                        {isGraphPinned(graph.graph_id) ? '📌' : '📍'}
-                      </button>
-                    </div>
-                  ))}
-                </>
+              {currentGraph && (
+                <span style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 400 }}>
+                  {getGraphMetaLine(currentGraph)}
+                </span>
               )}
-              
-              {/* Recent Graphs */}
-              {recentGraphs.length > 0 && (
-                <>
-                  <div style={{ 
-                    padding: '8px 16px', 
-                    fontSize: '11px', 
-                    fontWeight: 600, 
-                    color: 'var(--muted)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                    borderTop: pinnedGraphs.length > 0 ? '1px solid var(--border)' : 'none',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    Recent
-                  </div>
-                  {recentGraphs.map(graph => (
-                    <div
-                      key={graph.graph_id}
-                      style={{
-                        padding: '10px 16px',
-                        cursor: 'pointer',
-                        backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        transition: 'background-color 0.1s',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = 'var(--panel)';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }
-                      }}
-                    >
-                      <div 
-                        style={{ flex: 1, cursor: 'pointer' }}
-                        onClick={() => handleSelectGraph(graph.graph_id)}
-                      >
-                        <div style={{ fontSize: '14px', fontWeight: graph.graph_id === activeGraphId ? 600 : 500, color: 'var(--ink)' }}>
-                          {graph.name || graph.graph_id}
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
-                          {getGraphMetaLine(graph)}
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          togglePinGraph(graph.graph_id);
-                          setGraphs([...graphs]);
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          padding: '4px 8px',
-                          color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
-                          fontSize: '16px',
-                        }}
-                        title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
-                      >
-                        {isGraphPinned(graph.graph_id) ? '📌' : '📍'}
-                      </button>
-                    </div>
-                  ))}
-                </>
-              )}
-              
-              {/* All Graphs */}
-              {otherGraphs.length > 0 && (
-                <>
-                  <div style={{ 
-                    padding: '8px 16px', 
-                    fontSize: '11px', 
-                    fontWeight: 600, 
-                    color: 'var(--muted)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px',
-                    borderTop: (pinnedGraphs.length > 0 || recentGraphs.length > 0) ? '1px solid var(--border)' : 'none',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    All Graphs
-                  </div>
-                  {otherGraphs.map(graph => (
-                    <div
-                      key={graph.graph_id}
-                      style={{
-                        padding: '10px 16px',
-                        cursor: 'pointer',
-                        backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        transition: 'background-color 0.1s',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = 'var(--panel)';
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (graph.graph_id !== activeGraphId) {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }
-                      }}
-                    >
-                      <div 
-                        style={{ flex: 1, cursor: 'pointer' }}
-                        onClick={() => handleSelectGraph(graph.graph_id)}
-                      >
-                        <div style={{ fontSize: '14px', fontWeight: graph.graph_id === activeGraphId ? 600 : 500, color: 'var(--ink)' }}>
-                          {graph.name || graph.graph_id}
-                        </div>
-                        <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
-                          {getGraphMetaLine(graph)}
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          togglePinGraph(graph.graph_id);
-                          setGraphs([...graphs]);
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          padding: '4px 8px',
-                          color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
-                          fontSize: '16px',
-                        }}
-                        title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
-                      >
-                        {isGraphPinned(graph.graph_id) ? '📌' : '📍'}
-                      </button>
-                    </div>
-                  ))}
-                </>
-              )}
-              
-              {/* Actions */}
-              <div style={{ borderTop: '1px solid var(--border)', marginTop: '4px' }}>
-                {activeGraphId && (
-                  <Link
-                    href={`/graphs/${activeGraphId}`}
-                    onClick={() => setGraphSwitcherOpen(false)}
+            </button>
+
+            {graphSwitcherOpen && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '4px',
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+                minWidth: '320px',
+                maxWidth: '400px',
+                maxHeight: '500px',
+                overflowY: 'auto',
+                zIndex: 1001,
+              }}>
+                {/* Search input */}
+                <div style={{ padding: '8px', borderBottom: '1px solid var(--border)' }}>
+                  <input
+                    type="text"
+                    placeholder="Search graphs..."
+                    value={graphSearchQuery}
+                    onChange={(e) => setGraphSearchQuery(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
                     style={{
-                      display: 'block',
+                      width: '100%',
+                      height: '32px',
+                      padding: '0 12px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--border)',
+                      backgroundColor: 'var(--background)',
+                      fontSize: '14px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+
+                {/* Pinned Graphs */}
+                {pinnedGraphs.length > 0 && (
+                  <>
+                    <div style={{
+                      padding: '8px 16px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: 'var(--muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      borderBottom: '1px solid var(--border)',
+                    }}>
+                      Pinned
+                    </div>
+                    {pinnedGraphs.map(graph => (
+                      <div
+                        key={graph.graph_id}
+                        style={{
+                          padding: '10px 16px',
+                          cursor: 'pointer',
+                          backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          transition: 'background-color 0.1s',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (graph.graph_id !== activeGraphId) {
+                            e.currentTarget.style.backgroundColor = 'var(--panel)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (graph.graph_id !== activeGraphId) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
+                      >
+                        <div
+                          style={{ flex: 1, cursor: 'pointer' }}
+                          onClick={() => handleSelectGraph(graph.graph_id)}
+                        >
+                          <div style={{ fontSize: '14px', fontWeight: graph.graph_id === activeGraphId ? 600 : 500, color: 'var(--ink)' }}>
+                            {graph.name || graph.graph_id}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
+                            {getGraphMetaLine(graph)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePinGraph(graph.graph_id);
+                            // Force re-render by updating state
+                            setGraphs([...graphs]);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
+                            fontSize: '16px',
+                          }}
+                          title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
+                        >
+                          {isGraphPinned(graph.graph_id) ? '📌' : '📍'}
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* Recent Graphs */}
+                {recentGraphs.length > 0 && (
+                  <>
+                    <div style={{
+                      padding: '8px 16px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: 'var(--muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      borderTop: pinnedGraphs.length > 0 ? '1px solid var(--border)' : 'none',
+                      borderBottom: '1px solid var(--border)',
+                    }}>
+                      Recent
+                    </div>
+                    {recentGraphs.map(graph => (
+                      <div
+                        key={graph.graph_id}
+                        style={{
+                          padding: '10px 16px',
+                          cursor: 'pointer',
+                          backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          transition: 'background-color 0.1s',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (graph.graph_id !== activeGraphId) {
+                            e.currentTarget.style.backgroundColor = 'var(--panel)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (graph.graph_id !== activeGraphId) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
+                      >
+                        <div
+                          style={{ flex: 1, cursor: 'pointer' }}
+                          onClick={() => handleSelectGraph(graph.graph_id)}
+                        >
+                          <div style={{ fontSize: '14px', fontWeight: graph.graph_id === activeGraphId ? 600 : 500, color: 'var(--ink)' }}>
+                            {graph.name || graph.graph_id}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
+                            {getGraphMetaLine(graph)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePinGraph(graph.graph_id);
+                            setGraphs([...graphs]);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
+                            fontSize: '16px',
+                          }}
+                          title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
+                        >
+                          {isGraphPinned(graph.graph_id) ? '📌' : '📍'}
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* All Graphs */}
+                {otherGraphs.length > 0 && (
+                  <>
+                    <div style={{
+                      padding: '8px 16px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: 'var(--muted)',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                      borderTop: (pinnedGraphs.length > 0 || recentGraphs.length > 0) ? '1px solid var(--border)' : 'none',
+                      borderBottom: '1px solid var(--border)',
+                    }}>
+                      All Graphs
+                    </div>
+                    {otherGraphs.map(graph => (
+                      <div
+                        key={graph.graph_id}
+                        style={{
+                          padding: '10px 16px',
+                          cursor: 'pointer',
+                          backgroundColor: graph.graph_id === activeGraphId ? 'var(--panel)' : 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          transition: 'background-color 0.1s',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (graph.graph_id !== activeGraphId) {
+                            e.currentTarget.style.backgroundColor = 'var(--panel)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (graph.graph_id !== activeGraphId) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
+                      >
+                        <div
+                          style={{ flex: 1, cursor: 'pointer' }}
+                          onClick={() => handleSelectGraph(graph.graph_id)}
+                        >
+                          <div style={{ fontSize: '14px', fontWeight: graph.graph_id === activeGraphId ? 600 : 500, color: 'var(--ink)' }}>
+                            {graph.name || graph.graph_id}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
+                            {getGraphMetaLine(graph)}
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePinGraph(graph.graph_id);
+                            setGraphs([...graphs]);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            color: isGraphPinned(graph.graph_id) ? 'var(--accent-2)' : 'var(--muted)',
+                            fontSize: '16px',
+                          }}
+                          title={isGraphPinned(graph.graph_id) ? 'Unpin' : 'Pin'}
+                        >
+                          {isGraphPinned(graph.graph_id) ? '📌' : '📍'}
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* Actions */}
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: '4px' }}>
+                  {activeGraphId && (
+                    <Link
+                      href={`/graphs/${activeGraphId}`}
+                      onClick={() => setGraphSwitcherOpen(false)}
+                      style={{
+                        display: 'block',
+                        padding: '10px 16px',
+                        cursor: 'pointer',
+                        transition: 'background-color 0.1s',
+                        textDecoration: 'none',
+                        color: 'var(--ink)',
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      Browse graph
+                    </Link>
+                  )}
+                  <div
+                    onClick={handleCreateGraph}
+                    style={{
                       padding: '10px 16px',
                       cursor: 'pointer',
                       transition: 'background-color 0.1s',
-                      textDecoration: 'none',
-                      color: 'var(--ink)',
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
-                    Browse graph
-                  </Link>
-                )}
+                    + Create Graph
+                  </div>
+                  <div
+                    onClick={() => {
+                      router.push('/control-panel');
+                      setGraphSwitcherOpen(false);
+                    }}
+                    style={{
+                      padding: '10px 16px',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.1s',
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    Manage Graphs
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* New Menu */}
+          <div ref={newMenuRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setNewMenuOpen(!newMenuOpen)}
+              style={{
+                height: '36px',
+                padding: '0 16px',
+                borderRadius: '10px',
+                border: 'none',
+                backgroundColor: 'var(--accent)',
+                color: 'white',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-1px)';
+                e.currentTarget.style.boxShadow = '0 6px 16px rgba(37, 99, 235, 0.3)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 4px 12px rgba(37, 99, 235, 0.2)';
+              }}
+            >
+              <span>+</span> New
+            </button>
+
+            {newMenuOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 8px)',
+                right: 0,
+                backgroundColor: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
+                boxShadow: '0 12px 32px rgba(0, 0, 0, 0.1)',
+                minWidth: '200px',
+                zIndex: 1001,
+                padding: '6px',
+                animation: 'fadeInScale 0.15s ease-out',
+                backdropFilter: 'blur(10px)',
+              }}>
                 <div
-                  onClick={handleCreateGraph}
-                  style={{
-                    padding: '10px 16px',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.1s',
+                  onClick={() => {
+                    router.push('/source-management');
+                    setNewMenuOpen(false);
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
+                  }}
+                  className="menu-item-hover"
                 >
-                  + Create Graph
+                  <span style={{ fontSize: '16px' }}>📄</span> Add Source
                 </div>
                 <div
                   onClick={() => {
-                    router.push('/control-panel');
-                    setGraphSwitcherOpen(false);
+                    setNewNoteModalOpen(true);
+                    setNewMenuOpen(false);
                   }}
                   style={{
-                    padding: '10px 16px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
                     cursor: 'pointer',
-                    transition: 'background-color 0.1s',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  className="menu-item-hover"
                 >
-                  Manage Graphs
+                  <span style={{ fontSize: '16px' }}>✍️</span> New Note
                 </div>
-              </div>
-            </div>
-          )}
-        </div>
+                <div
+                  onClick={() => {
+                    router.push('/');
+                    setNewMenuOpen(false);
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>📸</span> Create Snapshot
+                </div>
 
-        {/* New Menu */}
-        <div ref={newMenuRef} style={{ position: 'relative' }}>
-          <button
-            onClick={() => setNewMenuOpen(!newMenuOpen)}
-            style={{
-              height: '36px',
-              padding: '0 16px',
-              borderRadius: '6px',
-              border: 'none',
-              backgroundColor: 'var(--accent)',
-              color: 'white',
-              fontSize: '14px',
-              fontWeight: 500,
-              cursor: 'pointer',
-              transition: 'background-color 0.2s',
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'var(--accent)'}
-          >
-            New
-          </button>
-          
-          {newMenuOpen && (
-            <div style={{
-              position: 'absolute',
-              top: '100%',
-              right: 0,
-              marginTop: '4px',
-              backgroundColor: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
-              minWidth: '180px',
-              zIndex: 1001,
-            }}>
-              <div
-                onClick={() => {
-                  router.push('/source-management');
-                  setNewMenuOpen(false);
-                }}
-                style={{
-                  padding: '10px 16px',
-                  cursor: 'pointer',
-                  transition: 'background-color 0.1s',
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-              >
-                Add Source
-              </div>
-              <div
-                onClick={() => {
-                  console.warn('New Note not yet implemented');
-                  setNewMenuOpen(false);
-                }}
-                style={{
-                  padding: '10px 16px',
-                  cursor: 'pointer',
-                  transition: 'background-color 0.1s',
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-              >
-                New Note
-              </div>
-              <div
-                onClick={() => {
-                  // Navigate to explorer and trigger snapshot creation if available
-                  router.push('/');
-                  setNewMenuOpen(false);
-                  // Note: Snapshot creation would be handled in explorer UI
-                  console.warn('New Snapshot - navigate to explorer and use snapshot feature');
-                }}
-                style={{
-                  padding: '10px 16px',
-                  cursor: 'pointer',
-                  transition: 'background-color 0.1s',
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-              >
-                New Snapshot
-              </div>
-              <div style={{ borderTop: '1px solid var(--border)', marginTop: '4px' }}>
+                <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+
                 <div
                   onClick={handleCreateGraph}
                   style={{
-                    padding: '10px 16px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
                     cursor: 'pointer',
-                    transition: 'background-color 0.1s',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  className="menu-item-hover"
                 >
-                  New Graph
+                  <span style={{ fontSize: '16px' }}>🕸️</span> New Knowledge Graph
                 </div>
                 <div
                   onClick={() => {
@@ -2525,87 +2523,101 @@ export default function TopBar() {
                     setNewMenuOpen(false);
                   }}
                   style={{
-                    padding: '10px 16px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
                     cursor: 'pointer',
-                    transition: 'background-color 0.1s',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
-                  onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                  className="menu-item-hover"
                 >
-                  Offline Settings
+                  <span style={{ fontSize: '16px' }}>⚙️</span> Workspace Settings
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+            <style jsx>{`
+              .menu-item-hover:hover {
+                background-color: var(--panel);
+                color: var(--accent);
+              }
+              @keyframes fadeInScale {
+                from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+                to { opacity: 1; transform: scale(1) translateY(0); }
+              }
+            `}</style>
+          </div>
 
-        {/* Theme Toggle */}
-        <button
-          onClick={toggleTheme}
-          style={{
-            padding: '10px',
-            border: '1px solid var(--border)',
-            borderRadius: '8px',
-            background: 'var(--panel)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--ink)',
-            transition: 'all 0.2s ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'var(--accent)';
-            e.currentTarget.style.color = 'white';
-            e.currentTarget.style.borderColor = 'var(--accent)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'var(--panel)';
-            e.currentTarget.style.color = 'var(--ink)';
-            e.currentTarget.style.borderColor = 'var(--border)';
-          }}
-          title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-          suppressHydrationWarning
-        >
-          {theme === 'light' ? (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
-            </svg>
-          ) : (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="5"></circle>
-              <line x1="12" y1="1" x2="12" y2="3"></line>
-              <line x1="12" y1="21" x2="12" y2="23"></line>
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-              <line x1="1" y1="12" x2="3" y2="12"></line>
-              <line x1="21" y1="12" x2="23" y2="12"></line>
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-            </svg>
-          )}
-        </button>
+          {/* Theme Toggle */}
+          <button
+            onClick={toggleTheme}
+            style={{
+              padding: '10px',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              background: 'var(--panel)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--ink)',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--accent)';
+              e.currentTarget.style.color = 'white';
+              e.currentTarget.style.borderColor = 'var(--accent)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--panel)';
+              e.currentTarget.style.color = 'var(--ink)';
+              e.currentTarget.style.borderColor = 'var(--border)';
+            }}
+            title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            suppressHydrationWarning
+          >
+            {theme === 'light' ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            )}
+          </button >
 
-        {/* Profile icon (simple placeholder) */}
-        <div
-          style={{
-            width: '36px',
-            height: '36px',
-            borderRadius: '50%',
-            backgroundColor: 'var(--border)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            fontSize: '16px',
-            color: 'var(--muted)',
-          }}
-          onClick={() => router.push('/profile-customization')}
-        >
-          👤
-        </div>
-      </div>
-    </div>
+          {/* Profile icon (simple placeholder) */}
+          < div
+            style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '50%',
+              backgroundColor: 'var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              fontSize: '16px',
+              color: 'var(--muted)',
+            }}
+            onClick={() => router.push('/profile-customization')}
+          >
+            👤
+          </div >
+        </div >
+      </div >
       {createGraphOpen && (
         <div
           style={{
@@ -2772,6 +2784,15 @@ export default function TopBar() {
           </div>
         </div>
       )}
+      {/* New Note Modal */}
+      <NewNoteModal
+        isOpen={isNewNoteModalOpen}
+        onClose={() => setNewNoteModalOpen(false)}
+        onCreated={(concept) => {
+          pushRecentConceptView(concept);
+        }}
+        graphId={activeGraphId || 'default'}
+      />
     </>
   );
 }

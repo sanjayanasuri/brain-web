@@ -220,6 +220,7 @@ export interface LectureSegment {
     covered_concepts: Concept[];
     analogies: Analogy[];
     lecture_title?: string | null;  // Title of the lecture this segment belongs to
+    ink_url?: string | null;        // Reference to handwriting snippet
 }
 
 export interface LectureBlock {
@@ -340,6 +341,18 @@ export interface Lecture {
     slug?: string | null;
     raw_text?: string | null;
     metadata_json?: string | null;
+    annotations?: string | null;  // JSON string of canvas strokes
+}
+
+export interface NotebookPage {
+    page_id: string;
+    lecture_id: string;
+    page_number: number;
+    content: string;
+    ink_data: any[]; // JSON array of strokes
+    paper_type: string;
+    created_at?: string;
+    updated_at?: string;
 }
 
 /**

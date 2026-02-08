@@ -39,7 +39,7 @@ export default function MobileBottomNav({ activeTab, onTabChange }: MobileBottom
           color: activeTab === 'concepts' ? '#3b82f6' : '#6b7280',
         }}
       >
-        <span style={{ fontSize: '24px' }}>🧠</span>
+        <span style={{ fontSize: '13px', fontWeight: 700 }}>Learn</span>
         <span style={{ fontSize: '12px', fontWeight: activeTab === 'concepts' ? '600' : '400' }}>
           Concepts
         </span>
@@ -60,7 +60,7 @@ export default function MobileBottomNav({ activeTab, onTabChange }: MobileBottom
           color: activeTab === 'add' ? '#3b82f6' : '#6b7280',
         }}
       >
-        <span style={{ fontSize: '24px' }}>➕</span>
+        <span style={{ fontSize: '13px', fontWeight: 700 }}>Add</span>
         <span style={{ fontSize: '12px', fontWeight: activeTab === 'add' ? '600' : '400' }}>
           Add
         </span>
@@ -81,7 +81,7 @@ export default function MobileBottomNav({ activeTab, onTabChange }: MobileBottom
           color: activeTab === 'search' ? '#3b82f6' : '#6b7280',
         }}
       >
-        <span style={{ fontSize: '24px' }}>🔍</span>
+        <span style={{ fontSize: '13px', fontWeight: 700 }}>Find</span>
         <span style={{ fontSize: '12px', fontWeight: activeTab === 'search' ? '600' : '400' }}>
           Search
         </span>

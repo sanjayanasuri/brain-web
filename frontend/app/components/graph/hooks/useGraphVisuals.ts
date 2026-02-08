@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo } from 'react';
 import { useGraph } from '../GraphContext';
-import { useUIState } from './useUIState';
-import { useChatState } from './useChatState';
+import { useUI } from './useUIState';
+import { useChat } from './useChatState';
 
 export function useGraphVisuals(
     recomputeDomainBubbles: () => void,
@@ -18,10 +18,11 @@ export function useGraphVisuals(
         selectedNode,
         selectedDomains,
         highlightedConceptIds,
-        highlightedRelationshipIds
+        highlightedRelationshipIds,
+        focusedNodeId
     } = graph;
-    const ui = useUIState();
-    const chat = useChatState();
+    const ui = useUI();
+    const chat = useChat();
 
     // Degree and neighborhood
     const { degreeById, highDegreeThreshold, selectedNeighborhoodIds } = useMemo(() => {
@@ -62,7 +63,7 @@ export function useGraphVisuals(
         if (!ui.state.focusMode || !selectedNode?.node_id) return;
         const fg = graphRef.current;
         if (!fg) return;
-        const data = fg.graphData();
+        const data = typeof fg.graphData === 'function' ? fg.graphData() : (fg.graphData || graphData);
         const node = data?.nodes?.find((n: any) => n.node_id === selectedNode.node_id);
         if (node && typeof node.x === 'number') {
             const z = typeof fg.zoom === 'function' ? fg.zoom() : 1;
@@ -71,6 +72,27 @@ export function useGraphVisuals(
             fg.zoom(target, 550);
         }
     }, [ui.state.focusMode, selectedNode?.node_id, centerNodeInVisibleArea, graphRef]);
+
+    // Handle explicit focusedNodeId (e.g. from Study Panel)
+    useEffect(() => {
+        if (!focusedNodeId) return;
+        const fg = graphRef.current;
+        if (!fg) return;
+
+        const data = typeof fg.graphData === 'function' ? fg.graphData() : (fg.graphData || graphData);
+        const node = data?.nodes?.find((n: any) => n.node_id === focusedNodeId);
+
+        if (node && typeof node.x === 'number') {
+            // centerNodeInVisibleArea(node.x, node.y, 1000);
+            // Use direct centerAt for now to be safe, assuming centerNodeInVisibleArea might have offset logic
+            fg.centerAt(node.x, node.y, 1000);
+
+            const z = typeof fg.zoom === 'function' ? fg.zoom() : 1;
+            if (z < 2) {
+                fg.zoom(2, 1000);
+            }
+        }
+    }, [focusedNodeId, graphRef]);
 
     // Apply highlights to graph data
     useEffect(() => {
@@ -95,5 +117,5 @@ export function useGraphVisuals(
         });
     }, [highlightedConceptIds.size, highlightedRelationshipIds.size, setGraphData]);
 
-    return { degreeById, highDegreeThreshold, selectedNeighborhoodIds };
+    return useMemo(() => ({ degreeById, highDegreeThreshold, selectedNeighborhoodIds }), [degreeById, highDegreeThreshold, selectedNeighborhoodIds]);
 }

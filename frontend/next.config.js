@@ -38,61 +38,33 @@ const nextConfig = {
       fs: false,
     };
 
-    // Optimize for faster dev compilation
+    // Custom optimization removed due to module loading issues
     if (dev && !isServer) {
-      // Reduce chunk size for faster compilation
-      // Note: Keep default and vendors enabled to avoid 404s for required chunks
-      config.optimization = {
-        ...config.optimization,
-        splitChunks: {
-          chunks: 'all',
-          cacheGroups: {
-            // Keep default and vendors enabled for Next.js compatibility
-            default: {
-              minChunks: 2,
-              priority: -20,
-              reuseExistingChunk: true,
-            },
-            vendors: {
-              test: /[\\/]node_modules[\\/]/,
-              priority: -10,
-              reuseExistingChunk: true,
-            },
-            // Separate heavy libraries into their own chunks
-            reactForceGraph: {
-              name: 'react-force-graph',
-              test: /[\\/]node_modules[\\/](react-force-graph-2d|react-force-graph-3d)[\\/]/,
-              priority: 20,
-            },
-            tiptap: {
-              name: 'tiptap',
-              test: /[\\/]node_modules[\\/]@tiptap[\\/]/,
-              priority: 20,
-            },
-            d3: {
-              name: 'd3',
-              test: /[\\/]node_modules[\\/]d3[\\/]/,
-              priority: 20,
-            },
-            markdown: {
-              name: 'markdown',
-              test: /[\\/]node_modules[\\/](markdown-it|turndown)[\\/]/,
-              priority: 20,
-            },
-          },
-        },
-      };
+      // Keep default Next.js optimization for stability
     }
 
     return config;
   },
-  // Redirects
-  async redirects() {
+  // Caching headers
+  async headers() {
     return [
       {
-        source: '/',
-        destination: '/home',
-        permanent: false,
+        source: '/(.*).(png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|otf)',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
+      },
+      {
+        source: '/manifest.json',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=0, must-revalidate',
+          },
+        ],
       },
     ];
   },

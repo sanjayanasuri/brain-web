@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from neo4j import Session
 from openai import OpenAI
 from config import OPENAI_API_KEY
-from services_teaching_style import get_teaching_style
+
 from services_graph import get_concept_by_name, get_neighbors_with_relationships, _normalize_concept_from_db
 from services_lectures import get_lecture_by_id
 from models import LectureSegment, Concept, Analogy
@@ -50,7 +50,14 @@ def draft_next_lecture(
         raise ValueError("OpenAI client not initialized. Check OPENAI_API_KEY.")
     
     # Get teaching style
-    teaching_style = get_teaching_style(session)
+    # Use default teaching style since the extractor service was removed
+    teaching_style = {
+        "tone": "Socratic, Direct, No Fluff",
+        "teaching_style": "Concise, Concept-First",
+        "sentence_structure": "Simple, Active Voice",
+        "explanation_order": ["Definition", "Analogy", "Example"],
+        "forbidden_styles": ["Academic Jargon", "Polite Fillers"]
+    }
     
     # Build context from seed concepts
     concept_contexts = []
@@ -102,11 +109,11 @@ Recent segments from this lecture:
     prompt = f"""You are drafting a follow-up lecture in the user's teaching style.
 
 TEACHING STYLE PROFILE:
-- Tone: {teaching_style.tone}
-- Teaching style: {teaching_style.teaching_style}
-- Sentence structure: {teaching_style.sentence_structure}
-- Explanation order: {' → '.join(teaching_style.explanation_order)}
-- Forbidden styles: {', '.join(teaching_style.forbidden_styles)}
+- Tone: {teaching_style['tone']}
+- Teaching style: {teaching_style['teaching_style']}
+- Sentence structure: {teaching_style['sentence_structure']}
+- Explanation order: {' → '.join(teaching_style['explanation_order'])}
+- Forbidden styles: {', '.join(teaching_style['forbidden_styles'])}
 
 TARGET LEVEL: {target_level}
 

@@ -5,8 +5,11 @@ import {
   getConcept,
   getNeighborsWithRelationships,
   getConceptMentions,
+  getSegmentsByConcept,
+  updateConcept,
   type Concept,
   type LectureMention,
+  type LectureSegment,
 } from '../../api-client';
 
 interface ConceptPanelProps {
@@ -33,8 +36,12 @@ export function ConceptPanel({ conceptId, mention, onClose, onBacklinkClick }: C
   const [concept, setConcept] = useState<Concept | null>(null);
   const [neighbors, setNeighbors] = useState<Neighbor[]>([]);
   const [backlinks, setBacklinks] = useState<LectureMention[]>([]);
+  const [segments, setSegments] = useState<LectureSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     let isActive = true;
@@ -46,13 +53,16 @@ export function ConceptPanel({ conceptId, mention, onClose, onBacklinkClick }: C
       getNeighborsWithRelationships(conceptId).catch(() => []),
       getConceptMentions(conceptId).catch(() => []),
     ])
-      .then(([conceptData, neighborsData, mentions]) => {
-        if (!isActive) {
-          return;
-        }
+      .then(async ([conceptData, neighborsData, mentions]) => {
+        if (!isActive) return;
         setConcept(conceptData);
         setNeighbors(neighborsData || []);
         setBacklinks(mentions || []);
+
+        if (conceptData?.name) {
+          const segmentData = await getSegmentsByConcept(conceptData.name).catch(() => []);
+          if (isActive) setSegments(segmentData || []);
+        }
       })
       .catch((err) => {
         if (!isActive) {
@@ -131,12 +141,69 @@ export function ConceptPanel({ conceptId, mention, onClose, onBacklinkClick }: C
             )}
 
             <div style={{ marginTop: '16px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>
-                Definition
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>
+                  Definition
+                </div>
+                {!isEditing && (
+                  <button
+                    onClick={() => { setIsEditing(true); setEditValue(concept.description || ''); }}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--accent)', fontSize: '11px', cursor: 'pointer' }}
+                  >
+                    Edit
+                  </button>
+                )}
               </div>
-              <div style={{ marginTop: '8px', fontSize: '14px', color: 'var(--ink)', lineHeight: 1.6 }}>
-                {concept.description || 'No definition yet.'}
-              </div>
+
+              {isEditing ? (
+                <div style={{ marginTop: '8px' }}>
+                  <textarea
+                    value={editValue}
+                    onChange={(e) => setEditValue(e.target.value)}
+                    style={{
+                      width: '100%', minHeight: '120px', padding: '8px',
+                      borderRadius: '8px', border: '1px solid var(--accent)',
+                      fontSize: '14px', background: 'var(--panel)', color: 'var(--ink)'
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                    <button
+                      disabled={isSaving}
+                      onClick={async () => {
+                        setIsSaving(true);
+                        try {
+                          const updated = await updateConcept(conceptId, { description: editValue });
+                          setConcept(updated);
+                          setIsEditing(false);
+                        } catch (e) {
+                          alert("Failed to save description");
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                      style={{
+                        padding: '4px 12px', borderRadius: '6px', border: 'none',
+                        background: 'var(--accent)', color: '#fff', fontSize: '12px', cursor: 'pointer'
+                      }}
+                    >
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => setIsEditing(false)}
+                      style={{
+                        padding: '4px 12px', borderRadius: '6px', border: '1px solid var(--border)',
+                        background: 'transparent', color: 'var(--muted)', fontSize: '12px', cursor: 'pointer'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: '8px', fontSize: '14px', color: 'var(--ink)', lineHeight: 1.6 }}>
+                  {concept.description || 'No definition yet.'}
+                </div>
+              )}
             </div>
 
             {mention && (
@@ -217,6 +284,41 @@ export function ConceptPanel({ conceptId, mention, onClose, onBacklinkClick }: C
                   ))}
                 </div>
               ))}
+
+              {segments.length > 0 && (
+                <div style={{ marginTop: '20px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>
+                    Lecture Segments & Handwriting
+                  </div>
+                  {segments.map((seg) => (
+                    <div
+                      key={seg.segment_id}
+                      style={{
+                        marginTop: '12px',
+                        padding: '10px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border)',
+                        background: 'rgba(0,0,0,0.02)'
+                      }}
+                    >
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                        {seg.lecture_title || 'Untitled Lecture'}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px', fontStyle: 'italic' }}>
+                        {seg.summary}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--ink)', marginTop: '8px', lineHeight: '1.4' }}>
+                        {truncate(seg.text, 150)}
+                      </div>
+                      {seg.ink_url && (
+                        <div style={{ marginTop: '10px', borderRadius: '4px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                          <img src={seg.ink_url} alt="Handwriting snippet" style={{ width: '100%', display: 'block' }} />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}

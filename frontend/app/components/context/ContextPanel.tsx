@@ -9,6 +9,8 @@ import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
 import { addConceptToHistory } from '../../lib/conceptNavigationHistory';
 import { getChatSession, getCurrentSessionId } from '../../lib/chatSessions';
 import { toRgba } from '../../utils/colorUtils';
+import PencilCanvas from '../ui/PencilCanvas';
+import ConceptChat from './ConceptChat';
 import {
   filterSuggestions,
   dismissSuggestion,
@@ -186,7 +188,7 @@ interface NotesDigest {
   last_processed_at?: string | null;
 }
 
-export type ContextPanelTab = 'overview' | 'evidence' | 'notes' | 'connections' | 'activity' | 'data';
+export type ContextPanelTab = 'overview' | 'evidence' | 'notes' | 'connections' | 'activity' | 'data' | 'scribble' | 'chat';
 
 interface ContextPanelProps {
   selectedNode: Concept | null;
@@ -264,19 +266,19 @@ export default function ContextPanel({
     addedCount?: number;
     error?: string;
   }>({ conceptId: '', status: 'idle' });
-  
+
   const [notesDigest, setNotesDigest] = useState<NotesDigest | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesUpdating, setNotesUpdating] = useState(false);
   const [notesError, setNotesError] = useState<string | null>(null);
   const [notesStatus, setNotesStatus] = useState<string | null>(null);
-  
+
   // Concept notes state (linked to selected node)
   const [conceptNotes, setConceptNotes] = useState<ConceptNote[]>([]);
   const [conceptNotesLoading, setConceptNotesLoading] = useState(false);
   const [conceptNotesError, setConceptNotesError] = useState<string | null>(null);
   const conceptNotesAbortControllerRef = useRef<AbortController | null>(null);
-  
+
   // Next steps suggestions state
   const [nextStepsSuggestions, setNextStepsSuggestions] = useState<Suggestion[]>([]);
   const [nextStepsLoading, setNextStepsLoading] = useState(false);
@@ -285,23 +287,23 @@ export default function ContextPanel({
   const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
   const [learnMenuOpen, setLearnMenuOpen] = useState(false);
   const learnMenuRef = useRef<HTMLDivElement>(null);
-  
+
   // Suggested paths state
   const [suggestedPaths, setSuggestedPaths] = useState<SuggestedPath[]>([]);
   const [pathsLoading, setPathsLoading] = useState(false);
-  
+
   // Quality indicators state
   const [_conceptQuality, setConceptQuality] = useState<ConceptQuality | null>(null);
   const [_qualityLoading, setQualityLoading] = useState(false);
   const qualityCacheRef = useRef<Map<string, ConceptQuality>>(new Map());
   const qualityLoadingRef = useRef<Set<string>>(new Set());
-  
+
   // Description generation state
   const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [generatedDescription, setGeneratedDescription] = useState<string | null>(null);
   const descriptionGenerationAttemptedRef = useRef<Set<string>>(new Set());
   const descriptionGenerationNodeIdRef = useRef<string | null>(null);
-  
+
   // Traversal state for connected nodes - include current node in the list
   const traversalList = useMemo(() => {
     if (!selectedNode) return [];
@@ -320,7 +322,7 @@ export default function ContextPanel({
       })),
     ];
   }, [selectedNode, connections]);
-  
+
   // Find current node's index in traversal list dynamically
   const currentTraversalIndex = useMemo(() => {
     if (!selectedNode || traversalList.length === 0) return 0;
@@ -369,7 +371,7 @@ export default function ContextPanel({
     // Low evidence count
     if (evidenceCount === 0) return true;
     // Check if it's flagged as a gap in suggestions
-    const hasGapSuggestion = nextStepsSuggestions.some(s => 
+    const hasGapSuggestion = nextStepsSuggestions.some(s =>
       s.type === 'GAP_DEFINE' || s.type === 'GAP_EVIDENCE'
     );
     return hasGapSuggestion;
@@ -514,17 +516,17 @@ export default function ContextPanel({
     }
     fetchNotesDigest(chatSessionId);
   }, [activeTab, chatSessionId]);
-  
+
   // Get graphId from searchParams - extract value to prevent infinite loops
   // searchParams object changes on every render in Next.js, so we extract just the value
   const graphIdValueRef = useRef<string | undefined>(undefined);
   const currentGraphIdValue = searchParams?.get('graph_id') || undefined;
-  
+
   // Track the actual value, not the object
   if (graphIdValueRef.current !== currentGraphIdValue) {
     graphIdValueRef.current = currentGraphIdValue;
   }
-  
+
   const graphId = graphIdValueRef.current;
 
   // Load quality indicators when concept changes
@@ -533,29 +535,29 @@ export default function ContextPanel({
       setConceptQuality(null);
       return;
     }
-    
+
     const conceptId = selectedNode.node_id;
     const cacheKey = `${conceptId}-${graphId || 'default'}`;
-    
+
     // Check cache first
     if (qualityCacheRef.current.has(cacheKey)) {
       setConceptQuality(qualityCacheRef.current.get(cacheKey)!);
       setQualityLoading(false);
       return;
     }
-    
+
     // Prevent duplicate requests
     if (qualityLoadingRef.current.has(cacheKey)) {
       return;
     }
-    
+
     // Abort controller to cancel request if node changes
     const abortController = new AbortController();
     let isAborted = false;
-    
+
     qualityLoadingRef.current.add(cacheKey);
     setQualityLoading(true);
-    
+
     // Small delay to prevent rapid-fire calls when switching nodes quickly
     const timeoutId = setTimeout(() => {
       getConceptQuality(conceptId, graphId)
@@ -579,7 +581,7 @@ export default function ContextPanel({
           }
         });
     }, 150); // Small delay to batch requests
-    
+
     return () => {
       isAborted = true;
       abortController.abort();
@@ -652,23 +654,23 @@ export default function ContextPanel({
       descriptionGenerationNodeIdRef.current = null;
       return;
     }
-    
+
     // Clear generated description when switching to a different node
     // This prevents showing the previous node's generated description
     setGeneratedDescription(null);
     setIsGeneratingDescription(false);
     descriptionGenerationNodeIdRef.current = null;
-    
+
     const nodeId = selectedNode.node_id;
-    
+
     // Skip if we've already attempted generation for this node
     if (descriptionGenerationAttemptedRef.current.has(nodeId)) return;
-    
+
     // Check if description is missing or too short
     if (!selectedNode.description || selectedNode.description.length < 20) {
       // Mark as attempted immediately to prevent multiple calls
       descriptionGenerationAttemptedRef.current.add(nodeId);
-      
+
       // Auto-generate after a delay, but make it cancellable
       const timer = setTimeout(() => {
         // Double-check the node is still selected before generating
@@ -681,7 +683,7 @@ export default function ContextPanel({
           });
         }
       }, 3000); // Increased delay to reduce interference
-      
+
       return () => clearTimeout(timer);
     } else {
       // If description exists, mark as attempted so we don't try again
@@ -699,7 +701,7 @@ export default function ContextPanel({
 
     const conceptId = selectedNode.node_id;
     const cacheKey = `${conceptId}-${graphId || 'default'}`;
-    
+
     // Check cache first
     if (nextStepsCacheRef.current.has(cacheKey)) {
       const cached = nextStepsCacheRef.current.get(cacheKey)!;
@@ -715,10 +717,10 @@ export default function ContextPanel({
 
     // Abort controller to cancel requests if component unmounts or node changes
     const abortController = new AbortController();
-    
+
     suggestionsLoadingRef.current.add(cacheKey);
     setNextStepsLoading(true);
-    
+
     // Use a small delay to batch requests and prevent rapid-fire calls
     const timeoutId = setTimeout(() => {
       getSuggestions(3, graphId, undefined, conceptId)
@@ -743,7 +745,7 @@ export default function ContextPanel({
           }
         });
     }, 100); // Small delay to batch requests
-    
+
     return () => {
       abortController.abort();
       clearTimeout(timeoutId);
@@ -760,7 +762,7 @@ export default function ContextPanel({
 
     const conceptId = selectedNode.node_id;
     const graphId = searchParams?.get('graph_id') || undefined;
-    
+
     if (!graphId) {
       setPathsLoading(false);
       return;
@@ -769,9 +771,9 @@ export default function ContextPanel({
     // Abort controller to cancel request if node changes
     const abortController = new AbortController();
     let isAborted = false;
-    
+
     setPathsLoading(true);
-    
+
     // Small delay to prevent rapid-fire calls when switching nodes quickly
     const timeoutId = setTimeout(() => {
       getSuggestedPaths(graphId, conceptId, 2)
@@ -795,7 +797,7 @@ export default function ContextPanel({
           }
         });
     }, 150); // Small delay to batch requests
-    
+
     return () => {
       isAborted = true;
       abortController.abort();
@@ -810,7 +812,7 @@ export default function ContextPanel({
   useEffect(() => {
     if (selectedNode && selectedNode.node_id !== prevNodeIdRef.current) {
       prevNodeIdRef.current = selectedNode.node_id;
-      
+
       if (selectedResources.length > 0) {
         setActiveTab('evidence');
       } else {
@@ -826,24 +828,24 @@ export default function ContextPanel({
 
   const handleGenerateDescription = async () => {
     if (!selectedNode) return;
-    
+
     const currentNodeId = selectedNode.node_id;
     descriptionGenerationNodeIdRef.current = currentNodeId;
     setIsGeneratingDescription(true);
     setGeneratedDescription(null);
-    
+
     try {
       // Fetch context (neighbors and claims) to help generate better description
       const [neighbors, claims] = await Promise.all([
         getNeighborsWithRelationships(selectedNode.node_id).catch(() => []),
         getClaimsForConcept(selectedNode.node_id, 3).catch(() => []),
       ]);
-      
+
       const context = {
         neighbors: neighbors.slice(0, 5),
         claims: claims.slice(0, 3),
       };
-      
+
       // Call the description generation API
       const response = await fetch('/api/brain-web/concepts/generate-description', {
         method: 'POST',
@@ -855,13 +857,13 @@ export default function ContextPanel({
           context,
         }),
       });
-      
+
       const data = await response.json();
-      
+
       if (data.error || !data.description) {
         throw new Error(data.error || 'Failed to generate description');
       }
-      
+
       // Only update state if this generation is still for the current node
       // (user might have switched nodes while generation was in progress)
       if (descriptionGenerationNodeIdRef.current === currentNodeId && selectedNode?.node_id === currentNodeId) {
@@ -869,18 +871,18 @@ export default function ContextPanel({
         await updateConcept(selectedNode.node_id, {
           description: data.description,
         });
-        
+
         setGeneratedDescription(data.description);
-        
+
         // Update the selected node description in the UI immediately
         if (selectedNode) {
           selectedNode.description = data.description;
         }
       }
-      
+
       // Don't reload the page - just update the state
       // The description will show immediately in the UI
-      
+
     } catch (error) {
       // Only show error if this generation is still for the current node
       if (descriptionGenerationNodeIdRef.current === currentNodeId) {
@@ -902,7 +904,7 @@ export default function ContextPanel({
     try {
       const graphId = searchParams?.get('graph_id') || undefined;
       const result = await fetchEvidenceForConcept(selectedNode.node_id, selectedNode.name, graphId);
-      
+
       // Always refresh resources, even on error, to show current state
       if (result.resources) {
         onFetchEvidence?.(result);
@@ -980,7 +982,7 @@ export default function ContextPanel({
   const handleSuggestionAction = async (suggestion: Suggestion) => {
     // For quality suggestions, prefer primary_action if available
     const action = suggestion.primary_action || suggestion.action;
-    
+
     if (action.kind === 'OPEN_CONCEPT') {
       if (action.href) {
         router.push(action.href);
@@ -1019,7 +1021,7 @@ export default function ContextPanel({
         try {
           const graphId = searchParams?.get('graph_id') || undefined;
           const result = await fetchEvidenceForConcept(conceptId, conceptName, graphId);
-          
+
           if (result.error) {
             setFetchEvidenceState({
               conceptId,
@@ -1098,10 +1100,10 @@ export default function ContextPanel({
   const handleLearnAction = (action: 'explain' | 'example' | 'prerequisites' | 'test') => {
     if (!selectedNode) return;
     setLearnMenuOpen(false);
-    
+
     const conceptName = selectedNode.name;
     let prompt = '';
-    
+
     switch (action) {
       case 'explain':
         prompt = `Explain ${conceptName}`;
@@ -1116,7 +1118,7 @@ export default function ContextPanel({
         prompt = `Test my understanding of ${conceptName}`;
         break;
     }
-    
+
     // Navigate to explorer with chat prompt
     const params = new URLSearchParams();
     params.set('select', selectedNode.node_id);
@@ -1132,12 +1134,14 @@ export default function ContextPanel({
   if (!selectedNode) {
     return (
       <div className="context-panel" style={{
-        width: '380px',
+        width: '100%',
+        maxWidth: '400px',
         borderLeft: '1px solid var(--border)',
         background: 'var(--background)',
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        transition: 'width 0.3s ease'
       }}>
         <div style={{
           padding: '48px 24px',
@@ -1188,8 +1192,8 @@ export default function ContextPanel({
     );
   }
 
-  const currentFetchState = fetchEvidenceState.conceptId === selectedNode.node_id 
-    ? fetchEvidenceState 
+  const currentFetchState = fetchEvidenceState.conceptId === selectedNode.node_id
+    ? fetchEvidenceState
     : { conceptId: selectedNode.node_id, status: 'idle' as const };
 
   const hasResources = evidenceCount > 0;
@@ -1214,10 +1218,10 @@ export default function ContextPanel({
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ 
-              fontSize: '20px', 
-              fontWeight: '600', 
-              color: 'var(--ink)', 
+            <h2 style={{
+              fontSize: '20px',
+              fontWeight: '600',
+              color: 'var(--ink)',
               margin: 0,
               lineHeight: '1.3',
             }}>
@@ -1246,8 +1250,8 @@ export default function ContextPanel({
                 }}
                 title={`Step ${activePathInfo.stepIndex + 1} of ${activePathInfo.path.steps.length} in path`}
               >
-                In path: {activePathInfo.path.title.length > 25 
-                  ? `${activePathInfo.path.title.substring(0, 25)}...` 
+                In path: {activePathInfo.path.title.length > 25
+                  ? `${activePathInfo.path.title.substring(0, 25)}...`
                   : activePathInfo.path.title}
               </button>
             )}
@@ -1268,7 +1272,7 @@ export default function ContextPanel({
                       if (selectedNode) {
                         addConceptToHistory(prevNode.node_id, prevNode.name, relationship, selectedNode.node_id);
                       }
-                      
+
                       // Use node_id directly for navigation (URL handler will find it)
                       const nodeId = prevNode.node_id;
                       const graphId = searchParams?.get('graph_id');
@@ -1311,7 +1315,7 @@ export default function ContextPanel({
                       if (selectedNode) {
                         addConceptToHistory(nextNode.node_id, nextNode.name, relationship, selectedNode.node_id);
                       }
-                      
+
                       // Use node_id directly for navigation (URL handler will find it)
                       const nodeId = nextNode.node_id;
                       const graphId = searchParams?.get('graph_id');
@@ -1470,8 +1474,8 @@ export default function ContextPanel({
 
         {/* Chips row */}
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
-          <span className="badge" style={{ 
-            background: toRgba(domainColor, 0.16), 
+          <span className="badge" style={{
+            background: toRgba(domainColor, 0.16),
             color: domainColor,
             fontSize: '12px',
           }}>
@@ -1503,14 +1507,14 @@ export default function ContextPanel({
           disabled={isFetching}
           style={{
             padding: '8px 16px',
-            background: hasResources 
-              ? 'transparent' 
+            background: hasResources
+              ? 'transparent'
               : (isFetching ? 'var(--muted)' : 'var(--accent)'),
-            color: hasResources 
-              ? 'var(--accent)' 
+            color: hasResources
+              ? 'var(--accent)'
               : 'white',
-            border: hasResources 
-              ? '1px solid var(--accent)' 
+            border: hasResources
+              ? '1px solid var(--accent)'
               : 'none',
             borderRadius: '6px',
             fontSize: '13px',
@@ -1554,10 +1558,10 @@ export default function ContextPanel({
         padding: '0 20px',
         overflowX: 'auto',
       }}>
-        {(['overview', 'evidence', 'notes', 'connections', 'activity'] as const).map(tab => {
+        {(['overview', 'chat', 'evidence', 'notes', 'connections', 'activity', 'scribble'] as const).map(tab => {
           const label = tab.charAt(0).toUpperCase() + tab.slice(1);
           let badge: number | null = null;
-          
+
           if (tab === 'evidence') {
             badge = evidenceCount;
           } else if (tab === 'notes') {
@@ -1634,38 +1638,38 @@ export default function ContextPanel({
 
             {/* Learning Notes section */}
             <div style={{ marginTop: '24px' }}>
-              <h5 style={{ 
-                fontSize: '13px', 
-                fontWeight: '600', 
-                marginBottom: '12px', 
+              <h5 style={{
+                fontSize: '13px',
+                fontWeight: '600',
+                marginBottom: '12px',
                 color: 'var(--ink)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.5px',
               }}>
                 Learning Notes
               </h5>
-              
+
               {conceptNotesLoading ? (
-                <div style={{ 
-                  fontSize: '13px', 
-                  color: 'var(--muted)', 
+                <div style={{
+                  fontSize: '13px',
+                  color: 'var(--muted)',
                   fontStyle: 'italic',
                   padding: '8px 0',
                 }}>
                   Loading...
                 </div>
               ) : conceptNotesError ? (
-                <div style={{ 
-                  fontSize: '13px', 
-                  color: 'var(--error)', 
+                <div style={{
+                  fontSize: '13px',
+                  color: 'var(--error)',
                   padding: '8px 0',
                 }}>
                   {conceptNotesError}
                 </div>
               ) : conceptNotes.length === 0 ? (
-                <div style={{ 
-                  fontSize: '13px', 
-                  color: 'var(--muted)', 
+                <div style={{
+                  fontSize: '13px',
+                  color: 'var(--muted)',
                   fontStyle: 'italic',
                   padding: '8px 0',
                 }}>
@@ -1703,25 +1707,25 @@ export default function ContextPanel({
                         }
                       }}
                     >
-                      <div style={{ 
-                        fontSize: '11px', 
-                        color: 'var(--muted)', 
+                      <div style={{
+                        fontSize: '11px',
+                        color: 'var(--muted)',
                         marginBottom: '4px',
                         textTransform: 'uppercase',
                         letterSpacing: '0.3px',
                       }}>
                         {note.section_title}
                       </div>
-                      <div style={{ 
-                        fontSize: '13px', 
+                      <div style={{
+                        fontSize: '13px',
                         color: 'var(--ink)',
                         lineHeight: '1.5',
                         marginBottom: '6px',
                       }}>
                         {note.summary_text}
                       </div>
-                      <div style={{ 
-                        fontSize: '11px', 
+                      <div style={{
+                        fontSize: '11px',
                         color: 'var(--muted)',
                         display: 'flex',
                         alignItems: 'center',
@@ -1742,7 +1746,7 @@ export default function ContextPanel({
 
             {/* Observations module - hidden, only show if user explicitly wants to see all */}
             {false && nextStepsSuggestions.length > 0 && (
-              <div style={{ 
+              <div style={{
                 marginBottom: '16px',
                 padding: '12px',
                 background: 'var(--surface)',
@@ -1751,165 +1755,165 @@ export default function ContextPanel({
                 maxHeight: '140px',
                 overflowY: 'auto',
               }}>
-                <h5 style={{ 
-                  fontSize: '13px', 
-                  fontWeight: '600', 
-                  marginBottom: '8px', 
+                <h5 style={{
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  marginBottom: '8px',
                   color: 'var(--ink)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px',
                 }}>
                   Related observations
                 </h5>
-              
-              {dismissedMessage && (
-                <div style={{
-                  padding: '6px 10px',
-                  background: 'var(--accent)',
-                  color: 'white',
-                  borderRadius: '6px',
-                  fontSize: '11px',
-                  marginBottom: '8px',
-                }}>
-                  {dismissedMessage}
-                </div>
-              )}
-              {nextStepsLoading ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} style={{ 
-                      height: '40px', 
-                      background: 'var(--background)', 
-                      borderRadius: '6px',
-                      animation: 'pulse 1.5s ease-in-out infinite',
-                    }} />
-                  ))}
-                </div>
-              ) : nextStepsSuggestions.length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {(() => {
-                    return nextStepsSuggestions;
-                  })().map((suggestion) => (
-                    <div 
-                      key={suggestion.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        justifyContent: 'space-between',
-                        gap: '8px',
-                        padding: '8px',
+
+                {dismissedMessage && (
+                  <div style={{
+                    padding: '6px 10px',
+                    background: 'var(--accent)',
+                    color: 'white',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    marginBottom: '8px',
+                  }}>
+                    {dismissedMessage}
+                  </div>
+                )}
+                {nextStepsLoading ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} style={{
+                        height: '40px',
                         background: 'var(--background)',
                         borderRadius: '6px',
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ 
-                          fontSize: '13px', 
-                          color: 'var(--ink)',
-                          lineHeight: '1.4',
-                        }}>
-                          {suggestion.concept_name 
-                            ? generateSuggestionObservation(suggestion.type, suggestion.concept_name, suggestion.rationale)
-                            : suggestion.title}
+                        animation: 'pulse 1.5s ease-in-out infinite',
+                      }} />
+                    ))}
+                  </div>
+                ) : nextStepsSuggestions.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {(() => {
+                      return nextStepsSuggestions;
+                    })().map((suggestion) => (
+                      <div
+                        key={suggestion.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          padding: '8px',
+                          background: 'var(--background)',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            fontSize: '13px',
+                            color: 'var(--ink)',
+                            lineHeight: '1.4',
+                          }}>
+                            {suggestion.concept_name
+                              ? generateSuggestionObservation(suggestion.type, suggestion.concept_name, suggestion.rationale)
+                              : suggestion.title}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (isItemSaved('SUGGESTION', suggestion.id)) {
+                                const saved = getSavedItems().find(item => item.suggestion_id === suggestion.id);
+                                if (saved) removeSavedItem(saved.id);
+                              } else {
+                                saveItem({
+                                  kind: 'SUGGESTION',
+                                  title: suggestion.title,
+                                  graph_id: suggestion.graph_id,
+                                  suggestion_id: suggestion.id,
+                                  concept_id: suggestion.concept_id,
+                                });
+                              }
+                              // Force re-render
+                              setNextStepsSuggestions(prev => [...prev]);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: isItemSaved('SUGGESTION', suggestion.id) ? 'var(--accent)' : 'var(--muted)',
+                              cursor: 'pointer',
+                              fontSize: '14px',
+                              padding: '4px 6px',
+                              display: 'flex',
+                              alignItems: 'center',
+                            }}
+                            title={isItemSaved('SUGGESTION', suggestion.id) ? 'Remove from saved' : 'Save for later'}
+                          >
+                            {isItemSaved('SUGGESTION', suggestion.id) ? '🔖' : '🔗'}
+                          </button>
+                          <SuggestionOverflowMenu
+                            suggestion={suggestion}
+                            onDismiss={() => handleDismissSuggestion(suggestion.id, suggestion.type)}
+                            onSnooze1Day={() => handleSnoozeSuggestion(suggestion.id, SNOOZE_DURATIONS.ONE_DAY)}
+                            onSnooze1Week={() => handleSnoozeSuggestion(suggestion.id, SNOOZE_DURATIONS.ONE_WEEK)}
+                          />
+                          <button
+                            onClick={() => handleSuggestionAction(suggestion)}
+                            disabled={
+                              suggestion.action.kind === 'FETCH_EVIDENCE' &&
+                              fetchEvidenceState.status === 'loading' &&
+                              fetchEvidenceState.conceptId === suggestion.concept_id
+                            }
+                            style={{
+                              flexShrink: 0,
+                              padding: '6px 12px',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              background: suggestion.action.kind === 'FETCH_EVIDENCE' &&
+                                fetchEvidenceState.status === 'loading' &&
+                                fetchEvidenceState.conceptId === suggestion.concept_id
+                                ? 'var(--muted)'
+                                : 'var(--accent)',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: suggestion.action.kind === 'FETCH_EVIDENCE' &&
+                                fetchEvidenceState.status === 'loading' &&
+                                fetchEvidenceState.conceptId === suggestion.concept_id
+                                ? 'not-allowed'
+                                : 'pointer',
+                              whiteSpace: 'nowrap',
+                              transition: 'all 0.2s',
+                            }}
+                          >
+                            {suggestion.action.kind === 'FETCH_EVIDENCE' &&
+                              fetchEvidenceState.status === 'loading' &&
+                              fetchEvidenceState.conceptId === suggestion.concept_id
+                              ? 'Fetching...'
+                              : suggestion.action.kind === 'OPEN_REVIEW'
+                                ? 'Review'
+                                : suggestion.action.kind === 'FETCH_EVIDENCE'
+                                  ? 'Fetch Evidence'
+                                  : 'Open'}
+                          </button>
                         </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (isItemSaved('SUGGESTION', suggestion.id)) {
-                              const saved = getSavedItems().find(item => item.suggestion_id === suggestion.id);
-                              if (saved) removeSavedItem(saved.id);
-                            } else {
-                              saveItem({
-                                kind: 'SUGGESTION',
-                                title: suggestion.title,
-                                graph_id: suggestion.graph_id,
-                                suggestion_id: suggestion.id,
-                                concept_id: suggestion.concept_id,
-                              });
-                            }
-                            // Force re-render
-                            setNextStepsSuggestions(prev => [...prev]);
-                          }}
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: isItemSaved('SUGGESTION', suggestion.id) ? 'var(--accent)' : 'var(--muted)',
-                            cursor: 'pointer',
-                            fontSize: '14px',
-                            padding: '4px 6px',
-                            display: 'flex',
-                            alignItems: 'center',
-                          }}
-                          title={isItemSaved('SUGGESTION', suggestion.id) ? 'Remove from saved' : 'Save for later'}
-                        >
-                          {isItemSaved('SUGGESTION', suggestion.id) ? '🔖' : '🔗'}
-                        </button>
-                        <SuggestionOverflowMenu
-                          suggestion={suggestion}
-                          onDismiss={() => handleDismissSuggestion(suggestion.id, suggestion.type)}
-                          onSnooze1Day={() => handleSnoozeSuggestion(suggestion.id, SNOOZE_DURATIONS.ONE_DAY)}
-                          onSnooze1Week={() => handleSnoozeSuggestion(suggestion.id, SNOOZE_DURATIONS.ONE_WEEK)}
-                        />
-                        <button
-                          onClick={() => handleSuggestionAction(suggestion)}
-                          disabled={
-                            suggestion.action.kind === 'FETCH_EVIDENCE' && 
-                            fetchEvidenceState.status === 'loading' &&
-                            fetchEvidenceState.conceptId === suggestion.concept_id
-                          }
-                          style={{
-                            flexShrink: 0,
-                            padding: '6px 12px',
-                            fontSize: '12px',
-                            fontWeight: '600',
-                            background: suggestion.action.kind === 'FETCH_EVIDENCE' && 
-                              fetchEvidenceState.status === 'loading' &&
-                              fetchEvidenceState.conceptId === suggestion.concept_id
-                              ? 'var(--muted)'
-                              : 'var(--accent)',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            cursor: suggestion.action.kind === 'FETCH_EVIDENCE' && 
-                              fetchEvidenceState.status === 'loading' &&
-                              fetchEvidenceState.conceptId === suggestion.concept_id
-                              ? 'not-allowed'
-                              : 'pointer',
-                            whiteSpace: 'nowrap',
-                            transition: 'all 0.2s',
-                          }}
-                        >
-                          {suggestion.action.kind === 'FETCH_EVIDENCE' && 
-                           fetchEvidenceState.status === 'loading' &&
-                           fetchEvidenceState.conceptId === suggestion.concept_id
-                            ? 'Fetching...'
-                            : suggestion.action.kind === 'OPEN_REVIEW'
-                            ? 'Review'
-                            : suggestion.action.kind === 'FETCH_EVIDENCE'
-                            ? 'Fetch Evidence'
-                            : 'Open'}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
 
             {/* Quality suggestions - hidden, merged into insights above */}
             {false && (() => {
               const qualityTypes: SuggestionType[] = ['COVERAGE_LOW', 'EVIDENCE_STALE'];
-              const qualitySuggestions = nextStepsSuggestions.filter(s => 
+              const qualitySuggestions = nextStepsSuggestions.filter(s =>
                 qualityTypes.includes(s.type) && s.concept_id === selectedNode?.node_id
               );
-              
+
               if (qualitySuggestions.length === 0) return null;
-              
+
               return (
-                <div style={{ 
+                <div style={{
                   marginBottom: '16px',
                   padding: '10px',
                   background: 'var(--surface)',
@@ -1917,10 +1921,10 @@ export default function ContextPanel({
                   borderRadius: '8px',
                   opacity: 0.9,
                 }}>
-                  <div style={{ 
-                    fontSize: '12px', 
-                    fontWeight: '600', 
-                    marginBottom: '8px', 
+                  <div style={{
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    marginBottom: '8px',
                     color: 'var(--muted)',
                     textTransform: 'uppercase',
                     letterSpacing: '0.5px',
@@ -1939,16 +1943,16 @@ export default function ContextPanel({
                           opacity: 0.85,
                         }}
                       >
-                        <div style={{ 
-                          display: 'flex', 
-                          alignItems: 'flex-start', 
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
                           justifyContent: 'space-between',
                           gap: '8px',
                         }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ 
-                              fontSize: '12px', 
-                              fontWeight: '500', 
+                            <div style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
                               color: 'var(--ink)',
                               marginBottom: '2px',
                               display: 'flex',
@@ -1970,8 +1974,8 @@ export default function ContextPanel({
                                 </span>
                               )}
                             </div>
-                            <div style={{ 
-                              fontSize: '11px', 
+                            <div style={{
+                              fontSize: '11px',
                               color: 'var(--muted)',
                               lineHeight: '1.3',
                             }}>
@@ -2007,17 +2011,17 @@ export default function ContextPanel({
 
             {/* Suggested paths module */}
             {suggestedPaths.length > 0 && (
-              <div style={{ 
+              <div style={{
                 marginBottom: '16px',
                 padding: '12px',
                 background: 'var(--surface)',
                 border: '1px solid var(--border)',
                 borderRadius: '8px',
               }}>
-                <h5 style={{ 
-                  fontSize: '13px', 
-                  fontWeight: '600', 
-                  marginBottom: '8px', 
+                <h5 style={{
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  marginBottom: '8px',
                   color: 'var(--ink)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px',
@@ -2146,6 +2150,12 @@ export default function ContextPanel({
           </div>
         )}
 
+        {activeTab === 'chat' && (
+          <div className="fade-in" style={{ height: '100%' }}>
+            <ConceptChat key={selectedNode.node_id} concept={selectedNode} />
+          </div>
+        )}
+
         {activeTab === 'evidence' && (
           <div className="fade-in">
             {/* Filters and Search */}
@@ -2226,7 +2236,7 @@ export default function ContextPanel({
             {/* Filtered Resources */}
             {!isResourceLoading && !resourceError && (() => {
               let filtered = selectedResources;
-              
+
               if (evidenceFilter !== 'all') {
                 filtered = filtered.filter(res => {
                   if (evidenceFilter === 'browser_use') return res.source === 'browser_use';
@@ -2235,15 +2245,15 @@ export default function ContextPanel({
                   return true;
                 });
               }
-              
+
               if (evidenceSearch.trim()) {
                 const searchLower = evidenceSearch.toLowerCase();
-                filtered = filtered.filter(res => 
+                filtered = filtered.filter(res =>
                   (res.title?.toLowerCase().includes(searchLower) || false) ||
                   (res.caption?.toLowerCase().includes(searchLower) || false)
                 );
               }
-              
+
               if (filtered.length === 0) {
                 return (
                   <div style={{ padding: '32px', textAlign: 'center' }}>
@@ -2255,7 +2265,7 @@ export default function ContextPanel({
                   </div>
                 );
               }
-              
+
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {/* "View in Reader" button for all evidence */}
@@ -2299,8 +2309,8 @@ export default function ContextPanel({
                   {filtered.map(res => {
                     const isExpanded = expandedResources.has(res.resource_id);
                     return (
-                      <div 
-                        key={res.resource_id} 
+                      <div
+                        key={res.resource_id}
                         style={{
                           border: '1px solid var(--border)',
                           borderRadius: '8px',
@@ -2319,18 +2329,18 @@ export default function ContextPanel({
                           </span>
                         </div>
                         {res.caption && (
-                          <p style={{ 
-                            fontSize: '13px', 
-                            lineHeight: '1.5', 
-                            color: 'var(--ink)', 
+                          <p style={{
+                            fontSize: '13px',
+                            lineHeight: '1.5',
+                            color: 'var(--ink)',
                             marginBottom: '8px',
                             display: '-webkit-box',
                             WebkitLineClamp: isExpanded ? 'none' : 3,
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
                           }}>
-                            {res.caption.length > 240 && !isExpanded 
-                              ? `${res.caption.substring(0, 240)}...` 
+                            {res.caption.length > 240 && !isExpanded
+                              ? `${res.caption.substring(0, 240)}...`
                               : res.caption}
                           </p>
                         )}
@@ -2637,6 +2647,30 @@ export default function ContextPanel({
                 </p>
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'scribble' && selectedNode && (
+          <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', minHeight: '400px' }}>
+            <PencilCanvas
+              title={`Handwritten Notes: ${selectedNode.name}`}
+              onProcess={(data) => {
+                alert("Deep processing ink as a knowledge source... Node updated in graph.");
+                // Simulate sync to graph
+                handleNotesUpdate();
+              }}
+              onIntent={(intent) => {
+                console.log("Pencil Intent Detected:", intent);
+                if (intent.type === 'lasso') {
+                  const query = `Summarize the hand-drawn context for ${selectedNode.name}`;
+                  const searchParams = new URLSearchParams(window.location.search);
+                  searchParams.set('chat', query);
+                  router.push(`${window.location.pathname}?${searchParams.toString()}`);
+                } else if (intent.type === 'underline') {
+                  alert("Priority assigned! Concept marked as 'Exam Critical'.");
+                }
+              }}
+            />
           </div>
         )}
 
