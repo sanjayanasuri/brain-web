@@ -53,6 +53,34 @@ def create_user(email: str, password_hash: str, full_name: str = "") -> Dict[str
     results = execute_query(query, params, commit=True)
     return results[0]
 
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a user from the database by user_id."""
+    query = "SELECT * FROM users WHERE user_id = %s"
+    results = execute_query(query, (user_id,))
+    return results[0] if results else None
+
+def update_user(user_id: str, email: Optional[str] = None, full_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Update user details in the database."""
+    set_clauses = []
+    params = []
+    
+    if email:
+        set_clauses.append("email = %s")
+        params.append(email)
+    
+    if full_name:
+        set_clauses.append("full_name = %s")
+        params.append(full_name)
+        
+    if not set_clauses:
+        return get_user_by_id(user_id)
+        
+    query = f"UPDATE users SET {', '.join(set_clauses)} WHERE user_id = %s RETURNING user_id, tenant_id, email, full_name, created_at"
+    params.append(user_id)
+    
+    results = execute_query(query, tuple(params), commit=True)
+    return results[0] if results else None
+
 def init_user_db():
     """Initialize the users table if it doesn't exist."""
     query = """

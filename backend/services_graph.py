@@ -23,6 +23,8 @@ from services_branch_explorer import (
 
 from config import PROPOSED_VISIBILITY_THRESHOLD
 
+from services_user import get_user_by_id, update_user
+
 
 def _build_tenant_filter_clause(tenant_id: Optional[str]) -> str:
     """
@@ -2072,16 +2074,27 @@ def set_focus_area_active(session: Session, focus_id: str, active: bool) -> Focu
     )
 
 
-def get_user_profile(session: Session) -> UserProfile:
+def get_user_profile(session: Session, user_id: str = "default") -> UserProfile:
     """
-    Get the user profile from Neo4j.
+    Get the user profile from Neo4j, synced with Postgres user data.
     If none exists, create a default one.
     The profile encodes background, interests, weak spots, and learning preferences.
     """
+    # Fetch from Postgres if real user
+    postgres_user = None
+    default_name = "Sanjay"
+    default_email = None
+    
+    if user_id != "default":
+        postgres_user = get_user_by_id(user_id)
+        if postgres_user:
+            default_name = postgres_user.get("full_name") or "User"
+            default_email = postgres_user.get("email")
+
     query = """
-    MERGE (u:UserProfile {id: 'default'})
-    ON CREATE SET u.name = 'Sanjay',
-                  u.email = null,
+    MERGE (u:UserProfile {id: $user_id})
+    ON CREATE SET u.name = $default_name,
+                  u.email = $default_email,
                   u.signup_date = datetime(),
                   u.background = [],
                   u.interests = [],
@@ -2094,7 +2107,14 @@ def get_user_profile(session: Session) -> UserProfile:
     empty_static = json.dumps({"occupation": "", "core_skills": [], "learning_style": "", "verified_expertise": []})
     empty_episodic = json.dumps({"current_projects": [], "active_topics": [], "recent_searches": [], "last_updated": None})
     
-    rec = session.run(query, empty_json=empty_json).single()
+    params = {
+        "user_id": user_id,
+        "default_name": default_name,
+        "default_email": default_email,
+        "empty_json": empty_json
+    }
+    
+    rec = session.run(query, **params).single()
     u = rec["u"]
     
     # Deserialize JSON fields
@@ -2114,10 +2134,14 @@ def get_user_profile(session: Session) -> UserProfile:
     elif episodic_context is None:
         episodic_context = json.loads(empty_episodic)
     
+    # Prioritize Postgres data if available
+    final_name = postgres_user.get("full_name") if postgres_user else u.get("name", "Sanjay")
+    final_email = postgres_user.get("email") if postgres_user else u.get("email")
+    
     return UserProfile(
-        id=u.get("id", "default"),
-        name=u.get("name", "Sanjay"),
-        email=u.get("email"),
+        id=user_id,
+        name=final_name or "User",
+        email=final_email,
         signup_date=u.get("signup_date").to_native() if u.get("signup_date") and hasattr(u.get("signup_date"), "to_native") else u.get("signup_date"),
         background=u.get("background", []),
         interests=u.get("interests", []),
@@ -2128,10 +2152,21 @@ def get_user_profile(session: Session) -> UserProfile:
     )
 
 
-def update_user_profile(session: Session, profile: UserProfile) -> UserProfile:
+def update_user_profile(session: Session, profile: UserProfile, user_id: str = "default") -> UserProfile:
     """
-    Update the user profile in Neo4j.
+    Update the user profile in Neo4j and Postgres.
     """
+    # Determine the target user ID
+    target_id = user_id
+    if target_id == "default" and profile.id and profile.id != "default":
+        target_id = profile.id
+    
+    # Ensure profile ID matches target
+    profile.id = target_id
+    
+    # Update Postgres if real user
+    if target_id != "default":
+        update_user(target_id, email=profile.email, full_name=profile.name)
     query = """
     MERGE (u:UserProfile {id: $id})
     SET u.name = $name,
@@ -2181,11 +2216,11 @@ def update_user_profile(session: Session, profile: UserProfile) -> UserProfile:
     )
 
 
-def patch_user_profile(session: Session, updates: Dict[str, Any]) -> UserProfile:
+def patch_user_profile(session: Session, updates: Dict[str, Any], user_id: str = "default") -> UserProfile:
     """
     Partial update of user profile. Merges lists and dicts safely.
     """
-    current = get_user_profile(session)
+    current = get_user_profile(session, user_id=user_id)
     current_dict = current.dict()
     
     # Handle list merging
@@ -2206,8 +2241,12 @@ def patch_user_profile(session: Session, updates: Dict[str, Any]) -> UserProfile
     if "name" in updates:
         current_dict["name"] = updates["name"]
         
+    # Handle email update
+    if "email" in updates:
+        current_dict["email"] = updates["email"]
+        
     updated_profile = UserProfile(**current_dict)
-    return update_user_profile(session, updated_profile)
+    return update_user_profile(session, updated_profile, user_id=user_id)
 
 
 def update_episodic_context(session: Session) -> UserProfile:

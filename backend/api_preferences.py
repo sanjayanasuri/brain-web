@@ -7,7 +7,7 @@ This module handles:
 - User profile (background, interests, weak spots, learning preferences)
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from typing import List
 
 from models import (
@@ -32,8 +32,10 @@ from services_graph import (
     store_conversation_summary,
     get_recent_conversation_summaries,
     upsert_learning_topic,
-    get_active_learning_topics
+    get_active_learning_topics,
+    patch_user_profile
 )
+from auth import get_user_context_from_request
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
 
@@ -82,29 +84,34 @@ def toggle_focus_area(focus_id: str, active: bool, session=Depends(get_neo4j_ses
 
 
 @router.get("/user-profile", response_model=UserProfile)
-def get_profile(session=Depends(get_neo4j_session)):
+def get_profile(request: Request, session=Depends(get_neo4j_session)):
     """
     Get the user profile.
     The profile encodes background, interests, weak spots, and learning preferences.
     """
-    return get_user_profile(session)
+    user_context = get_user_context_from_request(request)
+    user_id = user_context.get("user_id", "default")
+    return get_user_profile(session, user_id=user_id)
 
 
 @router.post("/user-profile", response_model=UserProfile)
-def set_profile(profile: UserProfile, session=Depends(get_neo4j_session)):
+def set_profile(profile: UserProfile, request: Request, session=Depends(get_neo4j_session)):
     """
     Update the user profile.
     """
-    return update_user_profile(session, profile)
+    user_context = get_user_context_from_request(request)
+    user_id = user_context.get("user_id", "default")
+    return update_user_profile(session, profile, user_id=user_id)
 
 
 @router.patch("/user-profile", response_model=UserProfile)
-def patch_profile(update_dict: dict, session=Depends(get_neo4j_session)):
+def patch_profile(update_dict: dict, request: Request, session=Depends(get_neo4j_session)):
     """
     Partial update of the user profile.
     """
-    from services_graph import patch_user_profile
-    return patch_user_profile(session, update_dict)
+    user_context = get_user_context_from_request(request)
+    user_id = user_context.get("user_id", "default")
+    return patch_user_profile(session, update_dict, user_id=user_id)
 
 
 @router.get("/ui", response_model=UIPreferences)
