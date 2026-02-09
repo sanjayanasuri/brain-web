@@ -7,7 +7,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 1. Copy requirements first for caching
+# 1. Install system dependencies
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    libtesseract-dev \
+    libmagic1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# 2. Copy requirements first for caching
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
