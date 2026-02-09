@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     libtesseract-dev \
     libmagic1 \
+    ffmpeg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Copy requirements first for caching

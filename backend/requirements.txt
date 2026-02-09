@@ -47,3 +47,4 @@ bcrypt==3.2.2
 python-jose[cryptography]>=3.3.0
 cryptography>=42.0.2
 email-validator>=2.0.0
+torch --index-url https://download.pytorch.org/whl/cpu
