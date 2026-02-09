@@ -15,7 +15,10 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 2. Copy requirements first for caching
+# 2. Install torch CPU separately for caching (long build time)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# 3. Copy requirements and install the rest
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
