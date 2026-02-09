@@ -57,9 +57,20 @@ def voice_capture_endpoint(
         final_concept_id = concept_id or payload.concept_id
         
         # Create signal payload
+        classification = (payload.classification or "").strip().lower() if payload.classification else None
+        if not classification:
+            # Lightweight heuristic classification (keeps capture usable even if the client doesn't classify).
+            lower = (payload.transcript or "").lower()
+            if "unclear" in lower or "confus" in lower or "don't understand" in lower or "do not understand" in lower:
+                classification = "confusion"
+            elif "think" in lower or "feel" in lower or "seems" in lower:
+                classification = "reflection"
+            else:
+                classification = "explanation"
+
         signal_payload = {
             "transcript": payload.transcript,
-            "classification": payload.classification,
+            "classification": classification,
         }
         
         # Create signal
@@ -74,8 +85,46 @@ def voice_capture_endpoint(
         
         signal = create_signal(session, signal_create)
         
-        # TODO: Update concept confidence/uncertainty based on classification
-        # This would be done in a background task or separate service
+        # Update learning state for linked concept (best-effort).
+        #
+        # We keep this lightweight and deterministic:
+        # - "confusion" nudges mastery down
+        # - "reflection" nudges mastery up slightly
+        # - "explanation" nudges mastery up more
+        if final_concept_id:
+            try:
+                classification = str(classification or "").strip().lower()
+                delta = 0
+                if classification == "confusion":
+                    delta = -5
+                elif classification == "reflection":
+                    delta = 2
+                elif classification == "explanation":
+                    delta = 5
+
+                if delta != 0:
+                    rec = session.run(
+                        """
+                        MATCH (c:Concept {graph_id: $graph_id, node_id: $concept_id})
+                        RETURN COALESCE(c.mastery_level, 0) AS mastery_level
+                        LIMIT 1
+                        """,
+                        graph_id=signal.graph_id,
+                        concept_id=final_concept_id,
+                    ).single()
+                    if rec is not None:
+                        current = int(rec.get("mastery_level") or 0)
+                        updated = max(0, min(100, current + delta))
+                        from services_graph import update_concept_mastery
+
+                        update_concept_mastery(
+                            session=session,
+                            graph_id=signal.graph_id,
+                            node_id=final_concept_id,
+                            mastery_level=updated,
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to update concept mastery from voice capture: {e}")
         
         logger.info(f"Voice capture signal created: {signal.signal_id}")
         return signal

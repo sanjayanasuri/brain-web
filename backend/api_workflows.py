@@ -11,7 +11,12 @@ from neo4j import Session
 
 from db_neo4j import get_neo4j_session
 from auth import require_auth
-from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
+from services_branch_explorer import (
+    ensure_graph_scoping_initialized,
+    get_active_graph_context,
+    set_active_branch,
+    set_active_graph,
+)
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
 
@@ -20,7 +25,7 @@ router = APIRouter(prefix="/workflows", tags=["workflows"])
 
 class CaptureRequest(BaseModel):
     """Request to capture content."""
-    content_type: str = Field(..., description="Type: 'selection', 'url', 'file', 'finance'")
+    content_type: str = Field(..., description="Type: 'selection', 'url', 'file'")
     # For selection
     selected_text: Optional[str] = None
     page_url: Optional[str] = None
@@ -30,9 +35,6 @@ class CaptureRequest(BaseModel):
     url: Optional[str] = None
     # For file
     file_data: Optional[Dict[str, Any]] = None
-    # For finance
-    ticker: Optional[str] = None
-    since_days: Optional[int] = 30
     # Common
     graph_id: Optional[str] = None
     branch_id: Optional[str] = None
@@ -60,13 +62,21 @@ def capture_workflow(
     - Text selection from web pages
     - URL ingestion
     - File uploads
-    - Finance data ingestion
     """
     ensure_graph_scoping_initialized(session)
+    current_graph_id, current_branch_id = get_active_graph_context(session)
+
+    target_graph_id = request.graph_id or current_graph_id
+    target_branch_id = request.branch_id or current_branch_id
+
+    # Keep active context aligned with the workflow target.
+    if target_graph_id != current_graph_id:
+        set_active_graph(session, target_graph_id)
+    # After graph switches, branch may reset to default.
+    if target_branch_id != get_active_graph_context(session)[1]:
+        set_active_branch(session, target_branch_id)
+
     graph_id, branch_id = get_active_graph_context(session)
-    
-    graph_id = request.graph_id or graph_id
-    branch_id = request.branch_id or branch_id
     
     result = {}
     next_actions = []
@@ -113,34 +123,219 @@ def capture_workflow(
             next_actions = ["explore_graph", "synthesize_summary"]
             
         elif request.content_type == "file":
-            # File upload would be handled via /resources/upload endpoint
-            # This is a placeholder for workflow routing
-            result = {
-                "message": "Use /resources/upload endpoint for file uploads",
-                "endpoint": "/resources/upload",
-            }
-            next_actions = ["explore_resource"]
-            
-        elif request.content_type == "finance":
-            if not request.ticker:
-                raise HTTPException(status_code=400, detail="ticker required for finance capture")
-            
-            from services_finance_ingestion import ingest_finance_sources
-            ingest_result = ingest_finance_sources(
-                session=session,
-                graph_id=graph_id,
-                branch_id=branch_id,
-                ticker=request.ticker,
-                since_days=request.since_days or 30,
-                limit=20,
-                connectors=["edgar", "ir", "news"],
-            )
-            result = {
-                "documents_fetched": ingest_result.get("documents_fetched", 0),
-                "claims_created": ingest_result.get("claims_created", 0),
-                "run_id": ingest_result.get("run_id"),
-            }
-            next_actions = ["explore_ticker", "synthesize_memo"]
+            if not isinstance(request.file_data, dict):
+                raise HTTPException(status_code=400, detail="file_data required for file capture")
+
+            file_data = request.file_data
+
+            # Option A: inline text capture (client extracted content)
+            inline_text = file_data.get("text")
+            if isinstance(inline_text, str) and inline_text.strip():
+                from services_ingestion_kernel import ingest_artifact
+                from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+
+                title = str(file_data.get("title") or "File").strip() or "File"
+                domain = file_data.get("domain")
+                source_url = file_data.get("source_url")
+                source_id = file_data.get("source_id") or file_data.get("filename")
+
+                actions = IngestionActions(
+                    run_lecture_extraction=bool(file_data.get("extract_concepts", True)),
+                    run_chunk_and_claims=bool(file_data.get("extract_claims", True)),
+                    embed_claims=bool(file_data.get("extract_claims", True)),
+                    create_lecture_node=True,
+                    create_artifact_node=True,
+                )
+
+                artifact_input = ArtifactInput(
+                    artifact_type="manual",
+                    source_url=str(source_url).strip() if isinstance(source_url, str) and source_url.strip() else None,
+                    source_id=str(source_id).strip() if source_id else None,
+                    title=title,
+                    domain=str(domain).strip() if isinstance(domain, str) and domain.strip() else None,
+                    text=inline_text,
+                    metadata={
+                        "capture_mode": "workflow_file_inline",
+                    },
+                    actions=actions,
+                    policy=IngestionPolicy(
+                        local_only=True,
+                        max_chars=500_000,
+                        min_chars=50,
+                    ),
+                )
+
+                ingest_result = ingest_artifact(session, artifact_input)
+                result = {
+                    "artifact_id": ingest_result.artifact_id,
+                    "run_id": ingest_result.run_id,
+                    "status": ingest_result.status,
+                    "reused_existing": ingest_result.reused_existing,
+                    "summary_counts": ingest_result.summary_counts,
+                    "warnings": ingest_result.warnings,
+                    "errors": ingest_result.errors,
+                }
+                next_actions = ["explore_graph", "synthesize_summary"]
+            else:
+                # Option B: resource-backed capture (server reads uploaded file via stored storage_path)
+                resource_id = str(file_data.get("resource_id") or "").strip()
+                if not resource_id:
+                    raise HTTPException(status_code=400, detail="file_data.resource_id or file_data.text is required")
+
+                # Fetch resource with internal storage_path.
+                q = """
+                MATCH (g:GraphSpace {graph_id: $graph_id})
+                MATCH (r:Resource {graph_id: $graph_id, resource_id: $resource_id})-[:BELONGS_TO]->(g)
+                WHERE $branch_id IN COALESCE(r.on_branches, [])
+                RETURN r.kind AS kind,
+                       r.url AS url,
+                       r.title AS title,
+                       r.mime_type AS mime_type,
+                       r.storage_path AS storage_path,
+                       r.metadata_json AS metadata_json
+                LIMIT 1
+                """
+                rec = session.run(
+                    q,
+                    graph_id=graph_id,
+                    branch_id=branch_id,
+                    resource_id=resource_id,
+                ).single()
+                if not rec:
+                    raise HTTPException(status_code=404, detail=f"Resource not found: {resource_id}")
+
+                storage_path = rec.get("storage_path")
+                if not storage_path:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Resource is missing storage_path (re-upload the file to enable ingestion)",
+                    )
+
+                kind = str(rec.get("kind") or "").strip()
+                mime_type = str(rec.get("mime_type") or "").strip()
+                url = str(rec.get("url") or "").strip() or None
+                title = str(rec.get("title") or file_data.get("title") or resource_id).strip() or resource_id
+                domain = file_data.get("domain")
+
+                from storage import read_file
+                file_bytes = read_file(str(storage_path))
+
+                from services_ingestion_kernel import ingest_artifact
+                from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+
+                extract_concepts = bool(file_data.get("extract_concepts", True))
+                extract_claims = bool(file_data.get("extract_claims", True))
+
+                actions = IngestionActions(
+                    run_lecture_extraction=extract_concepts,
+                    run_chunk_and_claims=extract_claims,
+                    embed_claims=extract_claims,
+                    create_lecture_node=True,
+                    create_artifact_node=True,
+                )
+
+                if mime_type == "application/pdf" or kind == "pdf":
+                    from services_pdf_enhanced import extract_pdf_enhanced
+
+                    use_ocr = bool(file_data.get("use_ocr", False))
+                    extract_tables = bool(file_data.get("extract_tables", True))
+                    pdf_result = extract_pdf_enhanced(
+                        pdf_path=str(storage_path),
+                        pdf_bytes=file_bytes,
+                        use_ocr=use_ocr,
+                        extract_tables=extract_tables,
+                    )
+
+                    artifact_input = ArtifactInput(
+                        artifact_type="pdf",
+                        source_url=url,
+                        source_id=resource_id,
+                        title=title,
+                        domain=str(domain).strip() if isinstance(domain, str) and domain.strip() else None,
+                        text=pdf_result.full_text,
+                        metadata={
+                            "capture_mode": "workflow_file_resource",
+                            "resource_id": resource_id,
+                            "pdf_metadata": pdf_result.metadata.dict(),
+                            "extraction_method": pdf_result.extraction_method,
+                        },
+                        actions=actions,
+                        policy=IngestionPolicy(
+                            local_only=True,
+                            max_chars=500_000,
+                            min_chars=50,
+                        ),
+                    )
+                elif mime_type.startswith("text/"):
+                    try:
+                        text = file_bytes.decode("utf-8")
+                    except Exception:
+                        text = file_bytes.decode("utf-8", errors="replace")
+
+                    artifact_input = ArtifactInput(
+                        artifact_type="manual",
+                        source_url=url,
+                        source_id=resource_id,
+                        title=title,
+                        domain=str(domain).strip() if isinstance(domain, str) and domain.strip() else None,
+                        text=text,
+                        metadata={
+                            "capture_mode": "workflow_file_resource",
+                            "resource_id": resource_id,
+                            "mime_type": mime_type,
+                        },
+                        actions=actions,
+                        policy=IngestionPolicy(
+                            local_only=True,
+                            max_chars=500_000,
+                            min_chars=50,
+                        ),
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unsupported file type for capture workflow: {mime_type or kind or 'unknown'}",
+                    )
+
+                ingest_result = ingest_artifact(session, artifact_input)
+
+                # Best-effort: mark resource with ingestion run_id and link it to an optional concept.
+                try:
+                    session.run(
+                        """
+                        MATCH (r:Resource {graph_id: $graph_id, resource_id: $resource_id})
+                        SET r.ingestion_run_id = $run_id
+                        """,
+                        graph_id=graph_id,
+                        resource_id=resource_id,
+                        run_id=ingest_result.run_id,
+                    ).consume()
+                except Exception:
+                    pass
+
+                if request.attach_concept_id:
+                    try:
+                        from services_resources import link_resource_to_concept
+
+                        link_resource_to_concept(
+                            session=session,
+                            concept_id=request.attach_concept_id,
+                            resource_id=resource_id,
+                        )
+                    except Exception:
+                        pass
+
+                result = {
+                    "resource_id": resource_id,
+                    "artifact_id": ingest_result.artifact_id,
+                    "run_id": ingest_result.run_id,
+                    "status": ingest_result.status,
+                    "reused_existing": ingest_result.reused_existing,
+                    "summary_counts": ingest_result.summary_counts,
+                    "warnings": ingest_result.warnings,
+                    "errors": ingest_result.errors,
+                }
+                next_actions = ["explore_graph", "synthesize_summary"]
             
         else:
             raise HTTPException(status_code=400, detail=f"Unknown content_type: {request.content_type}")
@@ -303,8 +498,6 @@ class SynthesizeRequest(BaseModel):
     # For answer/summary
     query: Optional[str] = None
     context_ids: Optional[List[str]] = None
-    # For memo
-    ticker: Optional[str] = None
     # For claims
     quote_ids: Optional[List[str]] = None
     concept_id: Optional[str] = None
@@ -377,13 +570,9 @@ async def synthesize_workflow(
             
             from services_research_memo import generate_research_memo
             
-            query = request.query
-            if request.ticker:
-                query = f"{request.ticker}: {query}"
-            
             memo_result = generate_research_memo(
                 session=session,
-                query=query,
+                query=request.query,
                 graph_id=graph_id,
                 branch_id=branch_id,
                 evidence_strictness=request.evidence_strictness,
@@ -496,7 +685,7 @@ def get_workflow_status(
     return WorkflowStatusResponse(
         capture={
             "available": True,
-            "types": ["selection", "url", "file", "finance"],
+            "types": ["selection", "url", "file"],
             "graph_id": graph_id,
             "branch_id": branch_id,
         },
@@ -513,4 +702,3 @@ def get_workflow_status(
             "branch_id": branch_id,
         },
     )
-

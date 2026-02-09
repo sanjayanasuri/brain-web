@@ -9,7 +9,7 @@ export interface UseEvidenceNavigationParams {
   openNodePanel: () => void;
   
   /** Function to set the active tab in node panel */
-  setNodePanelTab: (tab: 'Overview' | 'Evidence' | 'Activity' | 'Finance') => void;
+  setNodePanelTab: (tab: 'Overview' | 'Evidence' | 'Activity') => void;
   
   /** Optional function to ensure resources are loaded for a concept before scrolling */
   ensureResourcesLoadedForConcept?: (conceptId: string) => Promise<void>;
@@ -120,4 +120,3 @@ export function useEvidenceNavigation(
 
   return { navigateToResource };
 }
-

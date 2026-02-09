@@ -8,6 +8,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 
 from db_neo4j import get_neo4j_session
+from auth import require_auth
 from models import (
     Lecture,
     LectureCreate,
@@ -54,6 +55,7 @@ def ingest_lecture_endpoint(
     payload: LectureIngestRequest,
     session=Depends(get_neo4j_session),
     background_tasks: BackgroundTasks = BackgroundTasks(),
+    auth: dict = Depends(require_auth),
 ):
     """
     Ingest a lecture by extracting concepts and relationships using LLM.
@@ -72,6 +74,7 @@ def ingest_lecture_endpoint(
     If a node exists, its description and tags are updated if the new ones are more detailed.
     """
     # Step 1: Save lecture immediately (prioritize persistence)
+    tenant_id = auth.get("tenant_id")
     try:
         lecture = create_lecture(
             session=session,
@@ -79,51 +82,41 @@ def ingest_lecture_endpoint(
                 title=payload.lecture_title,
                 description=None,
                 raw_text=payload.lecture_text,
-            )
+            ),
+            tenant_id=tenant_id,
         )
         print(f"[Lecture Ingestion] ✓ Saved lecture {lecture.lecture_id} immediately")
     except Exception as e:
         print(f"ERROR: Failed to save lecture: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save lecture: {str(e)}")
     
-    # Step 2: Process AI in background (non-blocking, errors are logged but don't fail the request)
-    def process_ai_background():
-        try:
-            print(f"[Lecture Ingestion] Starting AI processing for lecture {lecture.lecture_id}")
-            result = ingest_lecture(
-                session=session,
-                lecture_title=payload.lecture_title,
-                lecture_text=payload.lecture_text,
-                domain=payload.domain,
-                existing_lecture_id=lecture.lecture_id,  # Use the already-created lecture
-            )
-            print(f"[Lecture Ingestion] ✓ AI processing completed for lecture {lecture.lecture_id}")
-            # Auto-export to CSV after ingestion
-            auto_export_csv(background_tasks)
-        except Exception as e:
-            print(f"[Lecture Ingestion] ⚠ AI processing failed for lecture {lecture.lecture_id}: {e}")
-            print(f"[Lecture Ingestion] Note: Lecture was saved successfully, AI processing can be retried later")
-            # Don't raise - lecture is already saved, AI processing is optional
+    # Step 2: Run AI ingestion (synchronous)
+    # NOTE: The frontend expects segments to be available immediately after this call.
+    try:
+        print(f"[Lecture Ingestion] Starting AI processing for lecture {lecture.lecture_id}")
+        result = ingest_lecture(
+            session=session,
+            lecture_title=payload.lecture_title,
+            lecture_text=payload.lecture_text,
+            domain=payload.domain,
+            existing_lecture_id=lecture.lecture_id,  # Use the already-created lecture
+            tenant_id=tenant_id,
+        )
+        print(f"[Lecture Ingestion] ✓ AI processing completed for lecture {lecture.lecture_id}")
+    except ValueError as e:
+        # Treat validation/LLM errors as a bad request
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"[Lecture Ingestion] ✗ AI processing failed for lecture {lecture.lecture_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"AI processing failed: {str(e)}")
     
-    # Schedule AI processing in background
-    background_tasks.add_task(process_ai_background)
+    # Auto-export to CSV after ingestion
+    auto_export_csv(background_tasks)
     
     # Invalidate lecture-related caches
     invalidate_cache_pattern("lectures")
     
-    # Step 3: Return immediately with lecture info
-    # Return a minimal result indicating the lecture was saved and AI is processing
-    return LectureIngestResult(
-        lecture_id=lecture.lecture_id,
-        nodes_created=[],
-        nodes_updated=[],
-        links_created=[],
-        concepts_created=0,
-        concepts_updated=0,
-        relationships_proposed=0,
-        segments_created=0,
-        errors=["AI processing is running in background. Lecture saved successfully."]
-    )
+    return result
 
 
 @router.post("/ingest-ink", response_model=LectureIngestResult)
@@ -654,6 +647,8 @@ def draft_next_lecture_endpoint(
         )
         
         return result
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

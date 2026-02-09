@@ -1,18 +1,46 @@
-import os
 import logging
-from passlib.context import CryptContext
-from db_postgres import execute_query, execute_update
 from typing import Optional, Dict, Any
 import uuid
 from datetime import datetime
+import os
 
 logger = logging.getLogger("brain_web")
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Dynamic DB selection
+try:
+    from db_postgres import execute_query, execute_update, get_db_connection
+    # Test connection
+    conn = get_db_connection()
+    conn.close()
+    logger.info("Connected to Postgres for User Service")
+except Exception as e:
+    from config import ENVIRONMENT
+    import os
+    
+    # STRICT MODE: Only allow SQLite if explicitly enabled in DEV
+    enable_sqlite = os.getenv("ENABLE_SQLITE_FALLBACK", "false").lower() in ("true", "1", "yes")
+    
+    if ENVIRONMENT == "production" or not enable_sqlite:
+        logger.error(f"CRITICAL: Postgres connection failed: {e}")
+        logger.error("To enable SQLite fallback in development, set ENABLE_SQLITE_FALLBACK=true")
+        raise RuntimeError(f"Database connection failed. Postgres unreachable and SQLite fallback disabled. Error: {e}")
+    
+    logger.warning(f"Postgres not available ({e}). Falling back to SQLite (ENABLE_SQLITE_FALLBACK=true).")
+    from db_sqlite import execute_query, execute_update
+    
+try:
+    from passlib.context import CryptContext
+except Exception:  # pragma: no cover
+    CryptContext = None  # type: ignore[assignment]
+    pwd_context = None
+else:
+    # Password hashing context
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain password against a hashed one."""
+    if pwd_context is None:  # pragma: no cover
+        raise RuntimeError("passlib is required for password verification; install backend/requirements.txt")
     try:
         print(f"DEBUG: Verifying password for hash starting with {hashed_password[:10]}...")
         result = pwd_context.verify(plain_password, hashed_password)
@@ -24,6 +52,8 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Generate a hash for a password."""
+    if pwd_context is None:  # pragma: no cover
+        raise RuntimeError("passlib is required for password hashing; install backend/requirements.txt")
     return pwd_context.hash(password)
 
 def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
@@ -46,12 +76,19 @@ def create_user(email: str, password_hash: str, full_name: str = "") -> Dict[str
     query = """
         INSERT INTO users (user_id, tenant_id, email, password_hash, full_name, created_at)
         VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING user_id, tenant_id, email, full_name, created_at
     """
     params = (user_id, tenant_id, email, password_hash, full_name, datetime.utcnow())
     
-    results = execute_query(query, params, commit=True)
-    return results[0]
+    # Try with RETURNING first (Postgres style)
+    try:
+        query_returning = query + " RETURNING user_id, tenant_id, email, full_name, created_at"
+        results = execute_query(query_returning, params, commit=True)
+        return results[0]
+    except Exception:
+        # Fallback for SQLite without RETURNING support
+        execute_update(query, params)
+        # Fetch the user manually
+        return get_user_by_id(user_id)
 
 def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     """Fetch a user from the database by user_id."""
@@ -75,27 +112,46 @@ def update_user(user_id: str, email: Optional[str] = None, full_name: Optional[s
     if not set_clauses:
         return get_user_by_id(user_id)
         
-    query = f"UPDATE users SET {', '.join(set_clauses)} WHERE user_id = %s RETURNING user_id, tenant_id, email, full_name, created_at"
+    query = f"UPDATE users SET {', '.join(set_clauses)} WHERE user_id = %s"
     params.append(user_id)
     
-    results = execute_query(query, tuple(params), commit=True)
-    return results[0] if results else None
+    # Try with RETURNING first
+    try:
+        query_returning = query + " RETURNING user_id, tenant_id, email, full_name, created_at"
+        results = execute_query(query_returning, tuple(params), commit=True)
+        return results[0]
+    except Exception:
+        execute_update(query, tuple(params))
+        return get_user_by_id(user_id)
 
 def init_user_db():
     """Initialize the users table if it doesn't exist."""
-    query = """
+    # Detect if we are using SQLite (hacky check but works for this context)
+    is_sqlite = "sqlite" in str(execute_query.__module__)
+    
+    id_type = "TEXT" if is_sqlite else "UUID"
+    timestamp_type = "TIMESTAMP" if is_sqlite else "TIMESTAMP WITH TIME ZONE"
+    
+    # Split statements for SQLite compatibility (python driver generally doesn't support multiple statements in execute)
+    statements = [
+        f"""
         CREATE TABLE IF NOT EXISTS users (
-            user_id UUID PRIMARY KEY,
-            tenant_id UUID NOT NULL,
+            user_id {id_type} PRIMARY KEY,
+            tenant_id {id_type} NOT NULL,
             email VARCHAR(255) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
             full_name VARCHAR(255),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            created_at {timestamp_type} DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT TRUE,
             is_admin BOOLEAN DEFAULT FALSE
         );
-        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-        CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
-    """
-    execute_update(query)
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);",
+        "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);"
+    ]
+    
+    for stmt in statements:
+        if stmt.strip():
+            execute_update(stmt)
+            
     logger.info("Users table initialized successfully")

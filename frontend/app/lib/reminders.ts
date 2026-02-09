@@ -13,15 +13,11 @@ export interface ReminderPreferences {
     enabled: boolean;
     cadence_days: number;
   };
-  finance_stale: {
-    enabled: boolean;
-    cadence_days: number;
-  };
 }
 
 export interface ReminderBanner {
   id: string;
-  type: 'weekly_digest' | 'review_queue' | 'finance_stale';
+  type: 'weekly_digest' | 'review_queue';
   title: string;
   body: string;
   cta: {
@@ -168,32 +164,16 @@ function shouldShowReviewQueue(
 }
 
 /**
- * Check if finance stale reminder should show
- */
-function shouldShowFinanceStale(
-  prefs: ReminderPreferences,
-  hasStaleSnapshots: boolean,
-  dismissed: Record<string, number>
-): boolean {
-  if (!prefs.finance_stale.enabled) return false;
-  if (!hasStaleSnapshots) return false;
-  
-  const bannerId = 'finance_stale';
-  return !isBannerDismissed(bannerId, prefs.finance_stale.cadence_days);
-}
-
-/**
  * Evaluate reminders and return banners to show
- * Returns at most 1 banner (priority: weekly_digest > review_queue > finance_stale)
+ * Returns at most 1 banner (priority: weekly_digest > review_queue)
  */
 export async function evaluateReminders(
   prefs: ReminderPreferences,
-  proposedRelationshipsCount: number = 0,
-  hasStaleFinanceSnapshots: boolean = false
+  proposedRelationshipsCount: number = 0
 ): Promise<ReminderBanner | null> {
   const dismissed = getDismissedBanners();
   
-  // Priority order: weekly_digest > review_queue > finance_stale
+  // Priority order: weekly_digest > review_queue
   if (shouldShowWeeklyDigest(prefs, dismissed)) {
     return {
       id: 'weekly_digest',
@@ -220,19 +200,5 @@ export async function evaluateReminders(
     };
   }
   
-  if (shouldShowFinanceStale(prefs, hasStaleFinanceSnapshots, dismissed)) {
-    return {
-      id: 'finance_stale',
-      type: 'finance_stale',
-      title: 'Finance snapshots need refresh',
-      body: 'Some tracked companies have stale snapshots that may need updating.',
-      cta: {
-        label: 'View Finance',
-        target: '/?lens=FINANCE',
-      },
-    };
-  }
-  
   return null;
 }
-

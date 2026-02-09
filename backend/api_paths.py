@@ -94,7 +94,7 @@ def _score_path(
     path: Dict[str, Any],
     graph_id: str,
     branch_id: str,
-    lens: Literal["NONE", "LEARNING", "FINANCE"] = "NONE"
+    lens: Literal["NONE", "LEARNING"] = "NONE"
 ) -> float:
     """
     Score a path based on multiple quality signals.
@@ -181,17 +181,6 @@ def _score_path(
     if lens == "LEARNING":
         # Boost prerequisite-oriented paths
         if "Prerequisites" in path.get("title", "") or "prereq" in path.get("rationale", "").lower():
-            score += 0.5
-    elif lens == "FINANCE":
-        # Boost paths that include finance-type nodes
-        finance_types = {"company", "metric", "risk", "financial", "finance"}
-        has_finance = False
-        for step in steps:
-            step_type = (step.get("type") or "").lower()
-            if any(ft in step_type for ft in finance_types):
-                has_finance = True
-                break
-        if has_finance:
             score += 0.5
     
     return score
@@ -598,7 +587,7 @@ def get_suggested_paths(
     graph_id: str = Query(..., description="Graph ID"),
     concept_id: Optional[str] = Query(None, description="Optional concept ID to scope paths"),
     limit: int = Query(10, ge=1, le=20, description="Maximum number of paths to return"),
-    lens: Literal["NONE", "LEARNING", "FINANCE"] = Query("NONE", description="Lens for path prioritization"),
+    lens: Literal["NONE", "LEARNING"] = Query("NONE", description="Lens for path prioritization"),
     session: Session = Depends(get_neo4j_session)
 ) -> List[Dict[str, Any]]:
     """
@@ -616,7 +605,7 @@ def get_suggested_paths(
     - Evidence coverage (resources)
     - Diversity (avoid near-duplicates)
     - Length (prefer 4-5 steps)
-    - Lens-aware tweaks (LEARNING: boost prereqs, FINANCE: boost finance nodes)
+    - Lens-aware tweaks (LEARNING: boost prereqs)
     """
     try:
         # Set active graph context
@@ -676,4 +665,3 @@ def get_suggested_paths(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate paths: {str(e)}")
-

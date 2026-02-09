@@ -497,7 +497,6 @@ export default function GapsViewPage() {
               <li>Attached resources (papers, documents, PDFs)</li>
               <li>Browser Use–generated evidence</li>
               <li>Source citations</li>
-              <li>Finance snapshots (for company nodes)</li>
             </ul>
           </div>
         </div>
@@ -521,10 +520,8 @@ export default function GapsViewPage() {
           <div style={{ color: 'var(--muted)', fontSize: '14px', fontStyle: 'italic' }}>
             Freshness gap detection coming soon. This will identify:
             <ul style={{ marginTop: '8px', paddingLeft: '20px' }}>
-              <li>Finance snapshots older than 30 days</li>
               <li>Browser Use resources that haven&apos;t been updated</li>
               <li>Concepts with stale evidence</li>
-              <li>Tracked companies needing refresh</li>
             </ul>
           </div>
         </div>

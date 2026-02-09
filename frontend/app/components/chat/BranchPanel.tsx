@@ -23,6 +23,9 @@ interface BranchThread {
     selected_text: string;
     parent_message_id: string;
   };
+  anchor_kind?: string;
+  anchor_ref?: any;
+  anchor_snippet_data_url?: string | null;
   messages: BranchMessage[];
   parent_message_id: string;
   chat_id?: string | null;
@@ -274,6 +277,11 @@ export default function BranchPanel({ branchId, parentMessageId, onClose, onScro
     );
   }
 
+  const isAnchorRefBranch = branch.anchor_kind === 'anchor_ref';
+  const previewText =
+    (isAnchorRefBranch ? (branch.anchor_ref?.preview || branch.anchor.selected_text) : branch.anchor.selected_text) ||
+    '';
+
   return (
     <div style={{
       width: '400px',
@@ -293,10 +301,10 @@ export default function BranchPanel({ branchId, parentMessageId, onClose, onScro
       }}>
         <div>
           <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '4px' }}>
-            Explaining selected text
+            {isAnchorRefBranch ? 'Explaining selected region' : 'Explaining selected text'}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
-            {branch.anchor.selected_text.substring(0, 50)}...
+            {previewText.substring(0, 50)}...
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -326,7 +334,7 @@ export default function BranchPanel({ branchId, parentMessageId, onClose, onScro
               fontSize: '12px',
             }}
           >
-            Back to main
+            {parentMessageId ? 'Back to main' : 'Close'}
           </button>
           <div style={{ position: 'relative' }}>
             <button
@@ -428,6 +436,23 @@ export default function BranchPanel({ branchId, parentMessageId, onClose, onScro
         </div>
       </div>
 
+      {/* Selection Preview */}
+      {isAnchorRefBranch && branch.anchor_snippet_data_url && (
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
+          <img
+            src={branch.anchor_snippet_data_url}
+            alt="Selected region"
+            style={{
+              width: '100%',
+              height: 'auto',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--background)',
+            }}
+          />
+        </div>
+      )}
+
       {/* Messages */}
       <div style={{
         flex: 1,
@@ -478,7 +503,7 @@ export default function BranchPanel({ branchId, parentMessageId, onClose, onScro
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about the selected text..."
+            placeholder={isAnchorRefBranch ? 'Ask about the selected region...' : 'Ask about the selected text...'}
             style={{
               width: '100%',
               minHeight: '60px',
@@ -513,7 +538,7 @@ export default function BranchPanel({ branchId, parentMessageId, onClose, onScro
             >
               Send
             </button>
-            {messages.length > 0 && (
+            {!isAnchorRefBranch && messages.length > 0 && (
               <button
                 type="button"
                 onClick={handleGenerateHints}

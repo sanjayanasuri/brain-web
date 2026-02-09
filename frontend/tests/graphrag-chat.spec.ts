@@ -351,21 +351,7 @@ test.describe('GraphRAG Chat Behavior', () => {
     
     // Find the chat input and send a message
     const chatInput = page.locator('textarea.chat-input, textarea#chat-input').first();
-    await chatInput.fill('What are the key financial metrics for AAPL?');
-    
-    // Enable finance lens to trigger GraphRAG mode
-    // The finance lens is a button with text "💰 Finance" or containing "Finance"
-    const financeLensButton = page.locator('button').filter({ hasText: /finance/i });
-    if (await financeLensButton.count() > 0) {
-      const isEnabled = await financeLensButton.first().evaluate((el) => {
-        return el.classList.contains('pill--active');
-      });
-      if (!isEnabled) {
-        await financeLensButton.first().click();
-        // Wait a moment for state to update
-        await page.waitForTimeout(200);
-      }
-    }
+    await chatInput.fill('What is gradient descent?');
     
     // Submit the message - look for the "Send" button with class "send-btn" or text "Send"
     const submitButton = page.locator('button.send-btn').first();
@@ -481,8 +467,7 @@ Check the console logs above for the API response status. Original error: ${e}`)
       }
     });
     
-    // GraphRAG is now the default mode, so no need to enable finance lens
-    // Finance lens is only needed for finance-specific queries
+    // GraphRAG is now the default mode
     // The evidence panel should appear for any GraphRAG response with retrievalMeta.claimIds
     
     // Send a message first
@@ -705,4 +690,3 @@ Check the console logs above for the API response status. Original error: ${e}`)
     expect(actionCount).toBeLessThanOrEqual(5);
   });
 });
-

@@ -172,7 +172,6 @@ export interface Claim {
     source_type?: string | null;
     source_url?: string | null;
     doc_type?: string | null;
-    company_ticker?: string | null;
 }
 
 /**
@@ -184,7 +183,6 @@ export interface Source {
     external_id?: string | null;
     url?: string | null;
     doc_type?: string | null;
-    company_ticker?: string | null;
     published_at?: number | null;
     metadata?: any;
     chunks?: Array<{
@@ -472,6 +470,36 @@ export interface UserProfile {
     learning_preferences: Record<string, any>;
 }
 
+export type AudienceMode = 'default' | 'eli5' | 'ceo_pitch' | 'recruiter_interview' | 'technical';
+export type ResponseMode = 'compact' | 'hint' | 'normal' | 'deep';
+export type AskQuestionPolicy = 'never' | 'at_most_one' | 'ok';
+export type Pacing = 'slow' | 'normal' | 'fast';
+export type TurnTaking = 'normal' | 'no_interrupt';
+export type VoiceId = 'neutral' | 'friendly' | 'direct' | 'playful';
+
+export interface TutorProfile {
+    version: string;
+    audience_mode: AudienceMode;
+    response_mode: ResponseMode;
+    ask_question_policy: AskQuestionPolicy;
+    end_with_next_step: boolean;
+    pacing: Pacing;
+    turn_taking: TurnTaking;
+    no_glazing: boolean;
+    voice_id: VoiceId;
+}
+
+export interface TutorProfilePatch {
+    audience_mode?: AudienceMode;
+    response_mode?: ResponseMode;
+    ask_question_policy?: AskQuestionPolicy;
+    end_with_next_step?: boolean;
+    pacing?: Pacing;
+    turn_taking?: TurnTaking;
+    no_glazing?: boolean;
+    voice_id?: VoiceId;
+}
+
 export interface ReminderPreferences {
     weekly_digest: {
         enabled: boolean;
@@ -482,14 +510,10 @@ export interface ReminderPreferences {
         enabled: boolean;
         cadence_days: number;
     };
-    finance_stale: {
-        enabled: boolean;
-        cadence_days: number;
-    };
 }
 
 export interface UIPreferences {
-    active_lens: 'NONE' | 'LEARNING' | 'FINANCE';
+    active_lens: 'NONE' | 'LEARNING';
     reminders?: ReminderPreferences;
 }
 
@@ -511,20 +535,6 @@ export interface PDFIngestResponse {
     extraction_method?: string | null;
     warnings: string[];
     errors: string[];
-}
-
-export interface FinanceTrackingConfig {
-    ticker: string;
-    enabled: boolean;
-    cadence: 'daily' | 'weekly' | 'monthly';
-}
-
-export interface LatestSnapshotMetadata {
-    ticker: string;
-    resource_id?: string;
-    snapshot_fetched_at?: string;
-    market_as_of?: string;
-    company_name?: string;
 }
 
 export interface TeachingStyleProfile {
@@ -1084,4 +1094,56 @@ export interface DeepResearchResponse {
     status: string;
     message: string;
     data: any;
+}
+
+// -----------------------------
+// Phase D: Note image ingestion
+// -----------------------------
+
+export type OCRBBoxUnit = 'px' | 'pct';
+
+export interface OCRBBox {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    unit?: OCRBBoxUnit;
+    image_width?: number | null;
+    image_height?: number | null;
+}
+
+export interface OCRBlock {
+    text: string;
+    bbox: OCRBBox;
+    confidence?: number | null;
+}
+
+export interface NoteImageIngestRequest {
+    image_data: string; // base64 data URL
+    title?: string;
+    domain?: string;
+    graph_id?: string;
+    branch_id?: string;
+    ocr_hint?: string;
+    ocr_engine?: string;
+    ocr_blocks?: OCRBlock[];
+}
+
+export interface NoteImageBlock {
+    text: string;
+    confidence?: number | null;
+    bbox: any;
+    anchor: any;
+    quote_id?: string | null;
+}
+
+export interface NoteImageIngestResponse {
+    status: string;
+    graph_id: string;
+    branch_id: string;
+    artifact_id: string;
+    image_url: string;
+    extracted_text: string;
+    blocks: NoteImageBlock[];
+    warnings: string[];
 }

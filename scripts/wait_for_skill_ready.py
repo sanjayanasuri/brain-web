@@ -7,15 +7,9 @@ import os
 import sys
 import time
 import requests
-from pathlib import Path
 
-# Add backend to path
-backend_dir = Path(__file__).parent.parent / "backend"
-sys.path.insert(0, str(backend_dir))
-
-from config import BROWSER_USE_API_KEY, BROWSER_USE_BASE, BROWSER_USE_FINANCE_TRACKER_SKILL_ID
-
-BASE = BROWSER_USE_BASE or "https://api.browser-use.com/api/v2"
+BROWSER_USE_API_KEY = os.getenv("BROWSER_USE_API_KEY")
+BASE = os.getenv("BROWSER_USE_BASE") or "https://api.browser-use.com/api/v2"
 
 def check_skill_status(skill_id: str):
     """Check the status of a skill and return status info."""
@@ -83,9 +77,11 @@ def wait_for_skill_ready(skill_id: str, max_wait_minutes: int = 10):
         time.sleep(check_interval)
 
 if __name__ == "__main__":
-    skill_id = BROWSER_USE_FINANCE_TRACKER_SKILL_ID
+    skill_id = sys.argv[1] if len(sys.argv) > 1 else os.getenv("BROWSER_USE_SKILL_ID")
     if not skill_id:
-        print("ERROR: BROWSER_USE_FINANCE_TRACKER_SKILL_ID not set")
+        print("ERROR: Skill ID not provided.")
+        print("Usage: python scripts/wait_for_skill_ready.py <skill_id>")
+        print("   or: set BROWSER_USE_SKILL_ID in your environment")
         sys.exit(1)
     
     if not BROWSER_USE_API_KEY:
@@ -102,4 +98,3 @@ if __name__ == "__main__":
         print("   1. Check the Browser Use dashboard")
         print("   2. Wait longer for the skill to finish recording")
         print("   3. Manually finish/enable the skill in the dashboard")
-

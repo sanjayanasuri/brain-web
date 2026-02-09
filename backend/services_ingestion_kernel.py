@@ -2,7 +2,7 @@
 Unified ingestion kernel - single entry point for artifact ingestion.
 
 This module provides a unified ingestion function that handles all artifact types
-(webpages, Notion pages, finance docs, lectures, manual entries) through a
+(webpages, Notion pages, lectures, manual entries, PDFs) through a
 consistent interface.
 
 Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
@@ -40,6 +40,7 @@ def ingest_artifact(
     session: Session, 
     payload: ArtifactInput,
     event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    tenant_id: Optional[str] = None,
 ) -> IngestionResult:
     """
     Unified ingestion function for all artifact types.
@@ -119,7 +120,7 @@ def ingest_artifact(
     # ===== STEP 2: Graph Scoping Initialization =====
     
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
     
     # ===== STEP 3: Create Ingestion Run =====
     
@@ -127,7 +128,6 @@ def ingest_artifact(
     source_type_map = {
         "webpage": "WEB",
         "notion_page": "NOTION",
-        "finance_doc": "FINANCE_DOC",
         "lecture": "LECTURE",
         "manual": "MANUAL",
         "pdf": "PDF",
@@ -141,6 +141,7 @@ def ingest_artifact(
         session=session,
         source_type=source_type,
         source_label=source_label,
+        tenant_id=tenant_id,
     )
     run_id = ingestion_run.run_id
     
@@ -173,6 +174,7 @@ def ingest_artifact(
                     run_id=run_id,
                     status="SKIPPED",
                     summary_counts={"skipped_reason": "content_unchanged"},
+                    tenant_id=tenant_id,
                 )
                 
                 return IngestionResult(
@@ -213,6 +215,7 @@ def ingest_artifact(
             metadata=artifact_metadata,
             created_by_run_id=run_id,
             strip_url_query=payload.policy.strip_url_query,
+            tenant_id=tenant_id,
         )
         
         artifact_id = artifact_result["artifact_id"]
@@ -246,6 +249,7 @@ def ingest_artifact(
                         run_id=run_id,
                         lecture_id=lecture_id,
                         event_callback=event_callback,
+                        tenant_id=tenant_id,
                     )
                     
                     nodes_created = extraction_result.get("nodes_created", [])
@@ -271,6 +275,7 @@ def ingest_artifact(
                             node_name_to_id=node_name_to_id,
                             nodes_created=nodes_created,
                             nodes_updated=nodes_updated,
+                            tenant_id=tenant_id,
                         )
                     except Exception as e:
                         error_msg = f"Segments and analogies extraction failed: {str(e)}"
@@ -325,11 +330,6 @@ def ingest_artifact(
                     error_msg = f"Lecture extraction failed: {str(e)}"
                     errors.append(error_msg)
                     print(f"[Ingestion Kernel] ERROR: {error_msg}")
-            elif payload.artifact_type == "finance_doc":
-                # Skip lecture extraction for finance_doc by default unless explicitly enabled
-                # (This is handled by the run_lecture_extraction flag)
-                pass
-        
         # ===== STEP 6: Handle Chunk and Claims (if requested) =====
         
         if payload.actions.run_chunk_and_claims:
@@ -373,6 +373,7 @@ def ingest_artifact(
                         known_concepts=known_concepts,
                         include_existing_concepts=True,
                         pdf_chunks=pdf_chunks,  # Pass PDF chunks for page reference storage
+                        tenant_id=tenant_id,
                     )
                 else:
                     # Standard chunking
@@ -385,6 +386,7 @@ def ingest_artifact(
                         run_id=run_id,
                         known_concepts=known_concepts,
                         include_existing_concepts=True,
+                        tenant_id=tenant_id,
                     )
                 
                 summary_counts["chunks_created"] = chunk_claims_result.get("chunks_created", 0)
@@ -410,6 +412,7 @@ def ingest_artifact(
                     artifact_id=artifact_id,
                     concept_node_id=concept.node_id,
                     ingestion_run_id=run_id,
+                    tenant_id=tenant_id,
                 )
             except Exception as e:
                 error_msg = f"Failed to link artifact to concept {concept.node_id}: {str(e)}"
@@ -439,6 +442,7 @@ def ingest_artifact(
             summary_counts=summary_counts,
             error_count=len(errors) if errors else None,
             errors=errors if errors else None,
+            tenant_id=tenant_id,
         )
         
         # ===== STEP 9: Return Result =====
@@ -505,4 +509,3 @@ def ingest_artifact(
             created_relationship_count=0,
             created_claim_ids=[],
         )
-

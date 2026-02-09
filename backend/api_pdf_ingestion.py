@@ -310,7 +310,7 @@ async def ingest_pdf_stream(
                     try:
                         if not ingestion_cancelled.is_set():
                             logger.info(f"Starting ingestion for {filename} with session {id(thread_session)}")
-                            result = ingest_artifact(thread_session, artifact_input, event_callback=event_callback)
+                            result = ingest_artifact(thread_session, artifact_input, event_callback=event_callback, tenant_id=tenant_id)
                             ingestion_result_container["result"] = result
                             logger.info(f"Ingestion completed for {filename}")
                     except Exception as ingestion_error:

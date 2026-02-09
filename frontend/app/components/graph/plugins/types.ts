@@ -2,7 +2,7 @@
  * Domain Plugin System - General-purpose architecture for domain-specific features
  * 
  * This allows the system to be extended with domain-specific functionality
- * (finance, lecture, etc.) without hardcoding domain logic in the core.
+ * (lecture, etc.) without hardcoding domain logic in the core.
  */
 
 export interface DomainPlugin {
@@ -12,7 +12,7 @@ export interface DomainPlugin {
   /** Human-readable name */
   name: string;
   
-  /** Extract domain-specific identifier from a concept (e.g., ticker from finance concept) */
+  /** Extract domain-specific identifier from a concept */
   extractIdentifier?(concept: { name: string; domain?: string; tags?: string[] | null; [key: string]: any }): string | null;
   
   /** Get domain-specific tracking/config for a concept */
@@ -68,4 +68,3 @@ export interface DomainActions {
   setSelectedResourceId: (id: string | null) => void;
   setShowAllItems: (show: boolean) => void;
 }
-

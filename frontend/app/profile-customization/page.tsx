@@ -11,12 +11,15 @@ import {
   setFocusAreaActive,
   getUserProfile,
   updateUserProfile,
+  getTutorProfile,
+  setTutorProfile,
   getUIPreferences,
   updateUIPreferences,
   getGraphOverview,
   ResponseStyleProfileWrapper,
   FocusArea,
   UserProfile,
+  type TutorProfile,
   type UIPreferences,
   type ReminderPreferences,
 } from '../api-client';
@@ -34,9 +37,13 @@ export default function ControlPanelPage() {
     useState<ResponseStyleProfileWrapper | null>(null);
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [tutorProfile, setTutorProfileState] = useState<TutorProfile | null>(
+    null,
+  );
 
   const [savingStyle, setSavingStyle] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [savingTutorProfile, setSavingTutorProfile] = useState(false);
   const [addingFocus, setAddingFocus] = useState(false);
   const [uiPreferences, setUIPreferences] = useState<UIPreferences | null>(null);
   const [savingReminders, setSavingReminders] = useState(false);
@@ -64,11 +71,13 @@ export default function ControlPanelPage() {
           styleRes,
           focusRes,
           profileRes,
+          tutorProfileRes,
           uiPrefsRes,
         ] = await Promise.allSettled([
           getResponseStyle(),
           getFocusAreas(),
           getUserProfile(),
+          getTutorProfile(),
           getUIPreferences(),
         ]);
 
@@ -80,6 +89,9 @@ export default function ControlPanelPage() {
         }
         if (profileRes.status === 'fulfilled') {
           setUserProfile(profileRes.value);
+        }
+        if (tutorProfileRes.status === 'fulfilled') {
+          setTutorProfileState(tutorProfileRes.value);
         }
         if (uiPrefsRes.status === 'fulfilled') {
           setUIPreferences(uiPrefsRes.value);
@@ -195,6 +207,22 @@ export default function ControlPanelPage() {
     }
   }
 
+  async function handleSaveTutorProfile() {
+    if (!tutorProfile) return;
+    try {
+      setSavingTutorProfile(true);
+      setError(null);
+      const updated = await setTutorProfile(tutorProfile);
+      setTutorProfileState(updated);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to save tutor profile',
+      );
+    } finally {
+      setSavingTutorProfile(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="app-shell">
@@ -251,6 +279,173 @@ export default function ControlPanelPage() {
       >
         {/* LEFT COLUMN: Voice + Profile */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* Tutor Profile (Phase F) */}
+          <section className="control-card">
+            <div className="control-header" style={{ marginBottom: 8 }}>
+              <div>
+                <span>Tutor Profile</span>
+                <p className="subtitle" style={{ marginTop: 4 }}>
+                  Cross-modal behavior: voice tone, audience level, pacing, and turn-taking.
+                </p>
+              </div>
+            </div>
+
+            {tutorProfile && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label className="field-label">
+                  Voice tone
+                  <select
+                    className="chat-input"
+                    value={tutorProfile.voice_id}
+                    onChange={e =>
+                      setTutorProfileState(prev =>
+                        prev ? { ...prev, voice_id: e.target.value as any } : prev,
+                      )
+                    }
+                  >
+                    <option value="neutral">Neutral</option>
+                    <option value="friendly">Friendly</option>
+                    <option value="direct">Direct</option>
+                    <option value="playful">Playful</option>
+                  </select>
+                </label>
+
+                <label className="field-label">
+                  Audience mode
+                  <select
+                    className="chat-input"
+                    value={tutorProfile.audience_mode}
+                    onChange={e =>
+                      setTutorProfileState(prev =>
+                        prev ? { ...prev, audience_mode: e.target.value as any } : prev,
+                      )
+                    }
+                  >
+                    <option value="default">Default</option>
+                    <option value="eli5">ELI5</option>
+                    <option value="ceo_pitch">CEO pitch</option>
+                    <option value="recruiter_interview">Recruiter interview</option>
+                    <option value="technical">Technical</option>
+                  </select>
+                </label>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <label className="field-label">
+                    Response depth
+                    <select
+                      className="chat-input"
+                      value={tutorProfile.response_mode}
+                      onChange={e =>
+                        setTutorProfileState(prev =>
+                          prev ? { ...prev, response_mode: e.target.value as any } : prev,
+                        )
+                      }
+                    >
+                      <option value="compact">Compact</option>
+                      <option value="hint">Hint</option>
+                      <option value="normal">Normal</option>
+                      <option value="deep">Deep</option>
+                    </select>
+                  </label>
+                  <label className="field-label">
+                    Ask-question policy
+                    <select
+                      className="chat-input"
+                      value={tutorProfile.ask_question_policy}
+                      onChange={e =>
+                        setTutorProfileState(prev =>
+                          prev ? { ...prev, ask_question_policy: e.target.value as any } : prev,
+                        )
+                      }
+                    >
+                      <option value="never">Never</option>
+                      <option value="at_most_one">At most one</option>
+                      <option value="ok">OK</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <label className="field-label">
+                    Pacing
+                    <select
+                      className="chat-input"
+                      value={tutorProfile.pacing}
+                      onChange={e =>
+                        setTutorProfileState(prev =>
+                          prev ? { ...prev, pacing: e.target.value as any } : prev,
+                        )
+                      }
+                    >
+                      <option value="slow">Slow</option>
+                      <option value="normal">Normal</option>
+                      <option value="fast">Fast</option>
+                    </select>
+                  </label>
+                  <label className="field-label">
+                    Turn-taking
+                    <select
+                      className="chat-input"
+                      value={tutorProfile.turn_taking}
+                      onChange={e =>
+                        setTutorProfileState(prev =>
+                          prev ? { ...prev, turn_taking: e.target.value as any } : prev,
+                        )
+                      }
+                    >
+                      <option value="normal">Normal</option>
+                      <option value="no_interrupt">Don’t interrupt</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <label className="field-label">
+                    End with next step
+                    <select
+                      className="chat-input"
+                      value={tutorProfile.end_with_next_step ? 'on' : 'off'}
+                      onChange={e =>
+                        setTutorProfileState(prev =>
+                          prev
+                            ? { ...prev, end_with_next_step: e.target.value === 'on' }
+                            : prev,
+                        )
+                      }
+                    >
+                      <option value="on">On</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </label>
+                  <label className="field-label">
+                    No glazing (direct correctness)
+                    <select
+                      className="chat-input"
+                      value={tutorProfile.no_glazing ? 'on' : 'off'}
+                      onChange={e =>
+                        setTutorProfileState(prev =>
+                          prev ? { ...prev, no_glazing: e.target.value === 'on' } : prev,
+                        )
+                      }
+                    >
+                      <option value="on">On</option>
+                      <option value="off">Off</option>
+                    </select>
+                  </label>
+                </div>
+
+                <button
+                  className="send-btn"
+                  style={{ alignSelf: 'flex-start', marginTop: 4 }}
+                  onClick={handleSaveTutorProfile}
+                  disabled={savingTutorProfile}
+                >
+                  {savingTutorProfile ? 'Saving…' : 'Save tutor profile'}
+                </button>
+              </div>
+            )}
+          </section>
+
           {/* System Instructions */}
           <section className="control-card">
             <div className="control-header" style={{ marginBottom: 8 }}>

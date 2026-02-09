@@ -189,7 +189,8 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 def semantic_search_nodes(
     query: str,
     session: Session,
-    limit: int = 5
+    limit: int = 5,
+    tenant_id: Optional[str] = None
 ) -> List[Dict]:
     """
     Performs semantic search over all nodes in the graph.
@@ -200,13 +201,16 @@ def semantic_search_nodes(
     """
     # Try to use Qdrant if enabled
     from config import USE_QDRANT
-    if USE_QDRANT:
+    if USE_QDRANT and tenant_id:
         try:
             from services_search_qdrant import semantic_search_nodes as qdrant_search
-            return qdrant_search(query, session, limit)
+            return qdrant_search(query, session, limit, tenant_id=tenant_id)
         except Exception as e:
             print(f"WARNING: Qdrant search failed, falling back to in-memory: {e}")
             # Fall through to old implementation
+    elif USE_QDRANT and not tenant_id:
+        # SECURITY: Never call Qdrant without a tenant filter.
+        print("SECURITY: Skipping Qdrant search because tenant_id was not provided.")
     
     # Old in-memory implementation (fallback)
     if not client:
@@ -315,4 +319,3 @@ def semantic_search_nodes(
         _save_embeddings_cache()
     
     return top_results
-

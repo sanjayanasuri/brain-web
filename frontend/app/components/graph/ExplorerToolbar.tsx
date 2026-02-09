@@ -8,7 +8,8 @@ import {
   Lasso,
   Pencil,
   PlusCircle,
-  Maximize2
+  Maximize2,
+  ImagePlus
 } from 'lucide-react';
 
 type Props = {
@@ -87,7 +88,10 @@ export default function ExplorerToolbar(props: Props & {
     onAddNode,
     onResetView,
     showLegend,
-    onToggleLegend
+    onToggleLegend,
+    showContentIngest,
+    onToggleContentIngest,
+    contentIngestPopover
   } = props;
 
   const INK_COLORS = ['#2980b9', '#c0392b', '#27ae60', '#1c1c1e'];
@@ -127,6 +131,27 @@ export default function ExplorerToolbar(props: Props & {
 
       {/* Tools Group (Right Side) */}
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <div style={{ position: 'relative' }}>
+          <GraphToolButton
+            active={showContentIngest}
+            onClick={onToggleContentIngest}
+            icon={<ImagePlus size={22} />}
+            label="Import"
+          />
+          {showContentIngest && contentIngestPopover ? (
+            <div style={{
+              position: 'absolute',
+              top: '100%',
+              right: 0,
+              marginTop: '10px',
+              zIndex: 2000,
+              pointerEvents: 'auto',
+            }}>
+              {contentIngestPopover}
+            </div>
+          ) : null}
+        </div>
+
         <GraphToolButton
           active={mode === 'select'}
           onClick={() => onModeChange('select')}
@@ -248,4 +273,3 @@ function GraphToolButton({ active, onClick, icon, label }: { active: boolean, on
     </button>
   );
 }
-

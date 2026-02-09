@@ -63,6 +63,10 @@ backend/cache/
 backend/embeddings_cache.json
 backend/notion_*.json
 backend/notion_*.py
+.cache/
+.npm-cache/
+backend/*.db
+backend/*.db-*
 
 # Notion state files (user-specific configuration)
 backend/notion_index_state.json

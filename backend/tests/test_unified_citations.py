@@ -41,3 +41,38 @@ def test_build_retrieval_citations_from_source_chunks():
     assert anchor["selector"]["end_offset"] == len("Hello world")
     assert anchor["preview"] == "Hello world"
 
+
+def test_build_retrieval_citations_from_voice_transcript_chunks():
+    context = {
+        "voice_transcript_chunks": [
+            {
+                "chunk_id": "VTC_ABC123",
+                "voice_session_id": "VS_1",
+                "role": "user",
+                "content": "I think telophase and cytokinesis are confusing.",
+                "start_ms": 83000,
+                "end_ms": 91000,
+            }
+        ]
+    }
+
+    citations = build_retrieval_citations(context=context, graph_id="default", branch_id="main")
+    assert len(citations) == 1
+
+    c0 = citations[0]
+    assert c0["kind"] == "voice_transcript_chunk"
+    assert c0["chunk_id"] == "VTC_ABC123"
+    assert c0["voice_session_id"] == "VS_1"
+    assert c0["role"] == "user"
+    assert c0["title"] == "Voice (user) @ 1:23"
+
+    anchor = c0["anchor"]
+    assert anchor["anchor_id"].startswith("ANCH_")
+    assert anchor["artifact"]["namespace"] == "postgres"
+    assert anchor["artifact"]["type"] == "voice_transcript_chunk"
+    assert anchor["artifact"]["id"] == "VTC_ABC123"
+    assert anchor["artifact"]["graph_id"] == "default"
+    assert anchor["artifact"]["branch_id"] == "main"
+    assert anchor["selector"]["kind"] == "time_range"
+    assert anchor["selector"]["start_ms"] == 83000
+    assert anchor["selector"]["end_ms"] == 91000

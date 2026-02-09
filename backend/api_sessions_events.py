@@ -56,6 +56,14 @@ def create_session_event(
     """
     try:
         actor_id = auth.get("user_id")
+        
+        # Ensure companion session exists
+        try:
+            from services_session_continuity import get_or_create_session
+            get_or_create_session(actor_id, session_id)
+        except Exception:
+            pass # resilient
+
         event_type = EventType(payload.event_type)
         return emit_event(
             event_type=event_type,

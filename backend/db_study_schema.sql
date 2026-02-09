@@ -1,4 +1,4 @@
-# backend/db_study_schema.sql
+-- backend/db_study_schema.sql
 """
 Database schema for adaptive learning system (Phase 2).
 Run this to create study tables in Postgres.
@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS voice_transcript_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_session ON voice_transcript_chunks(voice_session_id, start_ms, created_at);
+CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_user_graph_branch_created ON voice_transcript_chunks(user_id, graph_id, branch_id, created_at DESC);
 
 -- Voice Learning Signals (Extracted)
 CREATE TABLE IF NOT EXISTS voice_learning_signals (

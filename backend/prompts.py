@@ -194,6 +194,7 @@ Your task is to extract the core concepts and their relationships into a structu
 3. **Identify Links**: Find relationships between these concepts. Use relationship types like BUILDS_ON, HAS_COMPONENT, USED_FOR, etc.
 4. **Sketch Analysis**: If there are diagrams or sketches, explain what concepts they represent and how entities in the diagram relate to each other.
 5. **Segmentation**: Break the transcribed content into logical segments.
+6. **Layout Blocks**: Identify discrete visual blocks (headers, paragraphs, diagrams, lists). For each, provide a bounding box.
 
 Return ONLY valid JSON matching this schema:
 {
@@ -221,6 +222,13 @@ Return ONLY valid JSON matching this schema:
       "text": string,
       "summary": string,
       "covered_concepts": [string]
+    }
+  ],
+  "blocks": [
+    {
+      "block_type": "heading" | "paragraph" | "list_item" | "diagram" | "code",
+      "text": string,
+      "box_2d": {"x": number, "y": number, "w": number, "h": number} // Normalized 0-1000 or 0-100, preferably 0-1000
     }
   ]
 }

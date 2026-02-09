@@ -25,6 +25,7 @@ os.environ.setdefault("NEO4J_USER", "neo4j")
 os.environ.setdefault("NEO4J_PASSWORD", "test-password")
 os.environ.setdefault("NOTION_API_KEY", "test-notion-key")
 os.environ.setdefault("ENABLE_NOTION_AUTO_SYNC", "false")
+os.environ.setdefault("ENABLE_SQLITE_FALLBACK", "true")
 
 # Import app after env vars are set
 # Note: Make sure you've activated the virtual environment before running tests:
@@ -97,6 +98,11 @@ def mock_neo4j_session():
         mock_neo4j_session.run.return_value = mock_result
     """
     session = MagicMock()
+    _DEFAULT_RUN_RETURN = object()
+    # Allow tests to override `session.run.return_value` even though we use a side_effect.
+    # We set a sentinel default and have the side_effect return the explicit override
+    # for non-auto-handled queries.
+    session.run.return_value = _DEFAULT_RUN_RETURN
     
     def run_side_effect(query, params=None, **kwargs):
         """Handle common queries automatically."""
@@ -142,6 +148,22 @@ def mock_neo4j_session():
         if "url_slug" in query_lower and "limit 1" in query_lower:
             # Return empty result to indicate slug is available
             return MockNeo4jResult(record=None)
+
+        # Handle UserProfile learning preference queries (graph scoping)
+        if "userprofile" in query_lower and "learning_preferences" in query_lower:
+            if "return u.learning_preferences" in query_lower:
+                # _get_user_learning_prefs expects a "learning_preferences" key.
+                learning_preferences = params.get("learning_preferences") or params.get("empty_json") or "{}"
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "learning_preferences": learning_preferences,
+                }))
+            if "return u" in query_lower:
+                return MockNeo4jResult(record=MockNeo4jRecord({
+                    "u": {
+                        "id": "default",
+                        "learning_preferences": params.get("learning_preferences") or params.get("empty_json") or "{}",
+                    }
+                }))
         
         # Handle Lecture creation queries
         if ("create (l:lecture" in query_lower or "merge (l:lecture" in query_lower or 
@@ -198,7 +220,11 @@ def mock_neo4j_session():
                     "tags": params.get("tags", []),
                     "url_slug": params.get("url_slug"),
                 }))
-        
+
+        # If a test explicitly set a return_value, use it for non-auto-handled queries.
+        if session.run.return_value is not _DEFAULT_RUN_RETURN:
+            return session.run.return_value
+
         # Default behavior: return empty result for queries
         return MockNeo4jResult(record=None)
     
@@ -267,7 +293,7 @@ def mock_openai_client(monkeypatch):
     mock_client.chat.completions.create.return_value = mock_response
     
     # Patch the client
-    with patch('services_lecture_ingestion.client', mock_client):
+    with patch('services_lecture_ingestion.client', mock_client), patch('services_lecture_draft.client', mock_client):
         yield mock_client
 
 

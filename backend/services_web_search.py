@@ -1,9 +1,8 @@
 """
 Brain Web Native Web Search Service
 
-Provides web search and content extraction capabilities using Perplexica (replacing SearXNG).
-Enhanced with advanced features: stealth mode, AI reranking, caching, metadata extraction.
-This is adapted from open-source approaches but integrated natively into Brain Web.
+Provides web search and content extraction capabilities using DuckDuckGo (via duckduckgo_search),
+with optional AI reranking and content extraction.
 """
 import httpx
 import trafilatura
@@ -98,7 +97,6 @@ async def search_web(
 ) -> List[Dict[str, Any]]:
     """
     Search the web using DuckDuckGo (via duckduckgo_search) with optional AI semantic reranking.
-    Replaces the previous Perplexica integration.
     """
     # Check cache
     cache_key = f"search:ddg:{query}:{engines}:{language}:{time_range}:{rerank}"
@@ -180,7 +178,7 @@ class SearchFocus(str, Enum):
     GITHUB = "github"
 
 class QueryClassifier:
-    """Port of Perplexica Classifier logic to Python."""
+    """Classify queries for focus area and search requirements."""
     
     @staticmethod
     async def classify(query: str, chat_history: List[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -226,8 +224,8 @@ Rules:
 
 class ResearcherAgent:
     """
-    Python-native implementation of Perplexica's Researcher.
-    Uses iterative tool-calling to gather info from Web and Knowledge Graph.
+    Python-native research agent that uses iterative tool-calling to gather info
+    from the web and the personal knowledge graph.
     """
     def __init__(self, api_key: str = None):
         from config import OPENAI_API_KEY
@@ -407,7 +405,6 @@ class NewsAggregator:
     CATEGORIES = {
         "tech": ["latest artificial intelligence news", "semiconductor industry updates", "new consumer electronics 2026", "software engineering trends"],
         "science": ["recent space exploration discoveries", "biotechnology breakthroughs", "climate change research updates", "physics new discoveries"],
-        "finance": ["stock market daily summary", "global economy news", "cryptocurrency market updates", "venture capital trends 2026"],
         "culture": ["contemporary art exhibitions 2026", "new literature releases", "cultural trends global", "philosophy today"],
         "sports": ["major league sports results", "olympic preparations news", "global soccer updates", "extreme sports trends"],
         "entertainment": ["new movie releases 2026", "music industry latest", "streaming service trends", "gaming industry news"]
@@ -419,7 +416,7 @@ class NewsAggregator:
         queries = NewsAggregator.CATEGORIES.get(category.lower(), NewsAggregator.CATEGORIES["tech"])
         selected_query = random.choice(queries)
         
-        # Use Perplexica search with time_range='day' for freshness
+        # Use web search with time_range='day' for freshness
         results = await search_web(
             query=selected_query,
             time_range="day",
@@ -439,7 +436,7 @@ class NewsAggregator:
     @staticmethod
     async def get_discover_feed() -> Dict[str, List[Dict[str, Any]]]:
         """Fetch top news across all categories for the main feed."""
-        categories_to_fetch = ["tech", "finance", "science", "entertainment"]
+        categories_to_fetch = ["tech", "science", "entertainment", "culture"]
         tasks = [NewsAggregator.fetch_category_news(cat, limit=4) for cat in categories_to_fetch]
         results = await asyncio.gather(*tasks)
         

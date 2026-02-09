@@ -26,10 +26,6 @@ General-purpose UI components used throughout the application:
 Components for the context panel that appears when a node is selected:
 - **ContextPanel.tsx** - Main context panel with tabs (overview, evidence, notes, connections, activity, data)
 
-### `/finance/` - Finance-Specific Components
-Components related to finance tracking and snapshots:
-- **TrackedCompaniesPanel.tsx** - Panel showing tracked companies with staleness indicators
-
 ### `/notion/` - Notion Integration Components
 Components for managing Notion integration:
 - **NotionSyncManager.tsx** - Manager for syncing and indexing Notion pages
@@ -45,7 +41,7 @@ Entry point components:
 
 ### `/context-providers/` - React Context Providers
 React context providers for global state:
-- **LensContext.tsx** - Context for managing lens/filter state (finance, general, etc.)
+- **LensContext.tsx** - Context for managing lens/filter state
 - **SidebarContext.tsx** - Context for managing sidebar open/closed state
 
 ## Import Patterns
@@ -76,4 +72,3 @@ When adding new components:
 2. If a component doesn't fit existing categories, consider creating a new subdirectory
 3. Update this README if adding a new category
 4. Follow the existing naming conventions (PascalCase for component files)
-

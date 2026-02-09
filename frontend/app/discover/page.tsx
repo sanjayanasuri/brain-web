@@ -3,11 +3,11 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import SessionDrawer from '../components/navigation/SessionDrawer';
-import { fetchDiscoverNews, fetchNewsByCategory } from '../api-client';
+import { fetchNewsByCategory } from '../api-client';
 
 const CATEGORIES = [
-    { id: 'tech', label: 'Tech & Science', icon: '🔋' },
-    { id: 'finance', label: 'Finance', icon: '📈' },
+    { id: 'tech', label: 'Tech', icon: '🔋' },
+    { id: 'science', label: 'Science', icon: '🧪' },
     { id: 'culture', label: 'Art & Culture', icon: '🎨' },
     { id: 'sports', label: 'Sports', icon: '🏀' },
     { id: 'entertainment', label: 'Entertainment', icon: '🍿' },

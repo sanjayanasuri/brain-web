@@ -9,7 +9,9 @@ import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
 import { addConceptToHistory } from '../../lib/conceptNavigationHistory';
 import { getChatSession, getCurrentSessionId } from '../../lib/chatSessions';
 import { toRgba } from '../../utils/colorUtils';
+import { createAnchorBranch } from '../../lib/branchUtils';
 import PencilCanvas from '../ui/PencilCanvas';
+import { useBranchContext } from '../chat/BranchContext';
 import ConceptChat from './ConceptChat';
 import {
   filterSuggestions,
@@ -22,6 +24,7 @@ import { getConceptQuality, type ConceptQuality, updateConcept, getNeighborsWith
 import { generateSuggestionObservation } from '../../lib/observations';
 import { storeLectureLinkReturn } from '../../lib/lectureLinkNavigation';
 import { getAuthHeaders } from '../../lib/authToken';
+import type { ArtifactRef, BBoxSelector } from '../../types/unified';
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
@@ -260,6 +263,7 @@ export default function ContextPanel({
 }: ContextPanelProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const branchContext = useBranchContext();
   const [fetchEvidenceState, setFetchEvidenceState] = useState<{
     conceptId: string;
     status: 'idle' | 'loading' | 'success' | 'empty' | 'error';
@@ -2666,6 +2670,63 @@ export default function ContextPanel({
                   const searchParams = new URLSearchParams(window.location.search);
                   searchParams.set('chat', query);
                   router.push(`${window.location.pathname}?${searchParams.toString()}`);
+                } else if (intent.type === 'explain') {
+                  (async () => {
+                    try {
+                      const bounds = intent.bounds;
+                      const canvas = intent.canvas;
+                      if (!bounds || !canvas?.width || !canvas?.height) {
+                        alert('No selection bounds available.');
+                        return;
+                      }
+
+                      const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+                      const x0 = clamp(bounds.x, 0, canvas.width);
+                      const y0 = clamp(bounds.y, 0, canvas.height);
+                      const x1 = clamp(bounds.x + bounds.w, 0, canvas.width);
+                      const y1 = clamp(bounds.y + bounds.h, 0, canvas.height);
+                      const wPx = Math.max(0, x1 - x0);
+                      const hPx = Math.max(0, y1 - y0);
+                      if (wPx <= 0 || hPx <= 0) {
+                        alert('Selection is empty.');
+                        return;
+                      }
+
+                      const graphId = searchParams?.get('graph_id');
+                      const artifact: ArtifactRef = {
+                        namespace: 'neo4j',
+                        type: 'concept',
+                        id: selectedNode.node_id,
+                        graph_id: graphId || null,
+                      };
+
+                      const bbox: BBoxSelector = {
+                        kind: 'bbox',
+                        x: x0 / canvas.width,
+                        y: y0 / canvas.height,
+                        w: wPx / canvas.width,
+                        h: hPx / canvas.height,
+                        unit: 'pct',
+                        image_width: canvas.width,
+                        image_height: canvas.height,
+                      };
+
+                      const chatId = getCurrentSessionId();
+                      const result = await createAnchorBranch({
+                        artifact,
+                        bbox,
+                        snippet_image_data_url: intent.snippetUrl,
+                        preview: `Handwritten selection: ${selectedNode.name}`,
+                        context: `Handwritten notes selection for concept: ${selectedNode.name}`,
+                        chat_id: chatId,
+                      });
+
+                      branchContext.openAnchorBranch(result.branch.id);
+                    } catch (err) {
+                      console.error('Failed to create anchor branch:', err);
+                      alert('Failed to open explanation branch. Please try again.');
+                    }
+                  })();
                 } else if (intent.type === 'underline') {
                   alert("Priority assigned! Concept marked as 'Exam Critical'.");
                 }

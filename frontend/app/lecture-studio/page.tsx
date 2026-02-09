@@ -1064,7 +1064,7 @@ function LectureStudioPageInner() {
                       type="text"
                       value={ingestDomain}
                       onChange={(e) => setIngestDomain(e.target.value)}
-                      placeholder="e.g., Software Engineering, Finance, etc."
+                      placeholder="e.g., Software Engineering, Biology, etc."
                       style={{
                         width: '100%',
                         padding: '10px 12px',
@@ -1143,7 +1143,7 @@ function LectureStudioPageInner() {
                       type="text"
                       value={ingestDomain}
                       onChange={(e) => setIngestDomain(e.target.value)}
-                      placeholder="e.g., Software Engineering, Finance, etc."
+                      placeholder="e.g., Software Engineering, Biology, etc."
                       disabled={ingesting}
                       onKeyDown={(e) => {
                         // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)

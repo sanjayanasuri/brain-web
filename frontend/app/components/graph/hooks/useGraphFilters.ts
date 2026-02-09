@@ -28,7 +28,7 @@ const initialState: GraphFiltersState = {
   filterStatusProposed: true,
   filterStatusRejected: false,
   filterConfidenceThreshold: 0.0,
-  filterSources: new Set(['SEC', 'IR', 'NEWS']),
+  filterSources: new Set(),
   showFilters: false,
   sourceLayer: 'concepts',
 };
@@ -100,4 +100,3 @@ export function useGraphFilters() {
 
   return useMemo(() => ({ state, actions }), [state, actions]);
 }
-

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { useVoiceRecognition } from '../../hooks/useVoiceRecognition';
+import { useVoiceStream } from '../../hooks/useVoiceStream';
 import { sendVoiceCommand, getTask, type VoiceCommandRequest, type BackgroundTask } from '../../api-client';
 
 export interface VoiceCommandProps {
@@ -50,6 +50,9 @@ export default function VoiceCommand({
   const [isSending, setIsSending] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string>('');
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isProcessingStt, setIsProcessingStt] = useState(false);
 
   // Poll task status
   useEffect(() => {
@@ -97,17 +100,15 @@ export default function VoiceCommand({
     return null;
   }, []);
 
-  const handleResult = useCallback(
-    async (transcript: string, isFinal: boolean) => {
-      // Only send when final transcript is available
-      if (!isFinal || !transcript.trim()) {
-        return;
-      }
+  const handleTranscript = useCallback(
+    async (text: string) => {
+      const cleaned = (text || '').trim();
+      if (!cleaned) return;
 
       // Auto-detect intent if enabled
       let finalIntent = intent as VoiceCommandRequest['intent'];
       if (autoDetectIntent && !finalIntent) {
-        const detected = detectIntent(transcript);
+        const detected = detectIntent(cleaned);
         if (detected) {
           finalIntent = detected;
         } else {
@@ -124,7 +125,7 @@ export default function VoiceCommand({
       setIsSending(true);
       try {
         const payload: VoiceCommandRequest = {
-          transcript: transcript.trim(),
+          transcript: cleaned,
           intent: finalIntent,
           block_id: blockId,
           concept_id: conceptId,
@@ -146,29 +147,63 @@ export default function VoiceCommand({
     [blockId, conceptId, documentId, intent, autoDetectIntent, detectIntent, onCommandSent, onError]
   );
 
-  const { isListening, transcript, isSupported, error, start, stop, reset } = useVoiceRecognition({
-    continuous: true,
-    interimResults: true,
-    onResult: handleResult,
+  const voiceStream = useVoiceStream({
+    onProcessingStart: () => {
+      setIsProcessingStt(true);
+    },
+    onTranscript: (text) => {
+      const t = (text || '').trim();
+      if (!t) return;
+      setIsProcessingStt(false);
+      setTranscript(t);
+      void handleTranscript(t);
+    },
     onError: (err) => {
+      setIsProcessingStt(false);
       onError?.(err);
     },
   });
 
-  if (!isSupported) {
+  const start = useCallback(async () => {
+    if (isConnecting) return;
+    if (isSending) return;
+    setIsProcessingStt(false);
+    try {
+      if (!voiceStream.isConnected) {
+        setIsConnecting(true);
+        await voiceStream.connect({ graphId: 'default', branchId: 'main', pipeline: 'stt' });
+      }
+      await voiceStream.start();
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [isConnecting, isSending, voiceStream.isConnected, voiceStream.connect, voiceStream.start]);
+
+  const stop = useCallback(async () => {
+    await voiceStream.stop();
+  }, [voiceStream.stop]);
+
+  const reset = useCallback(() => {
+    setTranscript('');
+  }, []);
+
+  if (!voiceStream.isSupported) {
     return (
       <div style={{ padding: '12px', background: '#fee', borderRadius: '4px', color: '#c33' }}>
-        Voice recognition is not supported in this browser. Please use Chrome, Edge, or Safari.
+        Voice streaming is not supported in this browser. Please use a recent Chrome, Edge, or Safari.
       </div>
     );
   }
+
+  const isListening = voiceStream.isRecording;
+  const error = voiceStream.error;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         <button
           onClick={isListening ? stop : start}
-          disabled={isSending}
+          disabled={isSending || isConnecting}
           style={{
             padding: '8px 16px',
             borderRadius: '4px',
@@ -179,7 +214,7 @@ export default function VoiceCommand({
             fontWeight: 'bold',
           }}
         >
-          {isListening ? '⏹ Stop' : '🎤 Start'}
+          {isListening ? '⏹ Stop' : (isConnecting ? 'Connecting…' : '🎤 Start')}
         </button>
 
         {!autoDetectIntent && (
@@ -238,6 +273,12 @@ export default function VoiceCommand({
       {taskStatus && (
         <div style={{ padding: '8px', fontSize: '12px', color: '#666' }}>
           Task status: <strong>{taskStatus}</strong>
+        </div>
+      )}
+
+      {isProcessingStt && (
+        <div style={{ padding: '8px', fontSize: '12px', color: '#666' }}>
+          Transcribing…
         </div>
       )}
 

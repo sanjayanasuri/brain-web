@@ -13,6 +13,7 @@ from unified_primitives import (
     AnchorRef,
     ArtifactRef,
     TextOffsetsSelector,
+    TimeRangeSelector,
 )
 
 
@@ -29,6 +30,18 @@ def _as_list(value: Any) -> List[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _format_ms(ms: Optional[int]) -> Optional[str]:
+    if ms is None:
+        return None
+    try:
+        total_seconds = max(0, int(ms) // 1000)
+    except Exception:
+        return None
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    return f"{minutes}:{seconds:02d}"
 
 
 def build_retrieval_citations(
@@ -58,6 +71,72 @@ def build_retrieval_citations(
     """
     citations: List[Dict[str, Any]] = []
     seen_anchor_ids: set[str] = set()
+
+    # --- Voice transcript chunks (cross-modal continuity) ---
+    voice_chunks = _as_list(context.get("voice_transcript_chunks"))
+    for chunk in voice_chunks:
+        if not isinstance(chunk, dict):
+            continue
+
+        chunk_id = chunk.get("chunk_id") or chunk.get("id")
+        if not chunk_id:
+            continue
+
+        role = chunk.get("role") or ""
+        start_ms = chunk.get("start_ms")
+        end_ms = chunk.get("end_ms")
+
+        anchor_json = chunk.get("anchor")
+        if isinstance(anchor_json, dict) and anchor_json.get("anchor_id"):
+            anchor = anchor_json
+            anchor_id = anchor_json.get("anchor_id")
+        else:
+            selector = TimeRangeSelector(
+                start_ms=max(0, int(start_ms or 0)),
+                end_ms=max(1, int(end_ms or (int(start_ms or 0) + 1))),
+            )
+            anchor_obj = AnchorRef.create(
+                artifact=ArtifactRef(
+                    namespace="postgres",
+                    type="voice_transcript_chunk",
+                    id=str(chunk_id),
+                    graph_id=graph_id,
+                    branch_id=branch_id,
+                ),
+                selector=selector,
+                preview=_truncate_preview(chunk.get("content") or ""),
+            )
+            anchor = anchor_obj.model_dump(mode="json")
+            anchor_id = anchor.get("anchor_id")
+
+        if not anchor_id or anchor_id in seen_anchor_ids:
+            continue
+        seen_anchor_ids.add(anchor_id)
+
+        when = _format_ms(start_ms)
+        if role and when:
+            title = f"Voice ({role}) @ {when}"
+        elif role:
+            title = f"Voice ({role})"
+        elif when:
+            title = f"Voice @ {when}"
+        else:
+            title = "Voice"
+
+        citations.append(
+            {
+                "kind": "voice_transcript_chunk",
+                "anchor": anchor,
+                "title": title,
+                "voice_session_id": chunk.get("voice_session_id"),
+                "chunk_id": str(chunk_id),
+                "role": role or None,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+            }
+        )
+        if len(citations) >= limit:
+            return citations
 
     # --- Source chunks (preferred; most "source aware") ---
     chunks = _as_list(context.get("chunks"))
@@ -148,4 +227,3 @@ def build_retrieval_citations(
             return citations
 
     return citations
-

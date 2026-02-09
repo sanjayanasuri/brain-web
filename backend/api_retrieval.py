@@ -8,6 +8,7 @@ from services_intent_router import classify_intent
 from services_retrieval_plans import run_plan
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 from services_unified_citations import build_retrieval_citations
+from services_voice_transcripts import search_voice_transcript_chunks
 from services_logging import log_graphrag_event
 from cache_utils import get_cached, set_cached
 from typing import Dict, Any, List, Optional
@@ -244,9 +245,12 @@ def retrieve_endpoint(
         graph_id, branch_id = get_active_graph_context(session)
     
     # Build cache key (exclude trail_id and focus_* from cache key since they're session-specific)
+    # NOTE: include user/tenant scoping to prevent cross-user leakage.
     message_hash = hashlib.md5(payload.message.encode()).hexdigest()[:8]
-    cache_key = (
-        "retrieve",
+    cache_name = "retrieve"
+    cache_args = (
+        auth.get("tenant_id") or "",
+        auth.get("user_id") or "",
         graph_id or "",
         branch_id or "",
         message_hash,
@@ -261,7 +265,7 @@ def retrieve_endpoint(
     # Try cache first (2 minute TTL for retrieval operations)
     # Skip cache if trail_id or focus_* are provided (session-specific)
     if not payload.trail_id and not payload.focus_concept_id and not payload.focus_quote_id and not payload.focus_page_url:
-        cached_result = get_cached(*cache_key, ttl_seconds=120)
+        cached_result = get_cached(cache_name, *cache_args)
         if cached_result is not None:
             # Convert dict back to RetrievalResult
             try:
@@ -294,6 +298,27 @@ def retrieve_endpoint(
         limit=payload.limit,
         detail_level=payload.detail_level
     )
+
+    # Cross-modal continuity: bring in voice transcript chunks for SELF_KNOWLEDGE retrieval.
+    try:
+        if (
+            intent == "SELF_KNOWLEDGE"
+            and auth.get("user_id")
+            and graph_id
+            and branch_id
+            and isinstance(result.context, dict)
+        ):
+            voice_chunks = search_voice_transcript_chunks(
+                user_id=str(auth["user_id"]),
+                graph_id=str(graph_id),
+                branch_id=str(branch_id),
+                query=payload.message,
+                limit=6,
+            )
+            if voice_chunks:
+                result.context["voice_transcript_chunks"] = voice_chunks
+    except Exception as e:
+        print(f"[Retrieval API] WARNING: Failed to retrieve voice transcripts: {e}")
 
     # Phase C: Build AnchorRef-based citations (do this BEFORE summary transform removes chunks).
     try:
@@ -389,7 +414,7 @@ def retrieve_endpoint(
                 "citations": result.citations,
                 "plan_version": result.plan_version,
             }
-            set_cached(*cache_key, result_dict, ttl_seconds=120)
+            set_cached(cache_name, result_dict, *cache_args, ttl_seconds=120)
         except Exception as e:
             print(f"[Retrieval API] WARNING: Failed to cache result: {e}")
     

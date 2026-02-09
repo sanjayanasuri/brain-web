@@ -15,8 +15,6 @@ from services_graph import (
 from services_resources import get_resources_for_concept
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 from services_logging import log_graphrag_event
-from verticals.base import RetrievalRequest, RetrievalResult
-# Lazy import to avoid circular dependency with verticals.finance.retrieval
 
 
 # ========== Part A: Utility Functions ==========
@@ -780,33 +778,13 @@ def retrieve_graphrag_context(
             try:
                 resources = get_resources_for_concept(session, concept["node_id"])
                 if resources:
-                    # Filter for finance resources
-                    finance_resources = [
-                        r for r in resources
-                        if r.source == "web" and r.metadata and isinstance(r.metadata, dict)
-                    ]
-                    if finance_resources:
-                        for resource in finance_resources[:2]:  # Limit to 2 per concept
-                            if resource.caption:
-                                context_parts.append(f"Resource: {resource.caption[:200]}")  # Truncate long captions
-                            # Include key metadata for finance resources
-                            if resource.metadata:
-                                meta = resource.metadata
-                                if isinstance(meta, dict) and "output" in meta:
-                                    output = meta.get("output", {})
-                                else:
-                                    output = meta
-                                
-                                price_data = output.get("price", {}) or {}
-                                size_data = output.get("size", {}) or {}
-                                if price_data.get("last_price") or size_data.get("market_cap"):
-                                    finance_info = []
-                                    if price_data.get("last_price"):
-                                        finance_info.append(f"Price: {price_data.get('last_price')}")
-                                    if size_data.get("market_cap"):
-                                        finance_info.append(f"Market Cap: {size_data.get('market_cap')}")
-                                    if finance_info:
-                                        context_parts.append(" | ".join(finance_info))
+                    for resource in resources[:2]:
+                        if resource.caption:
+                            context_parts.append(f"Resource: {resource.caption[:200]}")
+                        elif resource.title:
+                            context_parts.append(f"Resource: {resource.title[:200]}")
+                        elif resource.url:
+                            context_parts.append(f"Resource: {resource.url}")
             except Exception as e:
                 # Don't fail retrieval if resource fetching fails
                 print(f"[GraphRAG] WARNING: Failed to fetch resources for concept {concept['node_id']}: {e}")
@@ -880,50 +858,3 @@ def retrieve_graphrag_context(
         "has_evidence": has_evidence,
         "debug": debug_info,
     }
-
-
-def retrieve_context(
-    req: RetrievalRequest,
-    session: Session
-) -> RetrievalResult:
-    """
-    Top-level vertical router for context retrieval.
-    
-    Routes to vertical-specific retrieval based on req.vertical.
-    
-    Args:
-        req: RetrievalRequest with vertical and parameters
-        session: Neo4j session
-    
-    Returns:
-        RetrievalResult with context and metadata
-    """
-    if req.vertical == "finance":
-        # Lazy import to avoid circular dependency
-        from verticals.finance import retrieve as finance_retrieve
-        return finance_retrieve(req, session)
-    else:
-        # General/classic mode: use existing retrieve_graphrag_context
-        result_dict = retrieve_graphrag_context(
-            session=session,
-            graph_id=req.graph_id,
-            branch_id=req.branch_id,
-            question=req.query,
-            community_k=req.max_communities,
-            claims_per_comm=req.max_claims_per_community,
-        )
-        
-        # Adapt to RetrievalResult format
-        return RetrievalResult(
-            mode="graphrag",
-            vertical="general",
-            lens="general",
-            context_text=result_dict["context_text"],
-            meta={
-                "communities": len(result_dict.get("communities", [])),
-                "claims": len(result_dict.get("claims", [])),
-                "concepts": len(result_dict.get("concepts", [])),
-                "edges": len(result_dict.get("edges", [])),
-                "debug": result_dict.get("debug"),
-            }
-        )

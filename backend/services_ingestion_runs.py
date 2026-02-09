@@ -49,20 +49,21 @@ def create_ingestion_run(
     session: Session,
     source_type: str,
     source_label: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> IngestionRun:
     """
     Create a new ingestion run record.
     
     Args:
         session: Neo4j session
-        source_type: Type of ingestion ("LECTURE" | "NOTION" | "FINANCE" | "UPLOAD" | "URL")
-        source_label: Optional label (e.g., lecture title, ticker)
+        source_type: Type of ingestion ("LECTURE" | "NOTION" | "UPLOAD" | "URL")
+        source_label: Optional label (e.g., lecture title)
     
     Returns:
         IngestionRun with run_id and initial status
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
     
     run_id = str(uuid4())
     started_at = datetime.utcnow().isoformat()
@@ -130,6 +131,7 @@ def update_ingestion_run_status(
     error_count: Optional[int] = None,
     errors: Optional[List[str]] = None,
     trigger_community_build: bool = False,
+    tenant_id: Optional[str] = None,
 ) -> None:
     """
     Update an ingestion run's status and summary.
@@ -207,7 +209,7 @@ def update_ingestion_run_status(
         if should_build:
             try:
                 from services_community_build import trigger_community_build
-                graph_id, branch_id = get_active_graph_context(session)
+                graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
                 # Run in background (non-blocking) - use a new session to avoid transaction conflicts
                 from db_neo4j import get_driver
                 driver = get_driver()
@@ -819,4 +821,3 @@ def restore_ingestion_run(
         "restored": restored_counts,
         "skipped": skipped_items,
     }
-

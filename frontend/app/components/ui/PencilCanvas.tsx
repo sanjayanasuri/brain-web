@@ -595,6 +595,19 @@ export default function PencilCanvas({
                 }}>
                     <button
                         onClick={() => {
+                            onIntent?.({ type: 'branch', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl, canvas: pendingLasso.canvas });
+                            setPendingLasso(null);
+                        }}
+                        style={{
+                            padding: '8px 16px', borderRadius: '12px', border: 'none',
+                            background: '#f59e0b', color: '#fff', fontWeight: '600',
+                            cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px'
+                        }}
+                    >
+                        Thread
+                    </button>
+                    <button
+                        onClick={() => {
                             onIntent?.({ type: 'lasso', bounds: pendingLasso.bounds, snippetUrl: pendingLasso.snippetUrl, canvas: pendingLasso.canvas });
                             setPendingLasso(null);
                         }}

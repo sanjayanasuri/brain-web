@@ -29,7 +29,8 @@ async def start_voice_session(
         session_data = await orchestrator.start_session(
             graph_id=payload.graph_id,
             branch_id=payload.branch_id,
-            metadata=payload.metadata
+            metadata=payload.metadata,
+            companion_session_id=payload.companion_session_id
         )
         return session_data
     except Exception as e:

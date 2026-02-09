@@ -110,8 +110,7 @@ def path_is_blocked_in_demo(path: str) -> bool:
         "/notion",
         "/debug",
         "/tests",
-        "/connectors",  # Block connector ingestion endpoints (SEC, News, Prices sync)
-        "/finance",     # Block finance ingestion endpoint
+        "/connectors",  # Block connector ingestion endpoints (if enabled)
     )
     return any(path.startswith(p) for p in blocked_prefixes)
 
@@ -192,5 +191,4 @@ def enforce_demo_mode_request(
 
 def structured_log_line(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-
 

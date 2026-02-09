@@ -96,14 +96,12 @@ export function useGraphData() {
 
                 let sourceType = (link as any).source_type;
                 if (!sourceType && (link as any).relationship_source_id) {
-                    const sourceId = (link as any).relationship_source_id;
-                    if (sourceId.includes('SEC') || sourceId.includes('edgar')) {
-                        sourceType = 'SEC';
-                    } else if (sourceId.includes('IR') || sourceId.includes('investor')) {
-                        sourceType = 'IR';
-                    } else if (sourceId.includes('NEWS') || sourceId.includes('news')) {
-                        sourceType = 'NEWS';
-                    }
+                    const relationshipSourceId = String((link as any).relationship_source_id);
+                    if (relationshipSourceId.startsWith('LECTURE_')) sourceType = 'LECTURE';
+                    else if (relationshipSourceId.startsWith('WEB_')) sourceType = 'WEB';
+                    else if (relationshipSourceId.startsWith('RESOURCE_') || relationshipSourceId.startsWith('RES_')) sourceType = 'RESOURCE';
+                    else if (relationshipSourceId.startsWith('QUOTE_')) sourceType = 'QUOTE';
+                    else if (relationshipSourceId.startsWith('VOICE_')) sourceType = 'VOICE';
                 }
 
                 links.push({

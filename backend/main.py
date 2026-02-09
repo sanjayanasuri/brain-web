@@ -51,9 +51,6 @@ from api_events import router as events_router, sessions_router
 from api_events_replay import router as events_replay_router
 from api_review import router as review_router
 from api_suggestions import router as suggestions_router
-from api_connectors import router as connectors_router
-from api_finance_ingestion import router as finance_ingestion_router
-from api_finance import router as finance_router
 from api_ingestion_runs import router as ingestion_runs_router
 from api_paths import router as paths_router
 from api_quality import router as quality_router
@@ -64,7 +61,9 @@ from api_claims_from_quotes import router as claims_from_quotes_router
 from api_signals import router as signals_router
 from api_voice import router as voice_router
 from api_voice_agent import router as voice_agent_router
+from api_voice_stream import router as voice_stream_router
 from api_note_images import router as note_images_router
+from api_fill import router as fill_router
 from api_extend import router as extend_router
 from api_trails import router as trails_router
 from api_offline import router as offline_router
@@ -92,6 +91,55 @@ from config import REQUEST_TIMEOUT_SECONDS
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("brain_web")
+
+# --- FastAPI/Starlette compatibility (dev/test) ---
+# Some dev environments have Starlette>=0.40 installed where Middleware iterates
+# as (cls, args, kwargs). FastAPI 0.104.x expects (cls, options).
+def _parse_version_tuple(v: str) -> tuple[int, int, int]:
+    parts = []
+    for raw in (v or "").split("."):
+        num = ""
+        for ch in raw:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        parts.append(int(num) if num else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+
+def _ensure_middleware_iter_compat() -> None:
+    try:
+        import fastapi
+        from starlette.middleware import Middleware as StarletteMiddleware
+
+        # Only patch for older FastAPI that unpacks Middleware into 2 values.
+        if _parse_version_tuple(getattr(fastapi, "__version__", "0.0.0")) >= (0, 110, 0):
+            return
+
+        try:
+            _cls, _opts = StarletteMiddleware(object)  # type: ignore[misc]
+            return  # Already compatible
+        except ValueError:
+            pass
+
+        def _iter_fastapi_compat(self):  # type: ignore[no-untyped-def]
+            args = getattr(self, "args", ())
+            if args:
+                raise RuntimeError("Starlette Middleware positional args are not supported with FastAPI<0.110")
+            kwargs = getattr(self, "kwargs", None)
+            if kwargs is None:
+                kwargs = getattr(self, "options", {})
+            return iter((self.cls, kwargs))
+
+        StarletteMiddleware.__iter__ = _iter_fastapi_compat  # type: ignore[assignment]
+    except Exception:
+        return
+
+
+_ensure_middleware_iter_compat()
 
 # --- Dev-only route introspection helpers ---
 # These are intentionally simple and only enabled outside production.
@@ -280,7 +328,6 @@ app.include_router(sessions_router)
 app.include_router(events_replay_router)
 app.include_router(review_router)
 app.include_router(suggestions_router)
-app.include_router(finance_router)
 app.include_router(paths_router)
 app.include_router(quality_router)
 # Web ingestion router is always included but has local-only guard
@@ -292,10 +339,13 @@ app.include_router(quotes_router)
 app.include_router(claims_from_quotes_router)
 # Phase D: Whiteboard/photo note images
 app.include_router(note_images_router)
+# Phase E: /fill command router
+app.include_router(fill_router)
 # Learning State Engine: Signals and Voice
 app.include_router(signals_router)
 app.include_router(voice_router)
 app.include_router(voice_agent_router)
+app.include_router(voice_stream_router)
 # Phase 3: Extend system
 app.include_router(extend_router)
 # Phase 4: Trails system
@@ -343,8 +393,6 @@ app.include_router(notion_router)
 if debug_router:
     app.include_router(debug_router)
 app.include_router(tests_router)
-app.include_router(connectors_router)
-app.include_router(finance_ingestion_router)
 app.include_router(ingestion_runs_router)
 
 
@@ -632,4 +680,3 @@ app.add_middleware(
 @app.get("/")
 def read_root():
     return {"status": "ok", "message": "Brain Web backend is running"}
-

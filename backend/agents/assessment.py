@@ -101,7 +101,7 @@ class AssessmentAgent:
     def _call_llm(self, system_prompt: str, messages: List[Dict], json_mode: bool = False) -> str:
         headers = {
             "Content-Type": "application/json",
-            "Authorization": `Bearer {self.api_key}`
+            "Authorization": f"Bearer {self.api_key}",
         }
         
         payload = {

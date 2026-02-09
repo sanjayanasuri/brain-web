@@ -368,46 +368,5 @@ describe('/api/brain-web/chat route', () => {
       expect(data.retrievalMeta).not.toHaveProperty('chunks');
     });
 
-    it('should handle finance vertical with lens parameter', async () => {
-      const mockRetrievalResponse = {
-        intent: 'DEFINITION_OVERVIEW',
-        trace: [],
-        context: {
-          focus_entities: [],
-          claims: [],
-          top_claims: [],
-          top_sources: [],
-          retrieval_meta: {
-            schema_version: 1,
-            communities: 0,
-            claims: 0,
-            concepts: 0,
-            edges: 0,
-            claimIds: [],
-            communityIds: [],
-            topClaims: []
-          }
-        },
-        plan_version: 'intent_plans_v1'
-      };
-
-      mockGraphRagFetchSequence(mockRetrievalResponse);
-
-      const request = new NextRequest('http://localhost/api/brain-web/chat', {
-        method: 'POST',
-        body: JSON.stringify({
-          message: 'AAPL: revenue trends',
-          mode: 'graphrag',
-          vertical: 'finance',
-          lens: 'earnings'
-        })
-      });
-
-      const response = await POST(request);
-      expect(response.status).toBe(200);
-
-      const data = await response.json();
-      expect(data).toHaveProperty('answer');
-    });
   });
 });

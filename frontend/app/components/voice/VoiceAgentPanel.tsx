@@ -1,172 +1,178 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useVoiceRecognition } from '../../hooks/useVoiceRecognition';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useVoiceStream } from '../../hooks/useVoiceStream';
 import GlassCard from '../ui/GlassCard';
 import Button from '../ui/Button';
-import { VoiceSession, VoiceUsage } from '../../types/voice';
-import { startVoiceSession, stopVoiceSession, getInteractionContext } from '../../api-client';
+import { VoiceSession } from '../../types/voice';
+import { startVoiceSession, stopVoiceSession, getTutorProfile, setTutorProfile, type TutorProfile } from '../../api-client';
+import { AUDIENCE_MODES, VOICE_IDS } from '../study/TutorProfileSettings';
+import { Settings, X } from 'lucide-react';
 
 interface VoiceAgentPanelProps {
   graphId: string;
   branchId: string;
+  sessionId?: string;
 }
 
-const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) => {
+const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, sessionId }) => {
   const [session, setSession] = useState<VoiceSession | null>(null);
-  const [usage, setUsage] = useState<VoiceUsage | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [agentResponse, setAgentResponse] = useState<string>('');
   const [visualizerLevels, setVisualizerLevels] = useState<number[]>(new Array(15).fill(4));
   const [isScribeMode, setIsScribeMode] = useState(false);
-  const [mappedEntities, setMappedEntities] = useState<any[]>([]);
+  const [, setMappedEntities] = useState<any[]>([]);
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent' | 'system', text: string }[]>([]);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
+  const [isStudyMode, setIsStudyMode] = useState(false);
+  const [currentTaskType, setCurrentTaskType] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsQueueRef = useRef<string[]>([]);
+  const ttsIsPlayingRef = useRef(false);
 
-  const processTranscript = useCallback(async (transcript: string) => {
-    if (!session) return;
+  const [showSettings, setShowSettings] = useState(false);
+  const [profile, setProfile] = useState<TutorProfile | null>(null);
 
-    console.log("VoiceAgent: Processing transcript:", transcript);
-    setIsProcessing(true);
-    setError(null);
+  useEffect(() => {
+    getTutorProfile().then(p => setProfile(p)).catch(console.error);
+  }, []);
 
-    // Append user message AND a placeholder for the agent to the history
-    setChatHistory(prev => [...prev, { role: 'user', text: transcript }]);
-    // We'll use the 'isProcessing' state to show the thinking indicator at the bottom instead of a history item
-
+  const handleUpdateProfile = async (updates: Partial<TutorProfile>) => {
+    if (!profile) return;
+    const newProfile = { ...profile, ...updates };
+    setProfile(newProfile);
     try {
-      // Clear interim transcript in the hook
-      voice.reset();
+      await setTutorProfile(newProfile);
+    } catch (e) {
+      console.error("Failed to update profile", e);
+    }
+  };
 
-      const data = await getInteractionContext(graphId, branchId, transcript, isScribeMode, session.session_id);
-      console.log("VoiceAgent: API Response:", data);
+  const stopStreamedAudio = useCallback(() => {
+    try {
+      ttsAudioRef.current?.pause();
+    } catch { }
+    ttsAudioRef.current = null;
+    ttsIsPlayingRef.current = false;
+    try {
+      for (const url of ttsQueueRef.current) URL.revokeObjectURL(url);
+    } catch { }
+    ttsQueueRef.current = [];
+    setIsSpeaking(false);
+  }, []);
 
-      let finalReply = data.agent_response || `I've noted that.`;
+  const playNextStreamedAudio = useCallback(() => {
+    if (ttsIsPlayingRef.current) return;
+    const url = ttsQueueRef.current.shift();
+    if (!url) return;
 
-      if (data.is_fog_clearing) {
-        finalReply = `Insight: ${finalReply}`;
+    const audio = new Audio(url);
+    ttsAudioRef.current = audio;
+    ttsIsPlayingRef.current = true;
+    setIsSpeaking(true);
+
+    audio.onended = () => {
+      try { URL.revokeObjectURL(url); } catch { }
+      ttsAudioRef.current = null;
+      ttsIsPlayingRef.current = false;
+      if (ttsQueueRef.current.length === 0) {
+        setIsSpeaking(false);
+      }
+      playNextStreamedAudio();
+    };
+    audio.onerror = () => {
+      try { URL.revokeObjectURL(url); } catch { }
+      ttsAudioRef.current = null;
+      ttsIsPlayingRef.current = false;
+      setIsSpeaking(false);
+      playNextStreamedAudio();
+    };
+
+    audio.play().catch(() => {
+      try { URL.revokeObjectURL(url); } catch { }
+      ttsAudioRef.current = null;
+      ttsIsPlayingRef.current = false;
+      setIsSpeaking(false);
+      playNextStreamedAudio();
+    });
+  }, []);
+
+  const voiceStream = useVoiceStream({
+    onProcessingStart: () => {
+      setIsProcessing(true);
+      if (isSpeaking) {
+        stopStreamedAudio();
+        voiceStream.interrupt();
+      }
+    },
+    onTranscript: (text) => {
+      const t = (text || '').trim();
+      if (!t) return;
+      setChatHistory(prev => [...prev, { role: 'user', text: t }]);
+    },
+    onAgentReply: (payload) => {
+      setIsProcessing(false);
+      const shouldSpeak = payload?.should_speak !== false;
+      let reply = shouldSpeak ? String(payload?.agent_response || '') : '';
+      if (payload?.is_fog_clearing && reply) {
+        reply = `Insight: ${reply}`;
         const insightAction = { type: 'CREATE_NODE', name: 'New Insight', node_type: 'understanding' };
         setMappedEntities(prev => [insightAction, ...prev].slice(0, 15));
-      } else if (data.is_eureka) {
-        finalReply = `Breakthrough: ${finalReply}`;
+      } else if (payload?.is_eureka && reply) {
+        reply = `Breakthrough: ${reply}`;
       }
 
-      setAgentResponse(finalReply);
-      setChatHistory(prev => [...prev.filter(m => m.text !== "Thinking..."), { role: 'agent', text: finalReply }]);
-
-      if (data.actions && data.actions.length > 0) {
-        setMappedEntities(prev => [...data.actions, ...prev].slice(0, 15));
+      // Study Task Detection
+      if (reply.includes('[STUDY_TASK:')) {
+        const match = reply.match(/\[STUDY_TASK:\s*(\w+)\]/);
+        if (match) {
+          setIsStudyMode(true);
+          setCurrentTaskType(match[1]);
+          // Clean up the bracket from spoken text if necessary, 
+          // though usually handled by TTS being smart or filtered earlier.
+        }
+      } else if (reply && isStudyMode) {
+        // If agent replies without a new task and we were in study mode, 
+        // it might be evaluation. We keep it active for now or reset on yield.
       }
-    } catch (err: any) {
-      console.error("VoiceAgent: Process failed:", err);
-      setError("Communication failed. Please try again.");
-      setChatHistory(prev => {
-        const historyCopy = prev.filter(m => m.text !== "Thinking...");
-        return [...historyCopy, { role: 'system', text: "Error: Could not reach the agent." }];
-      });
-      // Safety restart if error happens
-      if (session) voice.start();
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [session, graphId, branchId, isScribeMode]);
 
-  const handleVoiceResult = useCallback((transcript: string, isFinal: boolean) => {
-    console.log(`VoiceAgent: Result [final=${isFinal}]: "${transcript}"`);
-
-    // Only reset retry count if we actually hear something meaningful
-    if (transcript.trim().length > 2) {
-      setRetryCount(0);
-      setError(null);
-    }
-
-    // Interruption logic: If the agent is speaking and the user starts talking, shut the agent up
-    if (isSpeaking && transcript.trim().length > 3) {
-      console.log("VoiceAgent: Interrupted by user! Stopping speech.");
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        window.speechSynthesis.cancel();
+      if (reply) setChatHistory(prev => [...prev, { role: 'agent', text: reply }]);
+      if (Array.isArray(payload?.actions) && payload.actions.length > 0) {
+        setMappedEntities(prev => [...payload.actions, ...prev].slice(0, 15));
       }
-      setIsSpeaking(false);
-      return;
-    }
-
-    if (isFinal && transcript.trim() && !isProcessing && !isSpeaking) {
-      processTranscript(transcript);
-    }
-  }, [processTranscript, isProcessing, isSpeaking]);
-
-  const voiceOptions = useMemo(() => ({
-    continuous: true,
-    interimResults: true,
-    onResult: handleVoiceResult,
-    onStart: () => {
-      // Don't reset retryCount here, wait for actual results
     },
-    onError: (err: any) => {
-      console.error("VoiceAgent: Recognition error:", err);
-      // If we hit a network error, increment the backoff counter
-      if (err.message.includes('network')) {
-        setRetryCount(prev => prev + 1);
-      }
+    onTtsAudio: (audioBuf, meta) => {
+      try {
+        const mime = meta?.format === 'mp3' ? 'audio/mpeg' : 'audio/mpeg';
+        const url = URL.createObjectURL(new Blob([audioBuf], { type: mime }));
+        ttsQueueRef.current.push(url);
+        playNextStreamedAudio();
+      } catch { }
+    },
+    onError: (err) => {
+      setIsProcessing(false);
       setError(err.message);
     }
-  }), [handleVoiceResult]);
-
-  const voice = useVoiceRecognition(voiceOptions);
+  });
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [chatHistory, voice.transcript, isProcessing]);
-
-  const speak = useCallback((text: string) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-
-    console.log("VoiceAgent: Speaking:", text);
-    // Keep mic on - do not call voice.stop() here
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.05;
-
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => {
-      setIsSpeaking(false);
-    };
-    utterance.onerror = (t) => {
-      console.error("VoiceAgent: Speech synthesis error:", t);
-      setIsSpeaking(false);
-    };
-
-    window.speechSynthesis.speak(utterance);
-  }, []);
-
-  useEffect(() => {
-    if (agentResponse) {
-      speak(agentResponse);
-      // Reset after starting to speak so we don't repeat
-      setAgentResponse('');
-    }
-  }, [agentResponse, speak]);
+  }, [chatHistory, isProcessing, voiceStream.isRecording]);
 
   // Visualizer Animation - Simulation based on state
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    const isListening = voice.isListening;
-    const transcriptLength = voice.transcript.length;
+    const isListening = voiceStream.isRecording;
 
     if (isListening || isSpeaking || isProcessing) {
       interval = setInterval(() => {
         setVisualizerLevels(new Array(15).fill(0).map(() => {
           if (isSpeaking) return Math.random() * 40 + 20;
           if (isProcessing) return Math.random() * 15 + 10;
-          // Listening: animate based on whether there is any transcript activity
-          if (transcriptLength > 0) return Math.random() * 30 + 10;
+          if (isListening) return Math.random() * 30 + 10;
           return Math.random() * 5 + 5; // Flatline-ish but idle pulse
         }));
       }, 100);
@@ -174,36 +180,26 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
       setVisualizerLevels(new Array(15).fill(4));
     }
     return () => clearInterval(interval);
-  }, [voice.isListening, isSpeaking, isProcessing, voice.transcript.length]);
-
-  useEffect(() => {
-    const isListening = voice.isListening;
-    // Don't auto-retry if we've failed too many times OR if we aren't in a session
-    // We cap it at 6 for "auto" and let the user click "Try Again" after that
-    if (session && !isListening && !isSpeaking && !isProcessing && retryCount < 6) {
-      // Exponential backoff: starts at 3s, then 6s, 12s, 24s...
-      const delay = Math.min(3000 * Math.pow(2, retryCount), 45000);
-      const timer = setTimeout(() => {
-        if (!voice.isListening && !isSpeaking && !isProcessing) {
-          console.log(`VoiceAgent: Auto-restarting listening (attempt ${retryCount + 1})...`);
-          voice.start();
-        }
-      }, delay);
-      return () => clearTimeout(timer);
-    }
-  }, [session, voice.isListening, isSpeaking, isProcessing, voice.start, retryCount]);
+  }, [voiceStream.isRecording, isSpeaking, isProcessing]);
 
   const startSession = async () => {
     try {
       setError(null);
-      const data = await startVoiceSession(graphId, branchId);
+      setIsProcessing(false);
+      stopStreamedAudio();
+      const data = await startVoiceSession(graphId, branchId, undefined, sessionId);
       setSession(data);
-      voice.start();
-      const initialGreeting = isScribeMode
-        ? "Scribe Mode active. Tell me what you're learning and I'll map it to the graph."
-        : "I'm here. What should we explore together?";
-      setAgentResponse(initialGreeting);
       setChatHistory([{ role: 'system', text: "Session started. I'm listening." }]);
+
+      await voiceStream.connect({
+        graphId,
+        branchId,
+        sessionId: data.session_id,
+        isScribeMode,
+        pipeline: 'agent',
+      });
+      // Hands-free: start recording immediately (server-side VAD will segment utterances).
+      await voiceStream.start();
     } catch (err: any) {
       console.error(err);
       setError(`Failed to start session: ${err.message}`);
@@ -212,50 +208,109 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
 
   const stopSession = async () => {
     if (!session) return;
-    voice.stop();
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
+    voiceStream.disconnect();
+    stopStreamedAudio();
     try {
       await stopVoiceSession(session.session_id, 0, 0);
       setSession(null);
-      setAgentResponse('');
+      setIsProcessing(false);
       setChatHistory(prev => [...prev, { role: 'system', text: "Session ended." }]);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const currentStatus = isProcessing ? 'THINKING' : (isSpeaking ? 'SPEAKING' : (voice.isListening ? 'LISTENING' : (retryCount >= 6 ? 'OFFLINE' : (retryCount > 0 ? 'RECONNECTING' : 'IDLE'))));
+  const currentStatus = isProcessing ? 'THINKING' : (isSpeaking ? 'SPEAKING' : (voiceStream.isRecording ? 'LISTENING' : 'IDLE'));
+  const hasLiveInput = voiceStream.isRecording;
+
+  const ensureVoiceStreamConnected = useCallback(async () => {
+    if (!session) return false;
+    if (voiceStream.isConnected) return true;
+    await voiceStream.connect({ graphId, branchId, sessionId: session.session_id, isScribeMode, pipeline: 'agent' });
+    return true;
+  }, [session, voiceStream.isConnected, voiceStream.connect, graphId, branchId, isScribeMode]);
+
+  const handleListenStart = useCallback(async () => {
+    if (!session) return;
+    setError(null);
+    setIsProcessing(false);
+    const ok = await ensureVoiceStreamConnected();
+    if (!ok) return;
+    if (isSpeaking) {
+      stopStreamedAudio();
+      voiceStream.interrupt();
+    }
+    await voiceStream.start();
+  }, [session, ensureVoiceStreamConnected, isSpeaking, stopStreamedAudio, voiceStream.interrupt, voiceStream.start]);
+
+  const handleListenStop = useCallback(async () => {
+    if (!session) return;
+    if (!voiceStream.isRecording) return;
+    await voiceStream.stop();
+  }, [session, voiceStream.isRecording, voiceStream.stop]);
 
   return (
-    <GlassCard className={`voice-agent-panel ${session ? 'session-active' : ''} status-${currentStatus.toLowerCase()}`}>
-      {retryCount >= 6 && (
-        <div className="network-fail-overlay">
-          <div className="fail-icon" style={{ fontSize: '14px', fontWeight: 700 }}>Offline</div>
-          <p>Connectivity Issue</p>
-          <span style={{ fontSize: '11px', color: '#666', marginBottom: '12px' }}>Speech service is unresponsive.</span>
-          <Button variant="secondary" onClick={() => { setRetryCount(0); voice.start(); }} style={{ borderRadius: '12px', fontSize: '12px', padding: '8px 20px' }}>
-            Reconnect Mic
-          </Button>
-        </div>
-      )}
+    <GlassCard className={`voice-agent-panel ${session ? 'session-active' : ''} ${isStudyMode ? 'study-mode' : ''} status-${currentStatus.toLowerCase()}`}>
       <div className="voice-agent-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <div className="status-indicator" />
           <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>{session ? session.agent_name : 'Voice Companion'}</h3>
         </div>
-        {session && (
-          <span className="live-tag">
-            {isScribeMode ? 'SCRIBING' : currentStatus}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {session && (
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {isStudyMode && (
+                <span className="live-tag study-tag">
+                  STUDY MODE: {currentTaskType?.toUpperCase()}
+                </span>
+              )}
+              <span className="live-tag">
+                {isScribeMode ? 'SCRIBING' : currentStatus}
+              </span>
+            </div>
+          )}
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', color: '#666', display: 'flex', alignItems: 'center' }}
+            title="Settings"
+          >
+            <Settings size={16} />
+          </button>
+        </div>
       </div>
 
+      {showSettings && profile && (
+        <div className="settings-overlay">
+          <div className="settings-header">
+            <h4>Voice Settings</h4>
+            <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={14} /></button>
+          </div>
+
+          <div className="setting-row">
+            <label>Audience</label>
+            <select
+              value={profile.audience_mode}
+              onChange={(e) => handleUpdateProfile({ audience_mode: e.target.value as any })}
+            >
+              {AUDIENCE_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
+          <div className="setting-row">
+            <label>Tone</label>
+            <select
+              value={profile.voice_id}
+              onChange={(e) => handleUpdateProfile({ voice_id: e.target.value as any })}
+            >
+              {VOICE_IDS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
       <div className="activity-stage">
-        <div className={`pulse-orb ${voice.transcript.length > 0 ? 'is-hearing' : ''}`}>
+        <div className={`pulse-orb ${hasLiveInput ? 'is-hearing' : ''}`}>
           <div className="orb-core"></div>
-          {(isSpeaking || voice.transcript.length > 0) && <div className="orb-ripple"></div>}
+          {(isSpeaking || hasLiveInput) && <div className="orb-ripple"></div>}
         </div>
 
         <div className="visualizer-overlay">
@@ -266,7 +321,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
               style={{
                 height: `${level}px`,
                 transform: `rotate(${i * (360 / 15)}deg) translateY(-42px)`,
-                background: isSpeaking ? '#3b82f6' : (isProcessing ? '#fbbf24' : (voice.transcript.length > 0 ? '#10b981' : '#ccc')),
+                background: isSpeaking ? '#3b82f6' : (isProcessing ? '#fbbf24' : (hasLiveInput ? '#10b981' : '#ccc')),
                 opacity: 0.7,
                 transition: 'height 80ms ease-out, background 0.3s ease'
               }}
@@ -282,7 +337,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
       )}
 
       <div className="transcript-area" ref={scrollRef}>
-        {chatHistory.length === 0 && !voice.transcript && !isProcessing && (
+        {chatHistory.length === 0 && !hasLiveInput && !isProcessing && (
           <div className="empty-history">
             <p>Ready when you are...</p>
           </div>
@@ -297,10 +352,10 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
           </div>
         ))}
 
-        {voice.transcript && (
+        {voiceStream.isRecording && (
           <div className="transcript-box user-box interim">
-            <span className="label">YOU (SPEAKING)</span>
-            <p className="message-text">{voice.transcript}</p>
+            <span className="label">YOU (RECORDING)</span>
+            <p className="message-text">…</p>
           </div>
         )}
 
@@ -333,9 +388,25 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
             </Button>
           </div>
         ) : (
-          <Button variant="secondary" onClick={stopSession} style={{ width: '100%', borderRadius: '12px' }}>
-            Go to Sleep
-          </Button>
+          <div style={{ width: '100%', display: 'flex', gap: '10px' }}>
+            <Button
+              variant="primary"
+              onClick={(e) => {
+                e.preventDefault();
+                if (voiceStream.isRecording) {
+                  void handleListenStop();
+                } else {
+                  void handleListenStart();
+                }
+              }}
+              style={{ flex: 1, borderRadius: '12px' }}
+            >
+              {voiceStream.isRecording ? 'Stop Listening' : 'Start Listening'}
+            </Button>
+            <Button variant="secondary" onClick={stopSession} style={{ borderRadius: '12px' }}>
+              Sleep
+            </Button>
+          </div>
         )}
       </div>
 
@@ -364,6 +435,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
         .status-listening .live-tag { background: rgba(16, 185, 129, 0.1); color: #10b981; }
         .status-speaking .live-tag { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
         .status-thinking .live-tag { background: rgba(251, 191, 36, 0.1); color: #fbbf24; }
+        .study-tag { background: rgba(155, 89, 182, 0.1) !important; color: #9b59b6 !important; border: 1px solid rgba(155, 89, 182, 0.2); }
         .status-reconnecting .live-tag { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
         .status-idle .live-tag { background: rgba(0,0,0,0.05); color: #999; }
 
@@ -425,6 +497,10 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
         .status-thinking .orb-core { 
           background: #fbbf24; 
           animation: breath 1.5s infinite ease-in-out; 
+        }
+        .session-active.study-mode .orb-core {
+          background: #9b59b6;
+          box-shadow: 0 0 30px rgba(155, 89, 182, 0.4);
         }
         .status-reconnecting .orb-core {
           background: #ef4444;
@@ -579,6 +655,57 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId }) 
         }
         input:checked + .mode-slider { background-color: #3b82f6; }
         input:checked + .mode-slider:before { transform: translateX(14px); }
+
+        .settings-overlay {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(0,0,0,0.05);
+            animation: slideDown 0.2s ease-out;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        .settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #eee;
+        }
+        .settings-header h4 {
+            margin: 0;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+            font-weight: 700;
+        }
+        .setting-row {
+            margin-bottom: 8px;
+        }
+        .setting-row:last-child { margin-bottom: 0; }
+        .setting-row label {
+            display: block;
+            font-size: 10px;
+            font-weight: 600;
+            margin-bottom: 3px;
+            color: #555;
+            text-transform: uppercase;
+        }
+        .setting-row select {
+            width: 100%;
+            padding: 4px 6px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            font-size: 11px;
+            background: white;
+            color: #333;
+        }
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
       `}</style>
     </GlassCard>
   );

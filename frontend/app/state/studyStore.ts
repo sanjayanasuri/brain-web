@@ -6,12 +6,15 @@
 
 import { create } from 'zustand';
 
+import { AnchorRef } from '../types/unified';
+
 export interface Excerpt {
     excerpt_id: string;
     content: string;
     source_type: string;
     source_id: string;
     relevance_score: number;
+    anchor?: AnchorRef;
     metadata?: {
         url?: string;
         title?: string;

@@ -3,6 +3,8 @@
 import React, { useRef, useEffect } from 'react';
 import { useChatState } from '../graph/hooks/useChatState';
 import { Concept } from '../../api-client';
+import { useGraph } from '../graph/GraphContext';
+import { normalizeEvidence } from '../../types/evidence';
 
 interface ConceptChatProps {
     concept: Concept;
@@ -12,6 +14,7 @@ interface ConceptChatProps {
 export default function ConceptChat({ concept, onClose }: ConceptChatProps) {
     // specialized local chat state for this concept
     const { state, actions } = useChatState();
+    const graph = useGraph();
     const chatStreamRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -51,8 +54,8 @@ export default function ConceptChat({ concept, onClose }: ConceptChatProps) {
         if (!question.trim()) return;
 
         // Add user message immediately
-        const userMsgId = Date.now().toString();
-        actions.addChatMessage({
+        const userMsgId = `concept-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const pendingMessage = {
             id: userMsgId,
             question: question,
             answer: '',
@@ -64,58 +67,66 @@ export default function ConceptChat({ concept, onClose }: ConceptChatProps) {
             usedNodes: [],
             suggestedActions: [],
             retrievalMeta: null,
-            evidenceUsed: []
-        });
+            evidenceUsed: [],
+            anchorCitations: [],
+        };
+        actions.addChatMessage(pendingMessage);
 
         actions.setChatLoading(true);
         actions.setLoadingStage('Thinking...');
 
         try {
-            // We need to call the chat API here. 
-            // Since useChatState is just state management, we must implement the fetch.
-            // We'll use a new endpoint or the standard chat endpoint with context.
+            // Include the pending message to avoid stale state when the reducer hasn't applied yet.
+            const chatHistoryForAPI = [...state.chatHistory, pendingMessage].map(msg => ({
+                id: msg.id,
+                question: msg.question,
+                answer: msg.answer,
+                timestamp: msg.timestamp,
+            }));
 
-            // TODO: Implement actual API call. For now, we simulate or reuse fetch logic.
-            // Ideally we should move the fetch logic to a hook or utility we can reuse.
-            // But for now let's construct a simple request.
-
-            const response = await fetch('/api/brain-web/chat', { // using generic endpoint
+            const response = await fetch('/api/brain-web/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message: question,
-                    context: {
-                        concept_id: concept.node_id,
-                        concept_name: concept.name,
-                        mode: 'concept_clarification'
-                    }
+                    mode: 'graphrag',
+                    graph_id: graph.activeGraphId,
+                    branch_id: graph.activeBranchId,
+                    chatHistory: chatHistoryForAPI,
+                    focus_concept_id: concept.node_id,
                 })
             });
 
-            if (!response.ok) throw new Error('Failed to fetch response');
+            if (!response.ok) {
+                const errorText = await response.text().catch(() => '');
+                throw new Error(errorText || 'Failed to fetch response');
+            }
 
             const data = await response.json();
+            if (data?.error) throw new Error(data.error);
 
-            // Update the last message with the answer
-            // Actually addChatMessage adds a NEW paired message (User+AI).
-            // But here we added User message first (empty answer).
-            // We should replace it or update it. 
-            // useChatState structure assumes { question, answer } pair per 'ChatMessage'.
-            // So we update the existing one.
+            const normalizedEvidence = data.evidence ? normalizeEvidence(data.evidence) : (data.evidenceUsed || []);
 
-            // Wait, useChatState doesn't have "updateMessage". 
-            // It has "addChatMessage". 
-            // So standard flow is: 
-            // 1. Don't add user message yet? Or add it and then update.
-            // 2. ChatMessage defines "question" and "answer". 
-
-            // Let's remove the optimistic one and add the full one?
-            // Or better: useChatInteraction hook if it exists?
-
-            // Let's look at useChatInteraction.ts first before commiting this file.
+            actions.updateChatMessage(userMsgId, {
+                answer: data.answer || '',
+                answerId: data.answerId || null,
+                answerSections: data.answer_sections || data.sections || null,
+                suggestedQuestions: data.suggestedQuestions || [],
+                usedNodes: data.usedNodes || [],
+                suggestedActions: data.suggestedActions || [],
+                retrievalMeta: data.retrievalMeta || null,
+                evidenceUsed: normalizedEvidence,
+                anchorCitations: data.anchorCitations || data.citations || [],
+                extractedGraphData: data.graph_data,
+                webSearchResults: data.webSearchResults,
+            });
         } catch (error) {
             console.error(error);
+            const errMsg = error instanceof Error ? error.message : 'Failed to fetch response';
+            actions.updateChatMessage(userMsgId, { answer: `❌ Error: ${errMsg}` });
+        } finally {
             actions.setChatLoading(false);
+            actions.setLoadingStage('');
         }
     };
 

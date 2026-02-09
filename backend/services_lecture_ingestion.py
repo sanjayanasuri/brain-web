@@ -175,7 +175,7 @@ def chunk_text(text: str, max_chars: int = 1200, overlap: int = 150) -> List[Dic
 
 
 def find_concept_by_name_and_domain(
-    session: Session, name: str, domain: Optional[str]
+    session: Session, name: str, domain: Optional[str], tenant_id: Optional[str] = None
 ) -> Optional[Concept]:
     """
     Find a concept by name (case-insensitive) and optionally domain.
@@ -191,6 +191,7 @@ def find_concept_by_name_and_domain(
         MATCH (c:Concept)
         WHERE toLower(trim(c.name)) = $normalized_name
           AND c.domain = $domain
+          AND (c.tenant_id = $tenant_id OR ($tenant_id IS NULL AND c.tenant_id IS NULL))
         RETURN c.node_id AS node_id,
                c.name AS name,
                c.domain AS domain,
@@ -205,7 +206,7 @@ def find_concept_by_name_and_domain(
                c.last_updated_by AS last_updated_by
         LIMIT 1
         """
-        result = session.run(query, normalized_name=normalized_name, domain=domain)
+        result = session.run(query, normalized_name=normalized_name, domain=domain, tenant_id=tenant_id)
         record = result.single()
         if record:
             return _normalize_concept_from_db(record.data())
@@ -214,6 +215,7 @@ def find_concept_by_name_and_domain(
     query = """
     MATCH (c:Concept)
     WHERE toLower(trim(c.name)) = $normalized_name
+      AND (c.tenant_id = $tenant_id OR ($tenant_id IS NULL AND c.tenant_id IS NULL))
     RETURN c.node_id AS node_id,
            c.name AS name,
            c.domain AS domain,
@@ -228,7 +230,7 @@ def find_concept_by_name_and_domain(
            c.last_updated_by AS last_updated_by
     LIMIT 1
     """
-    result = session.run(query, normalized_name=normalized_name)
+    result = session.run(query, normalized_name=normalized_name, tenant_id=tenant_id)
     record = result.single()
     if record:
         return _normalize_concept_from_db(record.data())
@@ -720,6 +722,7 @@ def run_lecture_extraction_engine(
     run_id: str,
     lecture_id: str,
     event_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Extract concepts and relationships from lecture text using LLM.
@@ -732,6 +735,7 @@ def run_lecture_extraction_engine(
         run_id: Ingestion run ID
         lecture_id: Lecture ID
         event_callback: Optional callback function(event_type, event_data) for real-time events
+        tenant_id: Optional tenant_id for multi-tenant isolation
     
     Returns:
         Dict with nodes_created, nodes_updated, links_created, node_name_to_id,
@@ -768,7 +772,7 @@ def run_lecture_extraction_engine(
         
         # Check if node exists
         existing = find_concept_by_name_and_domain(
-            session, extracted_node.name, extracted_node.domain
+            session, extracted_node.name, extracted_node.domain, tenant_id=tenant_id
         )
         
         if existing:
@@ -868,7 +872,7 @@ def run_lecture_extraction_engine(
                 created_by_run_id=run_id,
             )
             
-            new_concept = create_concept(session, concept_payload)
+            new_concept = create_concept(session, concept_payload, tenant_id=tenant_id)
             nodes_created.append(new_concept)
             concepts_created += 1
             node_name_to_id[normalized_name] = new_concept.node_id
@@ -930,6 +934,7 @@ def run_lecture_extraction_engine(
                 source_id_meta=lecture_id,
                 rationale=extracted_link.explanation,
                 ingestion_run_id=run_id,
+                tenant_id=tenant_id,
             )
             links_created.append({
                 "source_id": source_id,
@@ -1025,6 +1030,7 @@ def run_chunk_and_claims_engine(
     known_concepts: List[Concept],
     include_existing_concepts: bool = True,
     pdf_chunks: Optional[List[Dict[str, Any]]] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Chunk text and extract claims from chunks.
@@ -1049,9 +1055,14 @@ def run_chunk_and_claims_engine(
     chunk_ids = []
     claim_ids = []
     
+    # Resolve graph context for upserts
+    # We need the graph_id because upsert_source_chunk/claim operate on specific graphs (RAG)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
+    print(f"[Chunk Ingestion] Using Graph: {graph_id}, Branch: {branch_id}")
+    
     print(f"[Lecture Ingestion] Creating chunks and extracting claims")
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    # graph_id, branch_id already resolved above with tenant_id
     
     # Use PDF chunks if provided, otherwise chunk the text normally
     if pdf_chunks:
@@ -1240,6 +1251,7 @@ def run_segments_and_analogies_engine(
     node_name_to_id: Dict[str, str],
     nodes_created: List[Concept],
     nodes_updated: List[Concept],
+    tenant_id: Optional[str] = None,
 ) -> List[LectureSegment]:
     """
     Extract segments and analogies from lecture text.
@@ -1281,6 +1293,7 @@ def run_segments_and_analogies_engine(
             start_time_sec=seg.get("start_time_sec"),
             end_time_sec=seg.get("end_time_sec"),
             style_tags=seg.get("style_tags"),
+            tenant_id=tenant_id,
         )
         segment_id = seg_db["segment_id"]
         
@@ -1311,6 +1324,7 @@ def run_segments_and_analogies_engine(
                         session=session,
                         segment_id=segment_id,
                         concept_id=concept_id,
+                        tenant_id=tenant_id,
                     )
                     continue
             
@@ -1319,6 +1333,7 @@ def run_segments_and_analogies_engine(
                 session=session,
                 name=concept_name,
                 domain=domain,
+                tenant_id=tenant_id,
             )
             if existing_concept:
                 covered_concept_models.append(existing_concept)
@@ -1326,6 +1341,7 @@ def run_segments_and_analogies_engine(
                     session=session,
                     segment_id=segment_id,
                     concept_id=existing_concept.node_id,
+                    tenant_id=tenant_id,
                 )
             else:
                 # Try without domain restriction for fuzzy matching
@@ -1333,6 +1349,7 @@ def run_segments_and_analogies_engine(
                     session=session,
                     name=concept_name,
                     domain=None,  # Search across all domains
+                    tenant_id=tenant_id,
                 )
                 if existing_concept_any_domain:
                     covered_concept_models.append(existing_concept_any_domain)
@@ -1340,6 +1357,7 @@ def run_segments_and_analogies_engine(
                         session=session,
                         segment_id=segment_id,
                         concept_id=existing_concept_any_domain.node_id,
+                        tenant_id=tenant_id,
                     )
                 else:
                     # Concept might not exist yet, but we'll link if it does
@@ -1356,12 +1374,14 @@ def run_segments_and_analogies_engine(
                 label=an["label"],
                 description=an.get("description"),
                 tags=[domain] if domain else [],
+                tenant_id=tenant_id,
             )
             analogy_models.append(Analogy(**analogy_db))
             link_segment_to_analogy(
                 session=session,
                 segment_id=segment_id,
                 analogy_id=analogy_db["analogy_id"],
+                tenant_id=tenant_id,
             )
             # OPTIONAL: later, we can also relate Analogy -> Concept here
         
@@ -1391,6 +1411,7 @@ def ingest_lecture(
     lecture_text: str,
     domain: Optional[str],
     existing_lecture_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
 ) -> LectureIngestResult:
     """
     Main function to ingest a lecture:
@@ -1408,6 +1429,7 @@ def ingest_lecture(
         lecture_text: Full text of the lecture
         domain: Optional domain hint
         existing_lecture_id: Optional lecture_id if lecture already exists (for save-first approach)
+        tenant_id: Optional tenant_id for multi-tenant isolation
     
     Returns:
         LectureIngestResult with created/updated nodes and links
@@ -1417,24 +1439,34 @@ def ingest_lecture(
         session=session,
         source_type="LECTURE",
         source_label=lecture_title,
+        tenant_id=tenant_id,
     )
     run_id = ingestion_run.run_id
     
     # Use existing lecture_id if provided, otherwise generate new one
     lecture_id = existing_lecture_id or f"LECTURE_{uuid4().hex[:8].upper()}"
     
+    # ===== MULTI-TENANCY: Enforce Graph Scoping =====
+    # Ensure we are operating in the correct graph for this tenant
+    # This acts as the "Bouncer" - ensuring all subsequent ops use the correct graph_id
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
+    print(f"[Lecture Ingestion] Tenant: {tenant_id} -> Graph: {graph_id}")
+
     # ===== OPTIMIZATION: Check for Content Hash Match =====
     normalized_text = normalize_text_for_hash(lecture_text)
     content_hash = hashlib.sha256(normalized_text.encode('utf-8')).hexdigest()
     
     # Check for existing lecture with same content hash
+    # STRICT AUTH: Only match lectures owned by this tenant (or global if tenant_id is None)
+    # Note: We filter by tenant_id on the Lecture node to prevent deduping against another user's lecture
     check_query = """
     MATCH (l:Lecture)
     WHERE l.content_hash = $content_hash
+      AND (l.tenant_id = $tenant_id OR ($tenant_id IS NULL AND l.tenant_id IS NULL))
     RETURN l.lecture_id AS lecture_id
     LIMIT 1
     """
-    result = session.run(check_query, content_hash=content_hash)
+    result = session.run(check_query, content_hash=content_hash, tenant_id=tenant_id)
     record = result.single()
     
     if record and not existing_lecture_id:
@@ -1447,6 +1479,7 @@ def ingest_lecture(
             run_id=run_id,
             status="SKIPPED",
             summary_counts={"skipped_reason": "content_unchanged_hash_match"},
+            tenant_id=tenant_id,
         )
         
         return LectureIngestResult(
@@ -1464,6 +1497,7 @@ def ingest_lecture(
         )
 
     # Step 1: Run extraction engine
+    # TODO: Pass tenant_id to extraction engine if it creates nodes directly
     extraction_result = run_lecture_extraction_engine(
         session=session,
         lecture_title=lecture_title,
@@ -1471,6 +1505,7 @@ def ingest_lecture(
         domain=domain,
         run_id=run_id,
         lecture_id=lecture_id,
+        tenant_id=tenant_id,  # Pass through
     )
     
     nodes_created = extraction_result["nodes_created"]
@@ -1493,6 +1528,7 @@ def ingest_lecture(
         run_id=run_id,
         known_concepts=all_concepts,
         include_existing_concepts=True,
+        tenant_id=tenant_id,  # Pass through
     )
     
     # Merge errors from chunk/claims engine
@@ -1501,15 +1537,18 @@ def ingest_lecture(
     # Step 3: Create/Update Lecture node (only if it doesn't exist)
     if existing_lecture_id:
         print(f"[Lecture Ingestion] Using existing Lecture node: {lecture_id}")
-        # Just verify it exists
+        # Just verify it exists and belongs to tenant
         query = """
         MATCH (l:Lecture {lecture_id: $lecture_id})
+        WHERE l.tenant_id = $tenant_id OR ($tenant_id IS NULL AND l.tenant_id IS NULL)
         SET l.content_hash = $content_hash 
         RETURN l.lecture_id AS lecture_id
         """
-        result = session.run(query, lecture_id=lecture_id, content_hash=content_hash)
+        result = session.run(query, lecture_id=lecture_id, content_hash=content_hash, tenant_id=tenant_id)
         if not result.single():
-            raise ValueError(f"Lecture {lecture_id} not found - cannot process AI for non-existent lecture")
+            # If not found, it might exist but belong to another tenant
+            # This is a security check failure in the "Bouncer" model
+            raise ValueError(f"Lecture {lecture_id} not found or access denied (Tenant mismatch)")
     else:
         print(f"[Lecture Ingestion] Creating Lecture node: {lecture_id}")
         query = """
@@ -1520,7 +1559,9 @@ def ingest_lecture(
                       l.level = $level,
                       l.estimated_time = $estimated_time,
                       l.slug = $slug,
-                      l.content_hash = $content_hash
+                      l.content_hash = $content_hash,
+                      l.tenant_id = $tenant_id,
+                      l.created_at = datetime()
         RETURN l.lecture_id AS lecture_id
         """
         session.run(
@@ -1532,7 +1573,8 @@ def ingest_lecture(
             level=None,
             estimated_time=None,
             slug=None,
-            content_hash=content_hash
+            target_content=content_hash,
+            tenant_id=tenant_id
         )
     
     # Step 4: Run segments and analogies engine
@@ -1545,6 +1587,7 @@ def ingest_lecture(
         node_name_to_id=node_name_to_id,
         nodes_created=nodes_created,
         nodes_updated=nodes_updated,
+        tenant_id=tenant_id,
     )
 
     # Mirror lecture sections into Postgres for lecture linking.
@@ -1578,6 +1621,7 @@ def ingest_lecture(
         },
         error_count=len(errors) if errors else None,
         errors=errors if errors else None,
+        tenant_id=tenant_id,
     )
     
     # Extract enrichment fields
@@ -1602,6 +1646,7 @@ def ingest_lecture(
 def ingest_handwriting(
     session: Session,
     payload: HandwritingIngestRequest,
+    tenant_id: Optional[str] = None,
 ) -> LectureIngestResult:
     """
     Ingest a handwriting image using GPT-4o Vision.
@@ -1668,7 +1713,8 @@ def ingest_handwriting(
                 title=payload.lecture_title or data.get("lecture_title", "Handwritten Notes"),
                 description=f"Ingested from handwriting/sketch. Generated on {data.get('lecture_title', '')}",
                 raw_text=transcribed_text,
-            )
+            ),
+            tenant_id=tenant_id,
         )
         
         # Now use the existing run_lecture_extraction_engine-like logic to save concepts/links
@@ -1749,6 +1795,25 @@ def ingest_handwriting(
                     link_segment_to_concept(session, seg.segment_id, cid)
             
             segments_persisted.append(seg)
+            
+        # 4. Persist Layout Blocks (for BBox support)
+        from models import LectureBlockUpsert
+        from services_lecture_blocks import upsert_lecture_blocks
+        
+        blocks_data = data.get("blocks", [])
+        if blocks_data:
+            block_upserts = []
+            for i, blk in enumerate(blocks_data):
+                block_upserts.append(LectureBlockUpsert(
+                    block_index=i,
+                    block_type=blk.get("block_type", "paragraph"),
+                    text=blk.get("text", "") or "",
+                    bbox=blk.get("box_2d")
+                ))
+            
+            if block_upserts:
+                upsert_lecture_blocks(session, lecture.lecture_id, block_upserts)
+                print(f"[Handwriting Ingestion] Persisted {len(block_upserts)} layout blocks with bboxes")
 
         return LectureIngestResult(
             lecture_id=lecture.lecture_id,

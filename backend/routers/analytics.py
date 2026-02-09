@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Optional
 from pydantic import BaseModel
 
-from auth import get_current_user, User
+from auth import require_auth
 from services.analytics import (
     get_user_trends,
     get_concept_mastery,
@@ -87,7 +87,7 @@ class Recommendation(BaseModel):
 @router.get("/trends", response_model=List[PerformanceTrend])
 async def get_performance_trends(
     days: int = 30,
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Get performance trends over time.
@@ -98,10 +98,14 @@ async def get_performance_trends(
     Returns:
         List of daily performance records
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         trends = get_user_trends(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id,
+            user_id=str(user_id),
+            tenant_id=str(tenant_id),
             days=days
         )
         return trends
@@ -112,7 +116,7 @@ async def get_performance_trends(
 @router.get("/mastery", response_model=List[ConceptMastery])
 async def get_mastery_levels(
     limit: Optional[int] = None,
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Get concept mastery levels.
@@ -123,10 +127,14 @@ async def get_mastery_levels(
     Returns:
         List of concepts with mastery scores
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         mastery = get_concept_mastery(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id,
+            user_id=str(user_id),
+            tenant_id=str(tenant_id),
             limit=limit
         )
         return mastery
@@ -136,7 +144,7 @@ async def get_mastery_levels(
 
 @router.get("/velocity", response_model=LearningVelocity)
 async def get_velocity(
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Get learning velocity (rate of improvement).
@@ -144,10 +152,14 @@ async def get_velocity(
     Returns:
         Learning velocity metrics
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         velocity = get_learning_velocity(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id
+            user_id=str(user_id),
+            tenant_id=str(tenant_id)
         )
         return velocity
     except Exception as e:
@@ -156,7 +168,7 @@ async def get_velocity(
 
 @router.get("/weak-areas", response_model=WeakAreas)
 async def get_weak_areas(
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Identify weak areas (concepts and task types).
@@ -164,10 +176,14 @@ async def get_weak_areas(
     Returns:
         Weak concepts and task types
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         weak_areas = identify_weak_areas(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id
+            user_id=str(user_id),
+            tenant_id=str(tenant_id)
         )
         return weak_areas
     except Exception as e:
@@ -176,7 +192,7 @@ async def get_weak_areas(
 
 @router.get("/stats", response_model=SessionStats)
 async def get_stats(
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Get aggregate session statistics.
@@ -184,10 +200,14 @@ async def get_stats(
     Returns:
         Session stats (total, completion rate, avg score, etc.)
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         stats = get_session_stats(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id
+            user_id=str(user_id),
+            tenant_id=str(tenant_id)
         )
         return stats
     except Exception as e:
@@ -197,7 +217,7 @@ async def get_stats(
 @router.get("/recommendations", response_model=List[Recommendation])
 async def get_recommendations(
     limit: int = 5,
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Get personalized recommendations.
@@ -208,10 +228,14 @@ async def get_recommendations(
     Returns:
         List of active recommendations
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         recs = get_active_recommendations(
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id,
+            user_id=str(user_id),
+            tenant_id=str(tenant_id),
             limit=limit
         )
         return recs
@@ -222,7 +246,7 @@ async def get_recommendations(
 @router.post("/recommendations/{rec_id}/dismiss")
 async def dismiss_recommendation(
     rec_id: str,
-    current_user: User = Depends(get_current_user)
+    auth: dict = Depends(require_auth),
 ):
     """
     Dismiss a recommendation.
@@ -233,11 +257,15 @@ async def dismiss_recommendation(
     Returns:
         Success message
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
         dismiss_rec(
             recommendation_id=rec_id,
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id
+            user_id=str(user_id),
+            tenant_id=str(tenant_id)
         )
         return {"message": "Recommendation dismissed"}
     except Exception as e:

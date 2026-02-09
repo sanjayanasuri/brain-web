@@ -12,6 +12,7 @@ This script:
 4. Optionally removes old cache files
 """
 import sys
+import argparse
 from pathlib import Path
 
 # Add backend to path
@@ -29,6 +30,15 @@ from services_search_qdrant import embed_text, _build_concept_text
 from config import OPENAI_API_KEY
 
 def main():
+    parser = argparse.ArgumentParser(description="Migrate concept embeddings to Qdrant (tenant-scoped).")
+    parser.add_argument(
+        "--tenant-id",
+        dest="tenant_id",
+        default=None,
+        help="Tenant ID to scope the migration (required for bouncer-safe Qdrant payloads).",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("Qdrant Migration Script")
     print("=" * 60)
@@ -47,7 +57,7 @@ def main():
     print("\n[2/4] Fetching all concepts from Neo4j...")
     session = next(get_neo4j_session())
     try:
-        all_concepts = get_all_concepts(session)
+        all_concepts = get_all_concepts(session, tenant_id=args.tenant_id)
         print(f"✓ Found {len(all_concepts)} concepts")
     finally:
         session.close()
@@ -73,6 +83,10 @@ def main():
             embedding = embed_text(concept_text)
             
             # Prepare point for Qdrant
+            tenant_id = getattr(concept, "tenant_id", None) or args.tenant_id
+            if not tenant_id:
+                raise ValueError("Missing tenant_id for concept; re-run with --tenant-id and ensure GraphSpace.tenant_id is set.")
+
             points.append({
                 "concept_id": concept.node_id,
                 "embedding": embedding,
@@ -81,6 +95,7 @@ def main():
                     "domain": concept.domain or "",
                     "graph_id": getattr(concept, "graph_id", "default"),
                     "type": concept.type or "",
+                    "tenant_id": tenant_id,
                 }
             })
             

@@ -2,7 +2,7 @@
 Unified ingestion kernel models for artifact processing.
 
 This module defines the core contracts for ingestion: policies, actions, inputs, and results.
-These models provide a consistent interface across different ingestion sources (webpages, Notion pages, finance docs, lectures, manual entries).
+These models provide a consistent interface across different ingestion sources (webpages, Notion pages, lectures, manual entries, PDFs).
 """
 
 from typing import Optional, List, Dict, Any, Literal
@@ -29,9 +29,9 @@ class IngestionActions(BaseModel):
 
 class ArtifactInput(BaseModel):
     """Input specification for ingesting an artifact."""
-    artifact_type: Literal["webpage", "notion_page", "finance_doc", "lecture", "manual", "pdf"]
+    artifact_type: Literal["webpage", "notion_page", "lecture", "manual", "pdf"]
     source_url: Optional[str] = None
-    source_id: Optional[str] = None  # Notion page id, EDGAR accession, etc.
+    source_id: Optional[str] = None  # Notion page id, external identifier, etc.
     title: Optional[str] = None
     domain: Optional[str] = None
     text: str
@@ -60,4 +60,3 @@ class IngestionResult(BaseModel):
     updated_concept_ids: List[str] = Field(default_factory=list)
     created_relationship_count: int = 0
     created_claim_ids: List[str] = Field(default_factory=list)
-

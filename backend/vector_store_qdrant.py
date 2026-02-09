@@ -74,6 +74,12 @@ def upsert_concept_embedding(
         embedding: Embedding vector
         metadata: Additional metadata (name, domain, graph_id, etc.)
     """
+    # --- Bouncer Layer (Hard Multi-tenant Isolation) ---
+    # Every point MUST carry tenant_id so all searches can be hardware-filtered.
+    tenant_id = metadata.get("tenant_id")
+    if not tenant_id:
+        raise ValueError("Qdrant payload metadata must include non-empty 'tenant_id'")
+
     client = get_client()
     ensure_collection(dimension=len(embedding))
     
@@ -94,7 +100,8 @@ def semantic_search(
     limit: int = 10,
     graph_id: Optional[str] = None,
     domain: Optional[str] = None,
-    min_score: float = 0.0
+    min_score: float = 0.0,
+    tenant_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Perform semantic search over concept embeddings.
@@ -105,6 +112,7 @@ def semantic_search(
         graph_id: Optional filter by graph_id
         domain: Optional filter by domain
         min_score: Minimum similarity score (0-1)
+        tenant_id: REQUIRED filter by tenant_id (security boundary). This is non-negotiable.
     
     Returns:
         List of results with concept_id, score, and metadata
@@ -112,23 +120,20 @@ def semantic_search(
     client = get_client()
     ensure_collection(dimension=len(query_embedding))
     
-    # Build filter if needed
-    query_filter = None
-    if graph_id or domain:
-        conditions = []
-        if graph_id:
-            conditions.append(
-                FieldCondition(key="graph_id", match=MatchValue(value=graph_id))
-            )
-        if domain:
-            conditions.append(
-                FieldCondition(key="domain", match=MatchValue(value=domain))
-            )
-        if len(conditions) > 1:
-            from qdrant_client.models import Filter, Condition
-            query_filter = Filter(must=conditions)
-        elif len(conditions) == 1:
-            query_filter = Filter(must=conditions[0])
+    # --- Bouncer Layer (Hard Multi-tenant Isolation) ---
+    # All searches MUST include a tenant_id filter at the database level.
+    if not tenant_id:
+        raise ValueError("tenant_id is required for Qdrant semantic_search()")
+
+    conditions = [
+        FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
+    ]
+    if graph_id:
+        conditions.append(FieldCondition(key="graph_id", match=MatchValue(value=graph_id)))
+    if domain:
+        conditions.append(FieldCondition(key="domain", match=MatchValue(value=domain)))
+
+    query_filter = Filter(must=conditions)
     
     # Perform search
     results = client.search(
@@ -171,6 +176,12 @@ def batch_upsert(
     """
     if not points:
         return
+
+    # --- Bouncer Layer (Hard Multi-tenant Isolation) ---
+    # Enforce tenant_id on every point to guarantee safe filtered search.
+    missing_tenant = [p.get("concept_id") for p in points if not (p.get("metadata") or {}).get("tenant_id")]
+    if missing_tenant:
+        raise ValueError(f"Qdrant batch_upsert points missing metadata.tenant_id: {missing_tenant[:5]}")
     
     client = get_client()
     
@@ -213,7 +224,7 @@ def get_collection_info() -> Dict[str, Any]:
 
 
 # Migration helper
-def migrate_from_neo4j(session, batch_size: int = 100):
+def migrate_from_neo4j(session, batch_size: int = 100, tenant_id: Optional[str] = None):
     """
     Migrate embeddings from Neo4j to Qdrant.
     
@@ -224,7 +235,7 @@ def migrate_from_neo4j(session, batch_size: int = 100):
     from services_graph import get_all_concepts
     
     print("[Migration] Fetching all concepts from Neo4j...")
-    all_concepts = get_all_concepts(session)
+    all_concepts = get_all_concepts(session, tenant_id=tenant_id)
     print(f"[Migration] Found {len(all_concepts)} concepts")
     
     points = []
@@ -242,6 +253,7 @@ def migrate_from_neo4j(session, batch_size: int = 100):
                 "domain": concept.domain or "",
                 "graph_id": getattr(concept, "graph_id", "default"),
                 "type": concept.type or "",
+                "tenant_id": getattr(concept, "tenant_id", None) or tenant_id,
             }
         })
         

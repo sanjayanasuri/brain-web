@@ -60,6 +60,10 @@ class Concept (BaseModel):
     node_key: Optional[str] = None  
     url_slug: Optional[str] = None
     
+    # Multi-tenancy
+    tenant_id: Optional[str] = None
+    graph_id: Optional[str] = None
+    
     # Mastery Tracking
     mastery_level: int = 0  # 0-100
     last_assessed: Optional[datetime] = None
@@ -148,6 +152,8 @@ class LectureCreate(BaseModel):
     estimated_time: Optional[int] = None
     slug: Optional[str] = None
     raw_text: Optional[str] = None  # Full lecture content
+    metadata_json: Optional[str] = None  # JSON metadata (e.g., markdown for Notion pages)
+    annotations: Optional[str] = None  # JSON string of canvas strokes for persistent drawings
 
 class LectureUpdate(BaseModel):
     title: Optional[str] = None
@@ -187,7 +193,7 @@ they are designed by the lecture step class.
 class LectureStep(BaseModel):
     lecture_id: str
     step_order: int
-    node: node
+    concept: Concept
 
 """
 we have seperate payload shapes for different parts of the ingestion flow.
@@ -309,6 +315,7 @@ class LectureBlock(BaseModel):
     block_index: int
     block_type: str
     text: str
+    bbox: Optional[Dict[str, float]] = None
 
 
 class LectureBlockUpsert(BaseModel):
@@ -316,6 +323,7 @@ class LectureBlockUpsert(BaseModel):
     block_index: int
     block_type: str
     text: str
+    bbox: Optional[Dict[str, float]] = None
 
 
 class LectureBlocksUpsertRequest(BaseModel):
@@ -417,8 +425,6 @@ class GraphRAGContextRequest(BaseModel):
     message: str
     graph_id: str
     branch_id: str
-    vertical: Optional[str] = "general"  # "general" | "finance"
-    lens: Optional[str] = None  # For finance: "fundamentals" | "catalysts" | "competition" | "risks" | "narrative"
     recency_days: Optional[int] = None
     evidence_strictness: Optional[str] = "medium"  # "high" | "medium" | "low"
     include_proposed_edges: Optional[bool] = True
@@ -428,6 +434,7 @@ class GraphRAGContextResponse(BaseModel):
     context_text: str
     debug: Optional[Dict[str, Any]] = None
     meta: Optional[Dict[str, Any]] = None  # Vertical-specific metadata
+    citations: Optional[List[Dict[str, Any]]] = None
 
 
 # ---------- Intent-Based Retrieval Models ----------
@@ -590,10 +597,6 @@ class ReminderPreferences(BaseModel):
         "enabled": False,
         "cadence_days": 3
     }
-    finance_stale: Dict[str, Any] = {
-        "enabled": False,
-        "cadence_days": 7
-    }
 
 
 class ConversationSummary(BaseModel):
@@ -621,7 +624,7 @@ class UIPreferences(BaseModel):
     """
     UI preferences for lens system and other UI customizations.
     """
-    active_lens: str = "NONE"  # "NONE" | "LEARNING" | "FINANCE"
+    active_lens: str = "NONE"  # "NONE" | "LEARNING"
     reminders: ReminderPreferences = Field(default_factory=ReminderPreferences)
 
 
@@ -923,8 +926,8 @@ class IngestionRun(BaseModel):
     """Represents a single ingestion run that tags all created/updated objects."""
     run_id: str  # UUID
     graph_id: str
-    source_type: str  # "LECTURE" | "NOTION" | "FINANCE" | "UPLOAD" | "URL"
-    source_label: Optional[str] = None  # e.g., lecture title, Notion page title, ticker
+    source_type: str  # "LECTURE" | "NOTION" | "UPLOAD" | "URL"
+    source_label: Optional[str] = None  # e.g., lecture title, Notion page title
     status: str  # "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED"
     started_at: str  # ISO timestamp
     completed_at: Optional[str] = None  # ISO timestamp
@@ -943,96 +946,6 @@ class IngestionRunCreate(BaseModel):
     source_label: Optional[str] = None
     created_at: str
     focused_node_id: Optional[str] = None
-
-
-# ---------- Evidence Snapshot & Change Event Models ----------
-
-class EvidenceSnapshotCreate(BaseModel):
-    """Request to create a new EvidenceSnapshot."""
-    source_document_id: str
-    source_type: str  # "EDGAR" | "IR" | "NEWS_RSS" | "BROWSER_USE" | "UPLOAD"
-    source_url: str
-    content_hash: str  # SHA256 of normalized content
-    normalized_title: str
-    normalized_published_at: Optional[int] = None  # Unix timestamp (ms)
-    extraction_version: str = "v1"
-    company_id: Optional[str] = None  # Concept node_id for Company
-    tenant_id: Optional[str] = None
-    graph_id: Optional[str] = None
-    metadata_json: Optional[str] = None  # Stringified JSON
-
-
-class EvidenceSnapshot(BaseModel):
-    """EvidenceSnapshot node model."""
-    snapshot_id: str  # UUID
-    source_document_id: str
-    source_type: str
-    source_url: str
-    observed_at: int  # Unix timestamp (ms)
-    content_hash: str
-    normalized_title: str
-    normalized_published_at: Optional[int] = None
-    extraction_version: str
-    company_id: Optional[str] = None
-    tenant_id: Optional[str] = None
-    graph_id: str
-    metadata_json: Optional[str] = None
-
-
-class ChangeEventCreate(BaseModel):
-    """Request to create a new ChangeEvent."""
-    source_url: str
-    change_type: str  # "NEW_DOCUMENT" | "CONTENT_UPDATED" | "METADATA_UPDATED" | "REMOVED" | "REDIRECTED"
-    prev_snapshot_id: Optional[str] = None
-    new_snapshot_id: str
-    diff_summary: Optional[str] = None
-    severity: str = "MEDIUM"  # "LOW" | "MEDIUM" | "HIGH"
-    company_id: Optional[str] = None
-    tenant_id: Optional[str] = None
-    graph_id: Optional[str] = None
-    metadata_json: Optional[str] = None
-
-
-class ChangeEvent(BaseModel):
-    """ChangeEvent node model."""
-    change_event_id: str  # UUID
-    source_url: str
-    detected_at: int  # Unix timestamp (ms)
-    change_type: str
-    prev_snapshot_id: Optional[str] = None
-    new_snapshot_id: str
-    diff_summary: Optional[str] = None
-    severity: str
-    company_id: Optional[str] = None
-    tenant_id: Optional[str] = None
-    graph_id: str
-    metadata_json: Optional[str] = None
-
-
-class ChangeDetectionResult(BaseModel):
-    """Result of change detection between two snapshots."""
-    prev_hash: Optional[str] = None
-    new_hash: str
-    diff_summary: Optional[str] = None
-    change_type: str  # "NEW_DOCUMENT" | "CONTENT_UPDATED" | "METADATA_UPDATED"
-    severity: str  # "LOW" | "MEDIUM" | "HIGH"
-    prev_snapshot_id: Optional[str] = None
-
-
-class FinanceSourceRun(BaseModel):
-    """Represents a single acquisition run for a company."""
-    run_id: str  # UUID
-    company_id: str  # Concept node_id
-    ticker: str
-    sources_attempted: List[str]  # ["edgar", "ir", "news"]
-    sources_succeeded: List[str]
-    sources_failed: List[str]
-    snapshots_created: int
-    change_events_created: int
-    started_at: str  # ISO timestamp
-    completed_at: Optional[str] = None  # ISO timestamp
-    status: str  # "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED"
-    errors: Optional[List[str]] = None
 
 
 class SnapshotListResponse(BaseModel):
@@ -1545,6 +1458,7 @@ class VoiceSessionCreate(BaseModel):
     graph_id: str
     branch_id: str
     metadata: Optional[Dict[str, Any]] = None
+    companion_session_id: Optional[str] = None
 
 
 class UsageLog(BaseModel):

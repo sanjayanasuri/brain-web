@@ -3,6 +3,7 @@
 
 import React from 'react';
 import { Excerpt } from '../../state/studyStore';
+import { AnchorRef } from '../../types/unified';
 
 interface CitationsProps {
     excerpts: Excerpt[];
@@ -34,98 +35,159 @@ export default function Citations({ excerpts, onCitationClick }: CitationsProps)
             </h4>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {excerpts.slice(0, 5).map((excerpt, idx) => (
-                    <button
-                        key={excerpt.excerpt_id}
-                        onClick={() => onCitationClick?.(excerpt)}
-                        style={{
-                            padding: '12px 14px',
-                            background: 'white',
-                            border: '1px solid rgba(0,0,0,0.06)',
-                            borderRadius: '12px',
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                            transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-                            boxShadow: '0 2px 6px rgba(0,0,0,0.02)',
-                        }}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.borderColor = '#3b82f6';
-                            e.currentTarget.style.boxShadow = '0 8px 24px rgba(59, 130, 246, 0.12)';
-                            e.currentTarget.style.transform = 'translateY(-1px)';
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.borderColor = 'rgba(0,0,0,0.06)';
-                            e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.02)';
-                            e.currentTarget.style.transform = 'translateY(0)';
-                        }}
-                    >
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            marginBottom: '8px',
-                        }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{
-                                    fontSize: '9px',
-                                    fontWeight: '700',
-                                    color: 'white',
-                                    background: getSourceColor(excerpt.source_type),
-                                    padding: '2px 6px',
-                                    borderRadius: '100px',
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.4px',
-                                }}>
-                                    {excerpt.source_type}
-                                </span>
-                            </div>
-                            <span style={{
-                                fontSize: '11px',
-                                fontWeight: '500',
-                                color: 'var(--ink-subtle)',
-                            }}>
-                                {Math.round(excerpt.relevance_score * 100)}% Match
-                            </span>
-                        </div>
+                {excerpts.slice(0, 5).map((excerpt, idx) => {
+                    const anchor = excerpt.anchor;
+                    const isVoice = anchor?.artifact.type === 'voice_transcript_chunk';
+                    const isWhiteboard = anchor?.selector.kind === 'bbox' && anchor?.snippet_image_data_url;
 
-                        <p style={{
-                            margin: 0,
-                            fontSize: '13px',
-                            color: 'var(--ink)',
-                            lineHeight: '1.5',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            display: '-webkit-box',
-                            WebkitLineClamp: 3,
-                            WebkitBoxOrient: 'vertical',
-                            fontWeight: 450,
-                        }}>
-                            {excerpt.content}
-                        </p>
+                    // Format display title/content based on anchor
+                    let displayTitle = excerpt.source_type;
+                    let displayContent = excerpt.content;
+                    let timestamp = '';
+                    let snippetImage = '';
 
-                        {excerpt.metadata?.title && (
+                    if (isVoice && anchor?.selector.kind === 'time_range') {
+                        const ms = anchor.selector.start_ms;
+                        const minutes = Math.floor(ms / 60000);
+                        const seconds = Math.floor((ms % 60000) / 1000);
+                        timestamp = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                        displayTitle = `Voice ${timestamp ? `@ ${timestamp}` : ''}`;
+                    } else if (isWhiteboard) {
+                        displayTitle = "Handwritten Note";
+                        snippetImage = anchor.snippet_image_data_url || '';
+                        displayContent = excerpt.content || "Handwritten selection";
+                    } else if (excerpt.metadata?.title) {
+                        displayTitle = excerpt.metadata.title;
+                    }
+
+                    return (
+                        <button
+                            key={excerpt.excerpt_id}
+                            onClick={() => onCitationClick?.(excerpt)}
+                            style={{
+                                padding: '12px 14px',
+                                background: 'white',
+                                border: '1px solid rgba(0,0,0,0.06)',
+                                borderRadius: '12px',
+                                cursor: 'pointer',
+                                textAlign: 'left',
+                                transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                                boxShadow: '0 2px 6px rgba(0,0,0,0.02)',
+                                width: '100%',
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.borderColor = '#3b82f6';
+                                e.currentTarget.style.boxShadow = '0 8px 24px rgba(59, 130, 246, 0.12)';
+                                e.currentTarget.style.transform = 'translateY(-1px)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.borderColor = 'rgba(0,0,0,0.06)';
+                                e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.02)';
+                                e.currentTarget.style.transform = 'translateY(0)';
+                            }}
+                        >
                             <div style={{
-                                marginTop: '10px',
-                                paddingTop: '8px',
-                                borderTop: '1px solid rgba(0,0,0,0.03)',
-                                fontSize: '11px',
-                                color: 'var(--ink-light)',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '4px',
+                                justifyContent: 'space-between',
+                                marginBottom: '8px',
                             }}>
-                                <span style={{ opacity: 0.6 }}>From</span>
-                                <span style={{ fontWeight: 500 }}>{excerpt.metadata.title}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <span style={{
+                                        fontSize: '9px',
+                                        fontWeight: '700',
+                                        color: 'white',
+                                        background: getSourceColor(excerpt.source_type, isVoice, !!isWhiteboard),
+                                        padding: '2px 6px',
+                                        borderRadius: '100px',
+                                        textTransform: 'uppercase',
+                                        letterSpacing: '0.4px',
+                                    }}>
+                                        {isVoice ? 'Voice' : isWhiteboard ? 'Ink' : excerpt.source_type}
+                                    </span>
+                                    {timestamp && (
+                                        <span style={{
+                                            fontSize: '10px',
+                                            fontWeight: '600',
+                                            color: 'var(--ink-light)',
+                                            background: 'rgba(0,0,0,0.04)',
+                                            padding: '2px 5px',
+                                            borderRadius: '4px',
+                                        }}>
+                                            {timestamp}
+                                        </span>
+                                    )}
+                                </div>
+                                <span style={{
+                                    fontSize: '11px',
+                                    fontWeight: '500',
+                                    color: 'var(--ink-subtle)',
+                                }}>
+                                    {Math.round(excerpt.relevance_score * 100)}% Match
+                                </span>
                             </div>
-                        )}
-                    </button>
-                ))}
+
+                            {snippetImage && (
+                                <div style={{
+                                    marginBottom: '8px',
+                                    borderRadius: '6px',
+                                    overflow: 'hidden',
+                                    border: '1px solid rgba(0,0,0,0.05)',
+                                    background: '#f8f8f8',
+                                    display: 'flex',
+                                    justifyContent: 'center',
+                                    padding: '4px'
+                                }}>
+                                    <img
+                                        src={snippetImage}
+                                        alt="Handwritten note"
+                                        style={{ maxHeight: '60px', width: 'auto', maxWidth: '100%' }}
+                                    />
+                                </div>
+                            )}
+
+                            <p style={{
+                                margin: 0,
+                                fontSize: '13px',
+                                color: 'var(--ink)',
+                                lineHeight: '1.5',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                display: '-webkit-box',
+                                WebkitLineClamp: snippetImage ? 2 : 3,
+                                WebkitBoxOrient: 'vertical',
+                                fontWeight: 450,
+                            }}>
+                                {displayContent}
+                            </p>
+
+                            {/* Source Title Footer */}
+                            {!isVoice && !isWhiteboard && displayTitle && (
+                                <div style={{
+                                    marginTop: '10px',
+                                    paddingTop: '8px',
+                                    borderTop: '1px solid rgba(0,0,0,0.03)',
+                                    fontSize: '11px',
+                                    color: 'var(--ink-light)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                }}>
+                                    <span style={{ opacity: 0.6 }}>From</span>
+                                    <span style={{ fontWeight: 500 }}>{displayTitle}</span>
+                                </div>
+                            )}
+                        </button>
+                    );
+                })}
             </div>
         </div>
     );
 }
 
-function getSourceColor(sourceType: string): string {
+function getSourceColor(sourceType: string, isVoice: boolean = false, isWhiteboard: boolean = false): string {
+    if (isVoice) return '#ec4899'; // Pink for voice
+    if (isWhiteboard) return '#2563eb'; // Blue for ink
     switch (sourceType) {
         case 'quote':
             return '#3b82f6';
@@ -135,6 +197,8 @@ function getSourceColor(sourceType: string): string {
             return '#10b981';
         case 'note':
             return '#f59e0b';
+        case 'voice_transcript_chunk':
+            return '#ec4899';
         default:
             return '#6b7280';
     }

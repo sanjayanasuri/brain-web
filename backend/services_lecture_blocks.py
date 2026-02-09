@@ -37,6 +37,7 @@ def upsert_lecture_blocks(
     SET b.block_index = $block_index,
         b.block_type = $block_type,
         b.text = $text,
+        b.bbox = $bbox,
         b.updated_at = datetime(),
         b.on_branches = CASE
           WHEN b.on_branches IS NULL THEN [$branch_id]
@@ -49,11 +50,14 @@ def upsert_lecture_blocks(
            b.lecture_id AS lecture_id,
            b.block_index AS block_index,
            b.block_type AS block_type,
-           b.text AS text
+           b.text AS text,
+           b.bbox AS bbox
     """
 
     for block in blocks:
         block_id = _normalize_block_id(block.block_id)
+        # Serialize bbox to string if needed, or rely on Neo4j driver map support
+        # Neo4j supports Maps, so passing dict is fine
         record = session.run(
             query,
             graph_id=graph_id,
@@ -63,9 +67,11 @@ def upsert_lecture_blocks(
             block_index=block.block_index,
             block_type=block.block_type,
             text=block.text,
+            bbox=block.bbox,
         ).single()
         if record:
-            saved.append(LectureBlock(**record.data()))
+            data = record.data()
+            saved.append(LectureBlock(**data))
 
     return saved
 
@@ -85,7 +91,8 @@ def list_lecture_blocks(session: Session, lecture_id: str) -> List[LectureBlock]
            b.lecture_id AS lecture_id,
            b.block_index AS block_index,
            b.block_type AS block_type,
-           b.text AS text
+           b.text AS text,
+           b.bbox AS bbox
     ORDER BY b.block_index ASC
     """
     result = session.run(

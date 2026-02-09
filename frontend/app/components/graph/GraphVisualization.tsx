@@ -50,6 +50,7 @@ import { useGraphVisuals } from './hooks/useGraphVisuals';
 import { deriveActivityEvents } from './GraphUtils';
 import GraphCanvas from './GraphCanvas';
 import ContentImportForm from './ContentImportForm';
+import NoteImageImportForm from './NoteImageImportForm';
 
 function GraphVisualizationInner() {
   const searchParams = useSearchParams();
@@ -134,6 +135,7 @@ function GraphVisualizationInner() {
 
   // State local to this component
   const [contentIngestResult, setContentIngestResult] = useState<any>(null);
+  const [ingestTab, setIngestTab] = useState<'text' | 'photo'>('text');
   const [selectedResources, setSelectedResources] = useState<Resource[]>([]);
   const [expandedResources, setExpandedResources] = useState<Set<string>>(new Set());
   const [isResourceLoading, setIsResourceLoading] = useState(false);
@@ -154,6 +156,14 @@ function GraphVisualizationInner() {
 
   const { showVoiceAgent, setShowVoiceAgent } = useSidebar();
   const [showMemorySettings, setShowMemorySettings] = useState(false);
+
+  // Initialize unified session ID
+  useEffect(() => {
+    if (!getCurrentSessionId()) {
+      const newId = crypto.randomUUID();
+      setCurrentSessionId(newId);
+    }
+  }, []);
 
   // Global selection detection for Study System
   useEffect(() => {
@@ -247,6 +257,56 @@ function GraphVisualizationInner() {
   }, [interactionHook]);
 
   const handleLassoIntent = useCallback((intent: any) => {
+    if (intent.type === 'branch') {
+      const bounds = intent.bounds || intent.boundingBox;
+      if (!bounds) return;
+
+      // capture screenshot of selection
+      const snippetUrl = intent.snippetUrl;
+
+      // Create anchor branch
+      import('../../api-client').then(({ createAnchorBranch }) => {
+        createAnchorBranch({
+          artifact: {
+            namespace: 'global',
+            type: 'whiteboard',
+            id: 'main-graph-whiteboard', // TODO: support multiple whiteboards
+            graph_id: activeGraphId
+          },
+          bbox: {
+            kind: 'bbox',
+            x: bounds.x,
+            y: bounds.y,
+            w: bounds.w,
+            h: bounds.h,
+            unit: 'px',
+            image_width: intent.canvas?.width,
+            image_height: intent.canvas?.height
+          },
+          snippet_image_data_url: snippetUrl,
+          preview: "Graph Annotation",
+          context: "User created a thread from a graph annotation."
+        }).then(response => {
+          if (response.branch) {
+            // Switch to new branch
+            setActiveBranchId(response.branch.branch_id);
+            // Open chat panel (if not already)
+            // We need to ensure chat is visible. 
+            // GraphChatPanel is always rendered but maybe collapsed?
+            if (chat.state.isChatCollapsed) {
+              chat.actions.setChatCollapsed(false);
+            }
+            // Maybe set InteractionMode back to select?
+            setInteractionMode('select');
+          }
+        }).catch(err => {
+          console.error("Failed to create whiteboard branch:", err);
+          // alert("Failed to create thread.");
+        });
+      });
+      return;
+    }
+
     if (intent.type === 'lasso' || intent.type === 'search') {
       const bounds = intent.bounds; // {x, y, w, h} in screen space
       if (!graphRef.current) return;
@@ -295,7 +355,7 @@ function GraphVisualizationInner() {
 
       setInteractionMode('select');
     }
-  }, [graphRef, setSelectedNode, interactionHook]);
+  }, [graphRef, setSelectedNode, interactionHook, activeGraphId, setActiveBranchId, chat.actions, chat.state.isChatCollapsed]);
 
   const handleAddNode = useCallback(async () => {
     // Instead of a text prompt, activate handwriting mode for quick sketch
@@ -457,18 +517,57 @@ function GraphVisualizationInner() {
             onToggleContentIngest={() => ui.actions.setShowContentIngest(!ui.state.showContentIngest)}
             contentIngestPopover={ui.state.showContentIngest ? (
               <div style={{ padding: '12px', background: 'var(--panel)', borderRadius: '8px', boxShadow: 'var(--shadow)', minWidth: '300px' }}>
-                <ContentImportForm
-                  onIngest={async (t, tx, d) => {
-                    ui.actions.setContentIngestLoading(true);
-                    const res = await getPlugin('lecture')?.handleIngestion?.(activeGraphId, t, tx, d);
-                    setContentIngestResult(res);
-                    await graphDataHook.loadGraph();
-                    ui.actions.setContentIngestLoading(false);
-                  }}
-                  isLoading={ui.state.contentIngestLoading}
-                  result={contentIngestResult}
-                  onClose={() => ui.actions.setShowContentIngest(false)}
-                />
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                  <button
+                    type="button"
+                    className="pill pill--small"
+                    onClick={() => setIngestTab('text')}
+                    style={{
+                      flex: 1,
+                      background: ingestTab === 'text' ? 'var(--accent-faint)' : 'transparent',
+                      border: `1px solid ${ingestTab === 'text' ? 'var(--accent)' : 'var(--border)'}`,
+                      color: 'var(--ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Text
+                  </button>
+                  <button
+                    type="button"
+                    className="pill pill--small"
+                    onClick={() => setIngestTab('photo')}
+                    style={{
+                      flex: 1,
+                      background: ingestTab === 'photo' ? 'var(--accent-faint)' : 'transparent',
+                      border: `1px solid ${ingestTab === 'photo' ? 'var(--accent)' : 'var(--border)'}`,
+                      color: 'var(--ink)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Photo
+                  </button>
+                </div>
+
+                {ingestTab === 'text' ? (
+                  <ContentImportForm
+                    onIngest={async (t, tx, d) => {
+                      ui.actions.setContentIngestLoading(true);
+                      const res = await getPlugin('lecture')?.handleIngestion?.(activeGraphId, t, tx, d);
+                      setContentIngestResult(res);
+                      await graphDataHook.loadGraph();
+                      ui.actions.setContentIngestLoading(false);
+                    }}
+                    isLoading={ui.state.contentIngestLoading}
+                    result={contentIngestResult}
+                    onClose={() => ui.actions.setShowContentIngest(false)}
+                  />
+                ) : (
+                  <NoteImageImportForm
+                    activeGraphId={activeGraphId}
+                    activeBranchId={activeBranchId}
+                    onClose={() => ui.actions.setShowContentIngest(false)}
+                  />
+                )}
               </div>
             ) : undefined}
             showControls={ui.state.showControls}
@@ -646,7 +745,7 @@ function GraphVisualizationInner() {
       {/* Voice Agent Panel Overlay */}
       {showVoiceAgent && (
         <div className="voice-panel-overlay">
-          <VoiceAgentPanel graphId={activeGraphId} branchId={activeBranchId} />
+          <VoiceAgentPanel graphId={activeGraphId} branchId={activeBranchId} sessionId={getCurrentSessionId() || undefined} />
         </div>
       )}
 

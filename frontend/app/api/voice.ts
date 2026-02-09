@@ -43,12 +43,19 @@ export async function sendVoiceCommand(payload: VoiceCommandRequest): Promise<Vo
 /**
  * Start a new voice agent session
  */
-export async function startVoiceSession(graphId: string, branchId: string, metadata?: any): Promise<any> {
+/**
+ * Start a new voice agent session
+ */
+export async function startVoiceSession(graphId: string, branchId: string, metadata?: any, companionSessionId?: string): Promise<any> {
     const headers = await getApiHeaders();
+    const body: any = { graph_id: graphId, branch_id: branchId, metadata };
+    if (companionSessionId) {
+        body.companion_session_id = companionSessionId;
+    }
     const res = await fetch(`${API_BASE_URL}/voice-agent/session/start`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ graph_id: graphId, branch_id: branchId, metadata }),
+        body: JSON.stringify(body),
     });
     if (!res.ok) {
         const errorText = await res.text();
@@ -76,11 +83,24 @@ export async function stopVoiceSession(sessionId: string, durationSeconds: numbe
 /**
  * Get interaction context for voice agent
  */
-export async function getInteractionContext(graphId: string, branchId: string, transcript: string, isScribeMode: boolean = false, sessionId: string | null = null): Promise<any> {
+export async function getInteractionContext(
+    graphId: string,
+    branchId: string,
+    transcript: string,
+    isScribeMode: boolean = false,
+    sessionId: string | null = null,
+    timing?: { startMs?: number; endMs?: number }
+): Promise<any> {
     const headers = await getApiHeaders();
     let url = `${API_BASE_URL}/voice-agent/interaction/context?graph_id=${graphId}&branch_id=${branchId}&transcript=${encodeURIComponent(transcript)}&is_scribe_mode=${isScribeMode}`;
     if (sessionId) {
         url += `&session_id=${sessionId}`;
+    }
+    if (timing?.startMs != null) {
+        url += `&client_start_ms=${timing.startMs}`;
+    }
+    if (timing?.endMs != null) {
+        url += `&client_end_ms=${timing.endMs}`;
     }
 
     const res = await fetch(url, {

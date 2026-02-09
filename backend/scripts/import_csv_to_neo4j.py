@@ -343,25 +343,6 @@ def main():
     else:
         print(f"[INFO] Default edges file not found (this is OK if you have no relationships yet): {default_edges_file.name}")
     
-    # Also import personal finance graph if it exists
-    FINANCE_GRAPH_ID = "G0F87FFD7"
-    finance_nodes_file = GRAPH_DIR / f"nodes_G{FINANCE_GRAPH_ID}.csv"
-    finance_edges_file = GRAPH_DIR / f"edges_G{FINANCE_GRAPH_ID}.csv"
-    
-    if finance_nodes_file.exists():
-        print(f"\n[Importing finance graph nodes: {finance_nodes_file.name}]")
-        try:
-            import_nodes(finance_nodes_file)
-        except Exception as e:
-            print(f"[ERROR] Failed to import {finance_nodes_file.name}: {e}")
-    
-    if finance_edges_file.exists():
-        print(f"\n[Importing finance graph edges: {finance_edges_file.name}]")
-        try:
-            import_edges(finance_edges_file)
-        except Exception as e:
-            print(f"[ERROR] Failed to import {finance_edges_file.name}: {e}")
-    
     # SKIP legacy files for now (comment out to re-enable)
     # if NODES_FILE.exists():
     #     print(f"\n[Importing legacy nodes file: {NODES_FILE.name}]")
@@ -376,8 +357,8 @@ def main():
     # SKIP other graph files for now (comment out to re-enable)
     # nodes_files = sorted(GRAPH_DIR.glob("nodes_*.csv"))
     # edges_files = sorted(GRAPH_DIR.glob("edges_*.csv"))
-    # nodes_files = [f for f in nodes_files if f != NODES_FILE and f != finance_nodes_file]
-    # edges_files = [f for f in edges_files if f != EDGES_FILE and f != finance_edges_file]
+    # nodes_files = [f for f in nodes_files if f != NODES_FILE]
+    # edges_files = [f for f in edges_files if f != EDGES_FILE]
     # for nodes_file in nodes_files:
     #     print(f"\n[Importing nodes file: {nodes_file.name}]")
     #     try:

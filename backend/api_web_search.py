@@ -309,7 +309,7 @@ async def discover_news_endpoint():
 
 @router.get("/news-category")
 async def news_category_endpoint(
-    category: str = Query(..., description="Category: tech, science, finance, culture, sports, entertainment"),
+    category: str = Query(..., description="Category: tech, science, culture, sports, entertainment"),
     limit: int = Query(10, description="Number of results"),
 ):
     """Fetch news for a specific category."""

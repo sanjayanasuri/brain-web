@@ -9,6 +9,8 @@ import {
     ResponseStyleProfileWrapper,
     FocusArea,
     UserProfile,
+    TutorProfile,
+    TutorProfilePatch,
     UIPreferences,
     NotionConfig,
     TeachingStyleProfile
@@ -160,6 +162,41 @@ export async function updateUserProfile(
     return res.json();
 }
 
+export async function getTutorProfile(): Promise<TutorProfile> {
+    const headers = await getApiHeaders();
+    const res = await fetch(`${API_BASE_URL}/preferences/tutor-profile`, {
+        headers
+    });
+    if (!res.ok) throw new Error('Failed to load tutor profile');
+    return res.json();
+}
+
+export async function setTutorProfile(
+    profile: TutorProfile,
+): Promise<TutorProfile> {
+    const headers = await getApiHeaders();
+    const res = await fetch(`${API_BASE_URL}/preferences/tutor-profile`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(profile),
+    });
+    if (!res.ok) throw new Error('Failed to save tutor profile');
+    return res.json();
+}
+
+export async function patchTutorProfile(
+    patch: TutorProfilePatch,
+): Promise<TutorProfile> {
+    const headers = await getApiHeaders();
+    const res = await fetch(`${API_BASE_URL}/preferences/tutor-profile`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error('Failed to update tutor profile');
+    return res.json();
+}
+
 export async function getUIPreferences(): Promise<UIPreferences> {
     const headers = await getApiHeaders();
     const res = await fetch(`${API_BASE_URL}/preferences/ui`, {
@@ -203,4 +240,3 @@ export async function updateNotionConfig(
     if (!res.ok) throw new Error('Failed to update Notion config');
     return res.json();
 }
-

@@ -386,7 +386,7 @@ def end_session(session_id: str) -> SessionSummary:
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Mark session as ended
-            ended_at = datetime.utcnow().isoformat()
+            ended_at = datetime.utcnow()
             cur.execute("""
                 UPDATE study_sessions
                 SET ended_at = %s
@@ -411,9 +411,9 @@ def end_session(session_id: str) -> SessionSummary:
             stats = cur.fetchone()
             
             # Calculate duration
-            started = datetime.fromisoformat(session_row["started_at"])
-            ended = datetime.fromisoformat(ended_at)
-            duration_seconds = int((ended - started).total_seconds())
+            # started_at is already a datetime object from Postgres, not a string
+            started = session_row["started_at"]
+            duration_seconds = int((ended_at - started).total_seconds())
             
             conn.commit()
     finally:

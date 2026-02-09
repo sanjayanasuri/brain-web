@@ -9,12 +9,12 @@ from models import Concept, Lecture, LectureCreate, LectureStep, LectureStepCrea
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 
 
-def create_lecture(session: Session, payload: LectureCreate) -> Lecture:
+def create_lecture(session: Session, payload: LectureCreate, tenant_id: Optional[str] = None) -> Lecture:
     """
     Create a Lecture node scoped to the active graph + branch.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
 
     lecture_id = f"L{uuid4().hex[:8].upper()}"
 
@@ -31,7 +31,8 @@ def create_lecture(session: Session, payload: LectureCreate) -> Lecture:
         estimated_time: $estimated_time,
         slug: $slug,
         raw_text: $raw_text,
-        annotations: $annotations
+        annotations: $annotations,
+        tenant_id: $tenant_id
     })
     MERGE (l)-[:BELONGS_TO]->(g)
     RETURN l.lecture_id AS lecture_id,
@@ -57,6 +58,7 @@ def create_lecture(session: Session, payload: LectureCreate) -> Lecture:
         "slug": payload.slug,
         "raw_text": payload.raw_text,
         "annotations": payload.annotations,
+        "tenant_id": tenant_id,
     }
 
     record = session.run(query, **params).single()

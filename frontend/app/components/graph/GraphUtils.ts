@@ -48,14 +48,12 @@ export function getSourceIcon(sourceType: string | undefined): string {
             return '📄';
         case 'notion':
             return '📝';
-        case 'sec':
-            return '📊';
-        case 'ir':
-            return '💼';
-        case 'news':
-            return '📰';
-        case 'finance':
-            return '💰';
+        case 'voice_transcript_chunk':
+            return '🎙️';
+        case 'quote':
+            return '💬';
+        case 'source_chunk':
+            return '🧩';
         default:
             return '📌';
     }
@@ -72,14 +70,12 @@ export function getSourceTypeName(sourceType: string | undefined): string {
             return 'Upload';
         case 'notion':
             return 'Notion';
-        case 'sec':
-            return 'SEC';
-        case 'ir':
-            return 'IR';
-        case 'news':
-            return 'News';
-        case 'finance':
-            return 'Finance';
+        case 'voice_transcript_chunk':
+            return 'Voice';
+        case 'quote':
+            return 'Quote';
+        case 'source_chunk':
+            return 'Source';
         default:
             return 'Unknown';
     }

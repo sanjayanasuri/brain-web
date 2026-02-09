@@ -309,7 +309,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                     <div style={{ whiteSpace: 'pre-wrap' }}>{msg.answer}</div>
 
                                     {/* Actions & Meta */}
-                                    {(msg.suggestedActions.length > 0 || msg.retrievalMeta || msg.extractedGraphData) && (
+                                    {(msg.suggestedActions.length > 0 || msg.retrievalMeta || msg.extractedGraphData || (msg.anchorCitations && msg.anchorCitations.length > 0)) && (
                                         <div style={{
                                             marginTop: '12px',
                                             paddingTop: '12px',
@@ -323,6 +323,45 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                                     <span>{msg.retrievalMeta.concepts} concepts</span>
                                                     <span>•</span>
                                                     <span>{msg.retrievalMeta.claims} claims</span>
+                                                </div>
+                                            )}
+
+                                            {msg.anchorCitations && msg.anchorCitations.length > 0 && (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <div style={{ fontSize: '11px', color: 'var(--muted)', fontWeight: 600 }}>Sources</div>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                        {msg.anchorCitations.slice(0, 3).map((c: any, i: number) => {
+                                                            const title = c?.title || c?.url || c?.doc_id || `Source ${i + 1}`;
+                                                            const preview = c?.anchor?.preview || '';
+                                                            const url = c?.url || '';
+                                                            const key = c?.anchor?.anchor_id || `${i}`;
+                                                            return (
+                                                                <button
+                                                                    key={key}
+                                                                    onClick={() => onRead({ content: preview, title, url })}
+                                                                    style={{
+                                                                        textAlign: 'left',
+                                                                        background: 'transparent',
+                                                                        border: '1px solid var(--border)',
+                                                                        borderRadius: '10px',
+                                                                        padding: '8px 10px',
+                                                                        cursor: 'pointer',
+                                                                        color: 'var(--ink)',
+                                                                    }}
+                                                                    title={url || title}
+                                                                >
+                                                                    <div style={{ fontSize: '12px', fontWeight: 600, lineHeight: 1.3, marginBottom: preview ? '4px' : 0 }}>
+                                                                        {title}
+                                                                    </div>
+                                                                    {preview && (
+                                                                        <div style={{ fontSize: '11px', color: 'var(--muted)', lineHeight: 1.4 }}>
+                                                                            {preview.length > 220 ? preview.slice(0, 219) + '…' : preview}
+                                                                        </div>
+                                                                    )}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
                                                 </div>
                                             )}
 

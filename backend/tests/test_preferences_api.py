@@ -5,6 +5,7 @@ Tests cover:
 - Response style profile (GET/POST)
 - Focus areas (list, create, toggle active)
 - User profile (GET/POST)
+- Tutor profile (GET/POST/PATCH)
 - Notion configuration (GET/POST)
 
 All tests use mocked Neo4j sessions via the mock_neo4j_session fixture.
@@ -12,6 +13,7 @@ All tests use mocked Neo4j sessions via the mock_neo4j_session fixture.
 import pytest  # type: ignore[reportMissingImports]
 from tests.mock_helpers import MockNeo4jRecord, MockNeo4jResult
 from models import ResponseStyleProfile, ResponseStyleProfileWrapper, FocusArea, UserProfile, NotionConfig
+from models_tutor_profile import TutorProfile
 
 
 class TestResponseStyle:
@@ -172,7 +174,7 @@ class TestUserProfile:
     def test_get_user_profile_success(self, client, mock_neo4j_session):
         """Test successfully getting user profile."""
         u_data = {
-            "id": "default",
+            "id": "guest",
             "name": "Sanjay",
             "background": ["CS", "Software Engineering"],
             "interests": ["Distributed Systems"],
@@ -187,7 +189,7 @@ class TestUserProfile:
         
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == "default"
+        assert data["id"] == "guest"
         assert data["name"] == "Sanjay"
         assert isinstance(data["background"], list)
         assert isinstance(data["interests"], list)
@@ -196,7 +198,7 @@ class TestUserProfile:
         """Test getting user profile when none exists (returns default)."""
         # MERGE creates default if not exists
         u_data = {
-            "id": "default",
+            "id": "guest",
             "name": "Sanjay",
             "background": [],
             "interests": [],
@@ -216,7 +218,7 @@ class TestUserProfile:
     def test_update_user_profile_success(self, client, mock_neo4j_session):
         """Test successfully updating user profile."""
         u_data = {
-            "id": "default",
+            "id": "guest",
             "name": "Updated Name",
             "background": ["Updated Background"],
             "interests": ["Updated Interest"],
@@ -228,7 +230,7 @@ class TestUserProfile:
         mock_neo4j_session.run.return_value = mock_result
         
         payload = {
-            "id": "default",
+            "id": "guest",
             "name": "Updated Name",
             "background": ["Updated Background"],
             "interests": ["Updated Interest"],
@@ -241,6 +243,99 @@ class TestUserProfile:
         data = response.json()
         assert data["name"] == "Updated Name"
         assert data["background"] == ["Updated Background"]
+
+
+class TestTutorProfile:
+    """Tests for GET/POST/PATCH /preferences/tutor-profile"""
+
+    def test_get_tutor_profile_default(self, client, mock_neo4j_session):
+        """Returns a default TutorProfile when missing in learning_preferences."""
+        u_data = {
+            "id": "guest",
+            "name": "Sanjay",
+            "background": [],
+            "interests": [],
+            "weak_spots": [],
+            "learning_preferences": "{}",
+        }
+        mock_record = MockNeo4jRecord({"u": u_data})
+        mock_neo4j_session.run.return_value = MockNeo4jResult(mock_record)
+
+        response = client.get("/preferences/tutor-profile")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["version"] == "tutor_profile_v1"
+        assert data["audience_mode"] == "default"
+        assert data["response_mode"] == "compact"
+
+    def test_set_tutor_profile_success(self, client, mock_neo4j_session):
+        """Persists TutorProfile under learning_preferences.tutor_profile."""
+        # patch_user_profile() -> get_user_profile() then update_user_profile()
+        u_before = {
+            "id": "guest",
+            "name": "Sanjay",
+            "background": [],
+            "interests": [],
+            "weak_spots": [],
+            "learning_preferences": "{}",
+        }
+        u_after = {
+            "id": "guest",
+            "name": "Sanjay",
+            "background": [],
+            "interests": [],
+            "weak_spots": [],
+            "learning_preferences": '{"tutor_profile":{"version":"tutor_profile_v1","audience_mode":"eli5","response_mode":"compact","ask_question_policy":"at_most_one","end_with_next_step":true,"pacing":"normal","turn_taking":"normal","no_glazing":true,"voice_id":"friendly"}}',
+        }
+        mock_neo4j_session.run.side_effect = [
+            MockNeo4jResult(MockNeo4jRecord({"u": u_before})),
+            MockNeo4jResult(MockNeo4jRecord({"u": u_after})),
+        ]
+
+        payload = TutorProfile(audience_mode="eli5", voice_id="friendly").model_dump()
+        response = client.post("/preferences/tutor-profile", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["audience_mode"] == "eli5"
+        assert data["voice_id"] == "friendly"
+
+    def test_patch_tutor_profile_success(self, client, mock_neo4j_session):
+        """Patches a subset of TutorProfile fields."""
+        # patch_tutor_profile() -> get_user_profile()
+        # then set_tutor_profile() -> patch_user_profile() -> get_user_profile() -> update_user_profile()
+        u_with_profile = {
+            "id": "guest",
+            "name": "Sanjay",
+            "background": [],
+            "interests": [],
+            "weak_spots": [],
+            "learning_preferences": '{"tutor_profile":{"version":"tutor_profile_v1","audience_mode":"default","response_mode":"compact","ask_question_policy":"at_most_one","end_with_next_step":true,"pacing":"normal","turn_taking":"normal","no_glazing":true,"voice_id":"neutral"}}',
+        }
+        u_updated = {
+            "id": "guest",
+            "name": "Sanjay",
+            "background": [],
+            "interests": [],
+            "weak_spots": [],
+            "learning_preferences": '{"tutor_profile":{"version":"tutor_profile_v1","audience_mode":"ceo_pitch","response_mode":"compact","ask_question_policy":"at_most_one","end_with_next_step":true,"pacing":"normal","turn_taking":"normal","no_glazing":true,"voice_id":"direct"}}',
+        }
+        mock_neo4j_session.run.side_effect = [
+            MockNeo4jResult(MockNeo4jRecord({"u": u_with_profile})),  # initial get
+            MockNeo4jResult(MockNeo4jRecord({"u": u_with_profile})),  # patch_user_profile get
+            MockNeo4jResult(MockNeo4jRecord({"u": u_updated})),       # update
+        ]
+
+        response = client.patch(
+            "/preferences/tutor-profile",
+            json={"audience_mode": "ceo_pitch", "voice_id": "direct"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["audience_mode"] == "ceo_pitch"
+        assert data["voice_id"] == "direct"
 
 
 class TestNotionConfig:

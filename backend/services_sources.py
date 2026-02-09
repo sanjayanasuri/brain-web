@@ -1,6 +1,6 @@
 """
 Service for managing SourceDocument nodes in Neo4j.
-SourceDocument represents external documents (SEC filings, news articles, price data) before ingestion.
+SourceDocument represents external documents (web pages, uploads, etc.) before ingestion.
 """
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -32,11 +32,10 @@ def upsert_source_document(
     session: Session,
     graph_id: str,
     branch_id: str,
-    source: str,  # "SEC" | "NEWS" | "PRICES"
+    source: str,  # e.g. "WEB" | "RESOURCE" | ...
     external_id: str,
     url: str,
-    company_ticker: Optional[str] = None,
-    doc_type: Optional[str] = None,  # "10-Q" | "10-K" | "8-K" | "ARTICLE" | "PRICE_SERIES"
+    doc_type: Optional[str] = None,
     published_at: Optional[int] = None,  # Unix timestamp
     text: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None
@@ -48,10 +47,9 @@ def upsert_source_document(
         session: Neo4j session
         graph_id: Graph ID for scoping
         branch_id: Branch ID for scoping
-        source: Source type ("SEC", "NEWS", "PRICES")
-        external_id: External identifier (e.g., SEC accession number, article URL)
+        source: Source type (e.g. "WEB")
+        external_id: External identifier (e.g. canonical URL)
         url: URL to the document
-        company_ticker: Company ticker symbol (optional)
         doc_type: Document type (optional)
         published_at: Publication timestamp (Unix timestamp, optional)
         text: Document text content (optional, for checksum computation)
@@ -74,7 +72,6 @@ def upsert_source_document(
         d.source = $source,
         d.external_id = $external_id,
         d.url = $url,
-        d.company_ticker = $company_ticker,
         d.doc_type = $doc_type,
         d.published_at = $published_at,
         d.checksum = $checksum,
@@ -85,7 +82,6 @@ def upsert_source_document(
         d.updated_at = $now_ts
     ON MATCH SET
         d.url = $url,
-        d.company_ticker = $company_ticker,
         d.doc_type = $doc_type,
         d.published_at = $published_at,
         d.checksum = $checksum,
@@ -111,7 +107,6 @@ def upsert_source_document(
         source=source,
         external_id=external_id,
         url=url,
-        company_ticker=company_ticker,
         doc_type=doc_type,
         published_at=published_at,
         checksum=checksum,
@@ -238,7 +233,6 @@ def get_source_document(
            d.source AS source,
            d.external_id AS external_id,
            d.url AS url,
-           d.company_ticker AS company_ticker,
            d.doc_type AS doc_type,
            d.published_at AS published_at,
            d.checksum AS checksum,

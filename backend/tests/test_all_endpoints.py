@@ -219,20 +219,6 @@ class TestSnapshotsEndpoints:
         assert response.status_code in [200, 401]
 
 
-class TestFinanceEndpoints:
-    """Test finance endpoints."""
-    
-    def test_list_finance_sources(self, client: TestClient, auth_headers: Dict[str, str]):
-        """Test list finance sources endpoint."""
-        response = client.get("/finance/tracking/list", headers=auth_headers)
-        assert response.status_code in [200, 401]
-    
-    def test_get_finance_snapshot(self, client: TestClient, auth_headers: Dict[str, str]):
-        """Test get finance snapshot endpoint."""
-        response = client.get("/finance/snapshots/AAPL", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
-
-
 class TestSignalsEndpoints:
     """Test signals endpoints."""
     

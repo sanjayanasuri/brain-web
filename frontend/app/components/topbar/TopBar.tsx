@@ -60,13 +60,6 @@ const GRAPH_TEMPLATES = [
     intent: 'Explore ideas and connect concepts freely.',
   },
   {
-    id: 'finance',
-    label: 'Finance research',
-    description: 'Track companies, metrics, and thesis drivers.',
-    tags: ['10-Ks', 'earnings', 'markets'],
-    intent: 'Understand financial performance and key risks.',
-  },
-  {
     id: 'lecture',
     label: 'Lecture ingestion',
     description: 'Turn classes into connected study maps.',
@@ -1229,7 +1222,7 @@ export default function TopBar() {
     const isCommand = normalizedQuery.startsWith('/') || normalizedQuery.startsWith('>');
     const commandPart = isCommand ? normalizedQuery.slice(1).trim() : normalizedQuery;
 
-    // Parse command with optional arguments (e.g., "/lens finance", "/review proposed")
+    // Parse command with optional arguments (e.g., "/lens learning", "/review proposed")
     const [baseCommand, ...args] = commandPart.split(/\s+/);
     const argString = args.join(' ');
 
@@ -1300,14 +1293,6 @@ export default function TopBar() {
       },
       {
         type: 'action',
-        id: 'lens-finance',
-        label: 'Set Lens: Data',
-        description: 'Apply data lens for tracked sources',
-        command: '/lens finance',
-        icon: '📊',
-      },
-      {
-        type: 'action',
         id: 'clear-highlights',
         label: 'Clear Highlights',
         description: 'Clear all highlights',
@@ -1362,7 +1347,7 @@ export default function TopBar() {
 
     // Special handling for lens command
     if (baseCommand === 'lens' || baseCommand === '') {
-      if (argString === '' || argString === 'none' || argString === 'learning' || argString === 'finance') {
+      if (argString === '' || argString === 'none' || argString === 'learning') {
         return allActions.filter(a => a.id.startsWith('lens-'));
       }
     }

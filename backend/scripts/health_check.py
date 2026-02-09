@@ -150,9 +150,6 @@ ENDPOINTS = [
     # Snapshots
     ("GET", "/snapshots/"),
     
-    # Finance
-    ("GET", "/finance/sources"),
-    
     # Signals
     ("GET", "/signals/"),
     

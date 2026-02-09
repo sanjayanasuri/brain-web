@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Dict, List, Literal, Optional
@@ -62,6 +63,12 @@ def _ensure_schema() -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_session
         ON voice_transcript_chunks(voice_session_id, start_ms, created_at);
+        """
+    )
+    execute_update(
+        """
+        CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_user_graph_branch_created
+        ON voice_transcript_chunks(user_id, graph_id, branch_id, created_at DESC);
         """
     )
     execute_update(
@@ -342,3 +349,147 @@ def list_voice_learning_signals(
             }
         )
     return out
+
+
+_TERM_RE = re.compile(r"[a-zA-Z0-9]{3,}")
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "being",
+    "but",
+    "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "dont",
+    "for",
+    "from",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "let",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "our",
+    "please",
+    "so",
+    "that",
+    "the",
+    "their",
+    "then",
+    "this",
+    "to",
+    "us",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+    "you",
+    "your",
+}
+
+
+def _extract_search_terms(query: str, max_terms: int = 4) -> List[str]:
+    terms: List[str] = []
+    for m in _TERM_RE.finditer((query or "").lower()):
+        t = m.group(0)
+        if len(t) <= 3:
+            continue
+        if t in _STOPWORDS:
+            continue
+        if t not in terms:
+            terms.append(t)
+        if len(terms) >= max_terms:
+            break
+    return terms
+
+
+def _excerpt(text: str, max_len: int = 520) -> str:
+    value = (text or "").strip().replace("\n", " ")
+    if len(value) <= max_len:
+        return value
+    return value[: max_len - 1].rstrip() + "…"
+
+
+def search_voice_transcript_chunks(
+    *,
+    user_id: str,
+    graph_id: str,
+    branch_id: str,
+    query: str,
+    limit: int = 6,
+) -> List[Dict[str, Any]]:
+    """
+    Best-effort lexical search over stored voice transcript chunks.
+
+    Returns small, prompt-safe excerpts plus AnchorRef data for citations.
+    """
+    _ensure_schema()
+
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    terms = _extract_search_terms(q, max_terms=4)
+    patterns = [f"%{t}%" for t in terms] if terms else [f"%{q}%"]
+    term_where = " OR ".join(["content ILIKE %s"] * len(patterns))
+
+    rows = execute_query(
+        f"""
+        SELECT id, voice_session_id, role, content, start_ms, end_ms, anchor_json, created_at
+        FROM voice_transcript_chunks
+        WHERE user_id = %s
+          AND graph_id = %s
+          AND branch_id = %s
+          AND ({term_where})
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (user_id, graph_id, branch_id, *patterns, max(1, min(int(limit), 20))),
+    )
+
+    items: List[Dict[str, Any]] = []
+    for row in rows or []:
+        anchor_ref = None
+        if row.get("anchor_json"):
+            try:
+                anchor_ref = json.loads(row["anchor_json"])
+            except Exception:
+                anchor_ref = None
+
+        content = row.get("content") or ""
+        items.append(
+            {
+                "chunk_id": row.get("id"),
+                "voice_session_id": row.get("voice_session_id"),
+                "role": row.get("role"),
+                "content": _excerpt(content),
+                "start_ms": row.get("start_ms"),
+                "end_ms": row.get("end_ms"),
+                "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+                "anchor": anchor_ref,
+            }
+        )
+
+    return items

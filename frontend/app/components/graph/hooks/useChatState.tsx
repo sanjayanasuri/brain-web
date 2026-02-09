@@ -50,6 +50,7 @@ export interface ChatMessage {
   suggestedActions: SuggestedAction[];
   retrievalMeta: RetrievalMeta | null;
   evidenceUsed: EvidenceItem[];
+  anchorCitations?: any[];
   extractedGraphData?: any;
   webSearchResults?: Array<{ title: string; snippet: string; link: string; fullContent?: string; graph?: any }>;
 }

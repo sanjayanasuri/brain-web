@@ -246,13 +246,10 @@ brain-web/
 - `api_quotes.py`: Evidence graph quotes
 - `api_claims_from_quotes.py`: Claim extraction
 - `api_web_ingestion.py`: Web content ingestion
-- `api_finance.py`: Finance domain features
-- `api_finance_ingestion.py`: Finance data ingestion
 - `api_paths.py`: Learning path generation
 - `api_quality.py`: Content quality metrics
 - `api_trails.py`: Learning trails
 - `api_extend.py`: Extension system
-- `api_connectors.py`: External connector management
 - `api_ingestion_runs.py`: Ingestion run tracking
 - `api_sessions_events.py`: Session event tracking
 - `api_sessions_websocket.py`: WebSocket sessions
@@ -275,11 +272,8 @@ brain-web/
 - `services_snapshots.py`: Snapshot operations
 - `services_gaps.py`: Gap detection algorithms
 - `services_quality.py`: Quality scoring
-- `services_finance_ingestion.py`: Finance data processing
-- `services_finance_acquisition.py`: Finance data fetching
 - `services_web_ingestion.py`: Web scraping and ingestion
 - `services_entity_resolution.py`: Entity matching
-- `services_evidence_snapshots.py`: Evidence graph snapshots
 - `services_task_queue.py`: Background task processing
 - `services_task_processor.py`: Task execution
 - `services_study_analytics.py`: Learning analytics
@@ -364,7 +358,6 @@ brain-web/
 - `topbar/`: Top navigation bar
 - `ui/`: Reusable UI components
 - `voice/`: Voice command UI
-- `finance/`: Finance domain UI
 - `mobile/`: Mobile-specific components
 - `notion/`: Notion integration UI
 - `offline/`: Offline mode UI
@@ -387,13 +380,11 @@ brain-web/
 
 **Hooks (`frontend/app/hooks/`):**
 - `useEvidenceNavigation.ts`: Evidence navigation
-- `useVoiceRecognition.ts`: Voice recognition
+- `useVoiceStream.ts`: Backend voice pipeline (STT/VAD/TTS over WebSocket)
 
 **Utils (`frontend/app/utils/`):**
 - `colorUtils.ts`: Color utilities
 - `confidence.ts`: Confidence calculations
-- `financeSnapshot.ts`: Finance snapshot utilities
-- `financeStaleness.ts`: Staleness detection
 - `freshness.ts`: Freshness calculations
 
 ---

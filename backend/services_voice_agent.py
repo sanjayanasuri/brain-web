@@ -2,7 +2,10 @@
 Orchestrator for the Conversational Voice Agent.
 Integrates GraphRAG, Supermemory AI, and usage tracking for a seamless voice experience.
 """
+import os
+import json
 import logging
+import asyncio
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import uuid
@@ -13,7 +16,7 @@ from services_supermemory import search_memories, sync_learning_moment
 from services_usage_tracker import log_usage, check_limit
 from db_postgres import execute_update, execute_query
 from config import VOICE_AGENT_NAME, OPENAI_API_KEY
-from services_graph import create_concept, create_relationship
+from services_graph import create_concept, create_relationship, get_recent_conversation_summaries
 from models import ConceptCreate, RelationshipCreate
 from services_voice_learning_signals import (
     apply_signals_to_policy,
@@ -25,10 +28,14 @@ from services_voice_transcripts import (
     record_voice_learning_signals,
     record_voice_transcript_chunk,
 )
+from services_tutor_profile import get_tutor_profile as get_tutor_profile_service
 
 import json
 import re
 from openai import OpenAI
+
+from services_model_router import model_router, TASK_VOICE, TASK_SYNTHESIS
+from services_agent_memory import read_agent_memory
 
 logger = logging.getLogger("brain_web")
 
@@ -36,11 +43,10 @@ class VoiceAgentOrchestrator:
     def __init__(self, user_id: str, tenant_id: str):
         self.user_id = user_id
         self.tenant_id = tenant_id
-        self.client = None
-        if OPENAI_API_KEY:
-            self.client = OpenAI(api_key=OPENAI_API_KEY.strip().strip('"').strip("'"))
+        # Removed direct self.client initialization
 
-    async def start_session(self, graph_id: str, branch_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+
+    async def start_session(self, graph_id: str, branch_id: str, metadata: Optional[Dict[str, Any]] = None, companion_session_id: Optional[str] = None) -> Dict[str, Any]:
         """Initiate a new voice session with usage checking."""
         if not check_limit(self.user_id, 'voice_session'):
             raise Exception("Daily voice session limit reached.")
@@ -48,11 +54,38 @@ class VoiceAgentOrchestrator:
         session_id = str(uuid.uuid4())
         started_at = datetime.utcnow()
 
+        # Phase F: best-effort TutorProfile -> voice policy defaults (additive only)
+        metadata_to_store: Dict[str, Any] = metadata if isinstance(metadata, dict) else {}
+        
+        if companion_session_id:
+            metadata_to_store["companion_session_id"] = companion_session_id
+            try:
+                from services_session_continuity import get_or_create_session, update_session_context
+                get_or_create_session(self.user_id, companion_session_id)
+                update_session_context(companion_session_id, voice_session_id=session_id)
+            except Exception as e:
+                logger.error(f"Failed to link companion session: {e}")
+
+        try:
+            with neo4j_session() as neo_session:
+                tutor_profile = get_tutor_profile_service(neo_session, user_id=self.user_id)
+            policy = metadata_to_store.get("policy")
+            if not isinstance(policy, dict):
+                policy = {}
+            if "turn_taking" not in policy and tutor_profile.turn_taking:
+                policy["turn_taking"] = tutor_profile.turn_taking
+            if "pacing" not in policy and tutor_profile.pacing:
+                policy["pacing"] = tutor_profile.pacing
+            if policy:
+                metadata_to_store["policy"] = policy
+        except Exception as e:
+            logger.debug(f"Skipping TutorProfile policy defaults: {e}")
+
         query = """
         INSERT INTO voice_sessions (id, user_id, tenant_id, graph_id, branch_id, started_at, metadata)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
-        params = (session_id, self.user_id, self.tenant_id, graph_id, branch_id, started_at, metadata or {})
+        params = (session_id, self.user_id, self.tenant_id, graph_id, branch_id, started_at, metadata_to_store)
         
         try:
             execute_update(query, params)
@@ -68,7 +101,7 @@ class VoiceAgentOrchestrator:
     async def summarize_session(self, session_id: str, graph_id: str) -> Optional[str]:
         """Generate a synthesis of the entire voice session and save it as a node."""
         history = await self.get_session_history(session_id)
-        if not history or not self.client:
+        if not history:
             return None
 
         # Format history for LLM
@@ -84,12 +117,12 @@ class VoiceAgentOrchestrator:
         """
 
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
+            summary = model_router.completion(
+                task_type=TASK_SYNTHESIS, # Use heavy model (gpt-4o) for synthesis
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.5
             )
-            summary = response.choices[0].message.content
+
 
             # Save to Graph
             with neo4j_session() as session:
@@ -113,13 +146,38 @@ class VoiceAgentOrchestrator:
         ended_at = datetime.utcnow()
         
         # 1. Fetch graph_id for synthesis
-        query_fetch = "SELECT graph_id FROM voice_sessions WHERE id = %s"
-        graph_res = execute_query(query_fetch, (session_id,))
-        graph_id = graph_res[0]['graph_id'] if graph_res else None
+        query_fetch = "SELECT graph_id, branch_id FROM voice_sessions WHERE id = %s AND user_id = %s"
+        graph_res = execute_query(query_fetch, (session_id, self.user_id))
+        graph_id = graph_res[0]["graph_id"] if graph_res else None
+        branch_id = graph_res[0].get("branch_id") if graph_res else None
 
         # 2. Synthesize session if possible
+        synthesis: Optional[str] = None
         if graph_id:
-            await self.summarize_session(session_id, graph_id)
+            synthesis = await self.summarize_session(session_id, graph_id)
+
+        # 2b. Store recap into conversation summaries for cross-modal continuity (best-effort, additive)
+        if synthesis:
+            try:
+                from models import ConversationSummary
+                from services_graph import store_conversation_summary
+
+                with neo4j_session() as neo_session:
+                    store_conversation_summary(
+                        neo_session,
+                        ConversationSummary(
+                            id=f"voice-{session_id}",
+                            timestamp=int(datetime.utcnow().timestamp()),
+                            question=f"[Voice Session Recap] graph={graph_id} branch={branch_id or 'main'}",
+                            answer="",
+                            topics=["voice_session", "recap"],
+                            summary=synthesis,
+                        ),
+                        user_id=self.user_id,
+                        tenant_id=self.tenant_id,
+                    )
+            except Exception as e:
+                logger.debug(f"Failed to store voice recap as conversation summary: {e}")
 
         # 3. Update DB
         query = """
@@ -138,8 +196,9 @@ class VoiceAgentOrchestrator:
 
     async def generate_agent_reply(self, system_prompt: str, history: List[Dict[str, str]], user_transcript: str) -> str:
         """Generate a natural conversational reply using the prompt, history, and transcript."""
-        if not self.client:
-            return f"I heard you say: {user_transcript}, but my brain is currently offline."
+        # if not self.client: return ... removed
+        
+        # ... logic ...
 
         messages = [{"role": "system", "content": system_prompt}]
         
@@ -151,13 +210,13 @@ class VoiceAgentOrchestrator:
         messages.append({"role": "user", "content": user_transcript})
 
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            return model_router.completion(
+                task_type=TASK_VOICE, # Fast model
                 messages=messages,
                 temperature=0.7,
                 max_tokens=150
             )
-            return response.choices[0].message.content
+
         except Exception as e:
             logger.error(f"Failed to generate agent reply: {e}")
             return f"I'm sorry, I encountered an error while thinking about that."
@@ -172,9 +231,7 @@ class VoiceAgentOrchestrator:
 
     async def handle_fog_clearing(self, graph_id: str, transcript: str, context: str) -> Dict[str, Any]:
         """Generate a pedagogical explanation and save it as an 'UNDERSTANDING' node."""
-        if not self.client:
-            return {"reply": "I'd love to help, but I'm having trouble thinking clearly right now."}
-
+        
         prompt = f"""
         The student is confused: "{transcript}"
         Based on this Knowledge Graph Context:
@@ -185,12 +242,12 @@ class VoiceAgentOrchestrator:
         """
 
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o", # Use 4o for better pedagogical quality
+            explanation = model_router.completion(
+                task_type=TASK_SYNTHESIS, # Use smart model for pedagogy
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.7
             )
-            explanation = response.choices[0].message.content
+
 
             # Save to Graph as an "UNDERSTANDING" node
             with neo4j_session() as session:
@@ -312,14 +369,52 @@ class VoiceAgentOrchestrator:
             action_summaries = await self.execute_voice_commands(actions)
             
             # 3. Fetch Context
+            unified_context = {}
+            tutor_profile = None
+            graph_context = ""
+            
             with neo4j_session() as neo_session:
-                graphrag_data = retrieve_graphrag_context(
-                    session=neo_session,
-                    graph_id=graph_id,
-                    branch_id=branch_id,
-                    question=last_transcript
-                )
-            graph_context = graphrag_data.get("context_text", "")
+                try:
+                    from services_memory_orchestrator import get_unified_context, get_active_lecture_id
+                    
+                    # Load all memory tiers
+                    unified_context = get_unified_context(
+                        user_id=self.user_id,
+                        tenant_id=self.tenant_id,
+                        chat_id=session_id or "voice_default",
+                        query=last_transcript,
+                        session=neo_session,
+                        active_lecture_id=graph_id, # Use graph_id as active lecture hint for voice
+                        include_chat_history=True,
+                        include_lecture_context=True,
+                        include_user_facts=True,
+                        include_study_context=True
+                    )
+                    
+                    logger.info(f"Voice session {session_id} loaded unified context: "
+                               f"{len(unified_context.get('chat_history', []))} messages, "
+                               f"user_facts={'yes' if unified_context.get('user_facts') else 'no'}")
+                except Exception as e:
+                    logger.warning(f"Failed to load unified context for voice: {e}")
+                    unified_context = {"user_facts": "", "lecture_context": "", "chat_history": []}
+
+                try:
+                    tutor_profile = get_tutor_profile_service(neo_session, user_id=self.user_id)
+                except Exception:
+                    tutor_profile = None
+                
+                # 3b. GraphRAG context (additional to lecture context)
+                try:
+                    graphrag_data = retrieve_graphrag_context(
+                        session=neo_session,
+                        graph_id=graph_id,
+                        branch_id=branch_id,
+                        question=last_transcript
+                    )
+                    graph_context = graphrag_data.get("context_text", "")
+                except Exception as e:
+                    logger.warning(f"GraphRAG context failed: {e}")
+                    graph_context = ""
 
             # 4. Handle Fog Clearing if student is confused
             fog_result = None
@@ -332,28 +427,118 @@ class VoiceAgentOrchestrator:
             if personal_memories:
                 memory_context = "\nPersonal Memory Context:\n" + "\n".join([m.get("content", "") for m in personal_memories])
 
-            # 6. Combine into prompt
+            # 5b. Resolve Study Context for Prompt
+            study_instruction = ""
+            try:
+                from services_memory_orchestrator import build_system_prompt_with_memory
+                # We reuse the logic from the orchestrator's prompt builder
+                temp_prompt = build_system_prompt_with_memory("", unified_context, ["study_context"])
+                # Extract just the added part
+                study_instruction = temp_prompt.replace("\n\n", "", 1)
+            except:
+                pass
+
+            # 5c. Detect if user is responding to a task (Voice)
+            task_signal = ""
+            try:
+                history = await self.get_session_history(session_id) if session_id else []
+                if history:
+                    last_ast = history[-1].get("agent", "")
+                    if "[STUDY_TASK:" in last_ast:
+                        task_signal = "\nSTIMULUS: The student is answering a previous STUDY_TASK verbally. Listen carefully and evaluate their understanding."
+            except:
+                pass
+
+            # 6. Construct system prompt
             mode_desc = "SCRIBE MODE" if is_scribe_mode else ("FOG-CLEARER MODE" if is_confused else "CONVERSATIONAL MODE")
+
+            # Phase F: apply TutorProfile tone/audience/depth (best-effort)
+            tutor_layer = ""
+            try:
+                if tutor_profile:
+                    voice_cards = {
+                        "neutral": "Tone: professional and clear.",
+                        "friendly": "Tone: warm, friendly, and supportive (still precise).",
+                        "direct": "Tone: straightforward and no-nonsense (still kind).",
+                        "playful": "Tone: light and engaging (avoid distracting jokes).",
+                    }
+                    audience_cards = {
+                        "default": "Audience: default learner.",
+                        "eli5": "Audience: ELI5 (simple, concrete, define jargon).",
+                        "ceo_pitch": "Audience: CEO pitch (executive summary, tradeoffs, crisp).",
+                        "recruiter_interview": "Audience: recruiter interview (clear definition + practical example).",
+                        "technical": "Audience: technical (precise terms, rigorous reasoning).",
+                    }
+                    response_depth = {
+                        "hint": "Depth: one brief nudge (1–2 sentences).",
+                        "compact": "Depth: concise (2–4 short sentences by default).",
+                        "normal": "Depth: balanced (short explanation + one example).",
+                        "deep": "Depth: step-by-step (short numbered steps; pause to check alignment).",
+                    }
+
+                    voice_id = getattr(tutor_profile, "voice_id", "neutral") or "neutral"
+                    audience_mode = getattr(tutor_profile, "audience_mode", "default") or "default"
+                    response_mode = getattr(tutor_profile, "response_mode", "compact") or "compact"
+                    no_glazing = getattr(tutor_profile, "no_glazing", True) is not False
+
+                    tutor_layer = "\n".join(
+                        [
+                            "Tutor Profile:",
+                            f"- {voice_cards.get(str(voice_id), voice_cards['neutral'])}",
+                            f"- {audience_cards.get(str(audience_mode), audience_cards['default'])}",
+                            f"- {response_depth.get(str(response_mode), response_depth['compact'])}",
+                            f"- Correctness: {'be direct; answer yes/no when asked; correct errors (no glazing).' if no_glazing else 'be supportive; still correct errors.'}",
+                        ]
+                    )
+
+                    # Apply pacing/turn-taking defaults to policy if missing (signals still override)
+                    if isinstance(policy, dict):
+                        pacing = getattr(tutor_profile, "pacing", None)
+                        turn_taking = getattr(tutor_profile, "turn_taking", None)
+                        if pacing and "pacing" not in policy:
+                            policy["pacing"] = pacing
+                        if turn_taking and "turn_taking" not in policy:
+                            policy["turn_taking"] = turn_taking
+            except Exception:
+                tutor_layer = ""
             
+            # Unified memory sections
+            memory_sections = []
+            if unified_context.get("user_facts"):
+                memory_sections.append(f"## About This User\n{unified_context['user_facts']}")
+            if unified_context.get("lecture_context"):
+                memory_sections.append(f"## Current Study Material\n{unified_context['lecture_context']}")
+            
+            unified_memory_context = "\n".join(memory_sections)
+            agent_memory = "\n".join(memory_sections)
+            cross_modal_context = "" # Placeholder for future cross-modal context
+
             system_prompt = f"""
             You are {VOICE_AGENT_NAME}, a knowledgeable learning companion.
             Current Mode: {mode_desc}
             
+            ## Persistent Memory & Context
+            {agent_memory}
+            {study_instruction}
+            {task_signal}
+            
             Your goal is to help the user explore the knowledge graph and reflect on their learning.
+            {tutor_layer}
             {f"STIMULUS: The student is confused. Your reply should be derived from this explanation: {fog_result['explanation']}" if fog_result else ""}
             
             Knowledge Graph Context:
             {graph_context}
             {memory_context}
+            {cross_modal_context}
             
             Recent Actions Executed:
             {", ".join(action_summaries) if action_summaries else "None"}
 
             Instructions:
             - Keep responses concise and conversational.
-            - Be direct: if the user asks whether something is correct, say yes/no and correct it if needed (no glazing).
+            - Be kind, but do not glaze: if the user asks whether something is correct, say yes/no and correct it if needed.
             - If policy says no interruption, only speak when the user yields (asks a question or requests a response).
-            - If policy says slow pacing, use short sentences and a slower cadence.
+            - If policy says slow pacing, use short sentences and a slower cadence. This is CRITICAL.
             - If the user has a "EUREKA" moment, acknowledge it warmly.
             - If they were confused, present the simplified explanation as yours. Mention you've saved this "Insight" to their graph.
             - Do not use markdown (bold/bullets) for voice.
@@ -377,7 +562,9 @@ class VoiceAgentOrchestrator:
                 elif any(s.get("kind") == "pacing_request" for s in extracted_signals):
                     agent_reply = "Okay. I’ll slow down."
                 else:
-                    agent_reply = await self.generate_agent_reply(system_prompt, history, last_transcript)
+                    # Pass the chat history from unified context for session continuity
+                    current_history = unified_context.get("chat_history", [])
+                    agent_reply = await self.generate_agent_reply(system_prompt, current_history, last_transcript)
 
             # 8. Save Interaction if session_id provided
             user_transcript_chunk = None
@@ -386,6 +573,27 @@ class VoiceAgentOrchestrator:
                 await self.save_interaction(session_id, last_transcript, agent_reply)
                 if policy_changed:
                     await self.set_session_policy(session_id, policy)
+                
+                # FACT EXTRACTION (Background)
+                if agent_reply:
+                    try:
+                        from services_fact_extractor import extract_facts_from_conversation
+                        from db_neo4j import neo4j_session as fresh_neo4j_session
+                        
+                        logger.info(f"Extracting facts from voice interaction in session {session_id}")
+                        # Use a fresh session to avoid "Session closed" errors from previous calls
+                        with fresh_neo4j_session() as fact_session:
+                            await extract_facts_from_conversation(
+                                user_message=last_transcript,
+                                assistant_response=agent_reply,
+                                chat_id=session_id,
+                                user_id=self.user_id,
+                                tenant_id=self.tenant_id,
+                                session=fact_session
+                            )
+                        logger.info(f"Fact extraction completed for session {session_id}")
+                    except Exception as e:
+                        logger.warning(f"Fact extraction failed in voice: {e}")
 
                 # Persist transcript chunks + extracted learning signals as artifacts (additive)
                 try:
@@ -486,9 +694,7 @@ class VoiceAgentOrchestrator:
 
     async def extract_voice_commands(self, transcript: str, is_scribe_mode: bool = False) -> List[Dict[str, Any]]:
         """Extract graph operations from voice transcript using LLM."""
-        if not self.client:
-            return []
-
+        
         if is_scribe_mode:
             prompt = f"""
             You are a Shadow Scriber for a teacher. Your job is to listen to the lecture and implicitly extract the knowledge structure.
@@ -518,13 +724,13 @@ class VoiceAgentOrchestrator:
             """
 
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            content = model_router.completion(
+                task_type=TASK_VOICE,
                 messages=[{"role": "system", "content": prompt}],
                 temperature=0.1,
                 response_format={"type": "json_object"}
             )
-            data = json.loads(response.choices[0].message.content)
+            data = json.loads(content)
             return data.get("actions", [])
         except Exception as e:
             logger.error(f"Failed to extract voice commands: {e}")

@@ -426,3 +426,71 @@ def list_tasks(
     total = count_result.single()["total"] if count_result.single() else 0
     
     return TaskListResponse(tasks=tasks, total=total)
+def get_recent_user_activity(session: Session, limit: int = 10) -> str:
+    """
+    Fetch recent user activity (Voice Signals & Handwriting) for context injection.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    # 1. Fetch recent voice signals
+    query_signals = """
+    MATCH (s:Signal {graph_id: $graph_id})
+    WHERE $branch_id IN COALESCE(s.on_branches, [])
+      AND s.signal_type IN ['voice_capture', 'voice_command']
+    RETURN s.timestamp AS timestamp,
+           s.signal_type AS type,
+           s.payload AS payload
+    ORDER BY s.timestamp DESC
+    LIMIT $limit
+    """
+    signals = session.run(query_signals, graph_id=graph_id, branch_id=branch_id, limit=limit)
+    
+    # 2. Fetch recent handwriting lectures
+    # We identify them by source_type='handwriting' (start adding this!) or description
+    query_handwriting = """
+    MATCH (l:Lecture {graph_id: $graph_id})
+    WHERE $branch_id IN COALESCE(l.on_branches, [])
+      AND (l.source_type = 'handwriting' OR l.description CONTAINS 'handwriting')
+    RETURN l.created_at AS timestamp,
+           'handwriting' AS type,
+           l.title AS title,
+           l.description AS description
+    ORDER BY l.created_at DESC
+    LIMIT $limit
+    """
+    handwriting = session.run(query_handwriting, graph_id=graph_id, branch_id=branch_id, limit=limit)
+    
+    # Combine and sort
+    activities = []
+    for s in signals:
+        payload = json.loads(s["payload"]) if isinstance(s["payload"], str) else s["payload"]
+        transcript = payload.get("transcript", "")
+        if transcript:
+            activities.append({
+                "time": s["timestamp"],
+                "type": s["type"],
+                "text": f"[{s['type']}] {transcript}"
+            })
+            
+    for h in handwriting:
+        ts = h["timestamp"]
+        # Convert datetime to timestamp if needed, or string
+        activities.append({
+            "time": str(ts),
+            "type": h["type"],
+            "text": f"[Handwriting] {h['title']} ({h['description']})"
+        })
+    
+    # Sort by time (descending) - heuristic if formats differ
+    activities.sort(key=lambda x: str(x["time"]), reverse=True)
+    
+    # Format as string
+    context_lines = ["\n## Recent User Activity (Voice/Handwriting)"]
+    if not activities:
+        context_lines.append("(No recent activity)")
+    else:
+        for item in activities[:limit]:
+            context_lines.append(f"- {item['text']}")
+            
+    return "\n".join(context_lines)

@@ -229,39 +229,23 @@ def search_concepts(
 @router.get("/all/graph")
 def get_all_graph_data(
     include_proposed: Literal["auto", "all", "none"] = Query("auto", description="Visibility policy: 'auto' (default), 'all', or 'none'"),
-    session=Depends(get_neo4j_session)
+    session=Depends(get_neo4j_session),
+    auth_ctx: Dict[str, Any] = Depends(require_auth)
 ):
     """
     Get the complete graph - all nodes and relationships.
-    
-    PURPOSE:
-    Returns everything in the knowledge graph. This is the main endpoint for
-    initial graph visualization - it loads the entire graph at once.
-    
-    WHY IT EXISTS:
-    The frontend graph visualization needs to know all nodes and relationships
-    to render the interactive graph. This endpoint provides that data.
-    
-    HOW IT'S USED:
-    - GraphVisualization component calls this on initial load
-    - Shows the complete knowledge graph in the UI
-    - Users can see all their knowledge at once
-    
-    PERFORMANCE NOTE:
-    For large graphs, this might be slow. Consider using /concepts/{node_id}/neighbors
-    for lazy loading (load neighbors on-demand when clicking nodes).
-    
-    CONNECTS TO:
-    - Frontend GraphVisualization - Initial graph load
-    - Graph rendering - Provides data for react-force-graph-2d
+    SECURED: Filters by tenant_id.
     """
     import logging
     logger = logging.getLogger("brain_web")
     
+    # Extract tenant_id from auth context
+    tenant_id = auth_ctx.get("tenant_id")
+    
     try:
-        nodes = get_all_concepts(session)
-        relationships = get_all_relationships(session, include_proposed=include_proposed)
-        logger.debug(f"Fetched {len(nodes)} nodes and {len(relationships)} relationships")
+        nodes = get_all_concepts(session, tenant_id=tenant_id)
+        relationships = get_all_relationships(session, include_proposed=include_proposed, tenant_id=tenant_id)
+        logger.debug(f"Fetched {len(nodes)} nodes and {len(relationships)} relationships for tenant {tenant_id}")
         return {
             "nodes": nodes,
             "links": relationships,
@@ -479,7 +463,7 @@ def get_cross_graph_instances_endpoint(
     
     EXAMPLE:
     GET /concepts/N55D928BF/cross-graph-instances
-    Returns: All instances of "TSMC" across all graphs (Personal Finance, Default, etc.)
+    Returns: All instances of "TSMC" across all graphs (multiple workspaces, templates, etc.)
     
     USE CASES:
     - Show "Also seen in: [graph_name]" in concept view
@@ -522,25 +506,30 @@ def link_cross_graph_instances_endpoint(
     
     EXAMPLE:
     POST /concepts/N55D928BF/link-cross-graph?target_node_id=NC53B0A1D&link_type=user_linked
-    Links TSMC in Personal Finance graph to TSMC in Default graph
+    Links TSMC in one graph to TSMC in another graph
     
     USE CASES:
     - User manually links related concepts across graphs
     - Merge workflow maintains graph-specific context
     - Cross-graph relationship discovery
     
+    
     CONNECTS TO:
     - ContextPanel - Manual linking UI
     - Merge workflow - Cross-graph merge
     """
     from services_graph import link_cross_graph_instances
+    
+    # Extract user_id from auth context
+    user_id = auth_ctx.get("user_id", "unknown_user")
+    
     try:
         result = link_cross_graph_instances(
             session,
             node_id,
             target_node_id,
             link_type=link_type,
-            linked_by="user"  # TODO: Get from auth context
+            linked_by=user_id
         )
         return result
     except ValueError as e:
@@ -552,7 +541,8 @@ def link_cross_graph_instances_endpoint(
 @router.get("/{node_id}/linked-instances")
 def get_linked_instances_endpoint(
     node_id: str,
-    session=Depends(get_neo4j_session)
+    session=Depends(get_neo4j_session),
+    auth_ctx: Dict[str, Any] = Depends(require_auth)
 ):
     """
     Get all cross-graph instances that are explicitly linked via CROSS_GRAPH_LINK relationships.
@@ -900,8 +890,7 @@ def get_claims_for_concept(
            chunk.chunk_id AS chunk_id,
            doc.source AS source_type,
            doc.url AS source_url,
-           doc.doc_type AS doc_type,
-           doc.company_ticker AS company_ticker
+           doc.doc_type AS doc_type
     ORDER BY claim.confidence DESC
     LIMIT $limit
     """
@@ -927,7 +916,6 @@ def get_claims_for_concept(
             "source_type": record["source_type"],
             "source_url": record["source_url"],
             "doc_type": record["doc_type"],
-            "company_ticker": record["company_ticker"],
         })
     
     return claims
@@ -961,7 +949,6 @@ def get_sources_for_concept(
            doc.external_id AS external_id,
            doc.url AS url,
            doc.doc_type AS doc_type,
-           doc.company_ticker AS company_ticker,
            doc.published_at AS published_at,
            doc.metadata AS metadata,
            collect(DISTINCT {
@@ -990,7 +977,6 @@ def get_sources_for_concept(
             "external_id": record["external_id"],
             "url": record["url"],
             "doc_type": record["doc_type"],
-            "company_ticker": record["company_ticker"],
             "published_at": record["published_at"],
             "metadata": record["metadata"],
             "chunks": record["chunks"],

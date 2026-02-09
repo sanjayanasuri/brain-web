@@ -203,6 +203,7 @@ async def upload_resource(
         session=session,
         kind=kind,
         url=url,
+        storage_path=storage_path,
         title=title or file.filename,
         mime_type=mime_type,
         caption=caption,

@@ -617,11 +617,6 @@ export default function ConceptWikiPage() {
                         <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px' }}>
                           {source.doc_type || source.external_id || 'Document'}
                         </div>
-                        {source.company_ticker && (
-                          <div style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '4px' }}>
-                            {source.company_ticker}
-                          </div>
-                        )}
                         {source.published_at && (
                           <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
                             {new Date(source.published_at).toLocaleDateString()}

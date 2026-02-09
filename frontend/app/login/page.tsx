@@ -112,9 +112,13 @@ export default function LoginPage() {
                         </div>
 
                         <div className="text-sm">
-                            <a href="#" className="font-medium text-blue-400 hover:text-blue-300 transition-colors">
+                            <button
+                                type="button"
+                                onClick={() => alert("Please contact support@brainweb.ai to reset your password.")}
+                                className="font-medium text-blue-400 hover:text-blue-300 transition-colors bg-transparent border-none cursor-pointer p-0"
+                            >
                                 Forgot your password?
-                            </a>
+                            </button>
                         </div>
                     </div>
 
@@ -136,11 +140,11 @@ export default function LoginPage() {
 
                 <div className="mt-8 text-center text-sm text-gray-500">
                     Not part of the network?{' '}
-                    <Link href="/signup" className="font-medium text-blue-400 hover:text-blue-300 transition-colors">
-                        Request an invite
-                    </Link>
-                </div>
-            </div>
-        </div>
-    );
-}
+	                    <Link href="/signup" className="font-medium text-blue-400 hover:text-blue-300 transition-colors">
+	                        Request an invite
+	                    </Link>
+	                </div>
+	            </div>
+	        </div>
+	    );
+	}

@@ -14,6 +14,7 @@ export type ArtifactNamespace = 'neo4j' | 'postgres' | 'events' | 'frontend';
 export type ArtifactType =
   | 'artifact'
   | 'source_document'
+  | 'source_chunk'
   | 'quote'
   | 'claim'
   | 'concept'
@@ -77,5 +78,5 @@ export interface AnchorRef {
   artifact: ArtifactRef;
   selector: AnchorSelector;
   preview?: string | null;
+  snippet_image_data_url?: string | null;
 }
-

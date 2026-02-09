@@ -7,12 +7,13 @@ Tasks are executed asynchronously and update their status.
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
+import json
 
 from neo4j import Session
 
 from models import Task, TaskType, TaskStatus
 from services_signals import get_task
-from services_branch_explorer import get_active_graph_context
+from services_branch_explorer import get_active_graph_context, set_active_branch, set_active_graph
 from services_graphrag import retrieve_graphrag_context
 from services_retrieval_signals import enhance_retrieval_with_signals, format_signal_context
 
@@ -35,6 +36,63 @@ def _get_llm_client():
                 except Exception:
                     _client = None
     return _client
+
+
+def _ensure_task_graph_context(session: Session, task: Task) -> None:
+    """
+    Best-effort: align the active graph/branch context with the task.
+
+    Many services rely on get_active_graph_context(session). TaskQueue workers run
+    with a fresh session, so we re-select here to prevent cross-graph drift.
+    """
+    try:
+        current_graph_id, current_branch_id = get_active_graph_context(session)
+        if task.graph_id and task.graph_id != current_graph_id:
+            set_active_graph(session, task.graph_id)
+        if task.branch_id and task.branch_id != get_active_graph_context(session)[1]:
+            set_active_branch(session, task.branch_id)
+    except Exception:
+        # Don't fail tasks solely due to context selection problems.
+        pass
+
+
+def _get_trigger_signal_payload(session: Session, task: Task) -> Optional[Dict[str, Any]]:
+    if not task.created_by_signal_id:
+        return None
+    try:
+        rec = session.run(
+            """
+            MATCH (s:Signal {signal_id: $signal_id, graph_id: $graph_id})
+            RETURN s.payload AS payload
+            LIMIT 1
+            """,
+            signal_id=task.created_by_signal_id,
+            graph_id=task.graph_id,
+        ).single()
+        if not rec:
+            return None
+        payload = rec.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                return None
+        if isinstance(payload, dict):
+            return payload
+        return None
+    except Exception:
+        return None
+
+
+def _get_trigger_transcript(session: Session, task: Task) -> Optional[str]:
+    payload = _get_trigger_signal_payload(session, task)
+    if not payload:
+        return None
+    for k in ("transcript", "question", "text"):
+        v = payload.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
 
 
 def process_task(session: Session, task_id: str) -> Optional[Task]:
@@ -361,10 +419,201 @@ def _process_explain(session: Session, task: Task) -> Dict[str, Any]:
 
 def _process_gap_analysis(session: Session, task: Task) -> Dict[str, Any]:
     """Analyze gaps between required knowledge and demonstrated understanding."""
-    # TODO: Implement gap analysis for homework/exams
-    # Compare required concepts vs user's demonstrated understanding
+    _ensure_task_graph_context(session, task)
+
+    question = task.params.get("question") or task.params.get("query") or _get_trigger_transcript(session, task) or ""
+    question = str(question).strip()
+    if not question:
+        return {"error": "No question/transcript provided for gap analysis", "task_type": task.task_type.value}
+
+    try:
+        context_result = retrieve_graphrag_context(
+            session=session,
+            graph_id=task.graph_id,
+            branch_id=task.branch_id,
+            question=question,
+            evidence_strictness=task.params.get("evidence_strictness", "medium"),
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving context for gap analysis: {e}", exc_info=True)
+        context_result = {"context_text": "", "concepts": [], "claims": [], "communities": [], "edges": []}
+
+    client = _get_llm_client()
+    if not client:
+        return {
+            "error": "OpenAI client not available",
+            "question": question,
+            "context_preview": (context_result.get("context_text") or "")[:1500],
+            "task_type": task.task_type.value,
+        }
+
+    # Ask the LLM for prerequisite concepts, then score coverage using the graph.
+    known_concepts = []
+    for c in (context_result.get("concepts") or [])[:30]:
+        name = c.get("name") if isinstance(c, dict) else None
+        if isinstance(name, str) and name.strip():
+            known_concepts.append(name.strip())
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a tutor helping a student identify prerequisites and gaps.\n"
+                        "Return ONLY valid JSON.\n"
+                        "Schema:\n"
+                        "{\n"
+                        '  "prerequisites": [{"name": string, "why": string, "importance": "high"|"medium"|"low"}],\n'
+                        '  "assumptions": [string]\n'
+                        "}\n"
+                        "Keep it focused (8-15 prerequisites)."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Question/goal:\n{question}\n\n"
+                        f"Known related concepts already in the graph:\n{json.dumps(known_concepts[:30])}\n"
+                    ),
+                },
+            ],
+            temperature=0.2,
+            max_tokens=700,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        parsed = json.loads(raw) if raw else {}
+    except Exception as e:
+        logger.warning(f"Gap analysis prerequisite extraction failed; falling back to retrieved concepts: {e}")
+        parsed = {"prerequisites": [{"name": n, "why": "", "importance": "medium"} for n in known_concepts[:12]], "assumptions": []}
+
+    prereqs = parsed.get("prerequisites") if isinstance(parsed, dict) else None
+    if not isinstance(prereqs, list):
+        prereqs = []
+
+    prereq_items: list[dict] = []
+    seen = set()
+    for item in prereqs:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        prereq_items.append(
+            {
+                "name": name,
+                "why": str(item.get("why") or "").strip(),
+                "importance": str(item.get("importance") or "medium").strip().lower(),
+            }
+        )
+        if len(prereq_items) >= 15:
+            break
+
+    prereq_names = [p["name"] for p in prereq_items]
+    if not prereq_names:
+        prereq_names = known_concepts[:10]
+        prereq_items = [{"name": n, "why": "", "importance": "medium"} for n in prereq_names]
+
+    coverage_rows: list[dict] = []
+    if prereq_names:
+        cov_query = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        WITH g, $branch_id AS branch_id, $names AS names
+        UNWIND names AS requested_name
+        OPTIONAL MATCH (c:Concept {graph_id: $graph_id})-[:BELONGS_TO]->(g)
+        WHERE branch_id IN COALESCE(c.on_branches, [])
+          AND (toLower(c.name) = toLower(requested_name) OR toLower(c.name) CONTAINS toLower(requested_name))
+        WITH g, branch_id, requested_name, c
+        ORDER BY CASE
+          WHEN c IS NULL THEN 2
+          WHEN toLower(c.name) = toLower(requested_name) THEN 0
+          ELSE 1
+        END, size(c.name) ASC
+        WITH g, branch_id, requested_name, collect(c)[0] AS best
+        OPTIONAL MATCH (best)-[r]-(n:Concept {graph_id: $graph_id})-[:BELONGS_TO]->(g)
+        WHERE branch_id IN COALESCE(r.on_branches, []) AND branch_id IN COALESCE(n.on_branches, [])
+        WITH g, branch_id, requested_name, best, count(DISTINCT r) AS degree
+        OPTIONAL MATCH (cl:Claim {graph_id: $graph_id})-[:MENTIONS]->(best)
+        WHERE branch_id IN COALESCE(cl.on_branches, [])
+        WITH requested_name, best, degree, count(DISTINCT cl) AS claim_count
+        RETURN requested_name,
+               best.node_id AS node_id,
+               best.name AS matched_name,
+               size(COALESCE(best.description, "")) AS description_len,
+               degree,
+               claim_count
+        """
+        try:
+            rows = session.run(
+                cov_query,
+                graph_id=task.graph_id,
+                branch_id=task.branch_id,
+                names=prereq_names,
+            )
+            coverage_rows = [dict(r.data()) for r in rows]
+        except Exception as e:
+            logger.warning(f"Gap analysis coverage query failed: {e}")
+            coverage_rows = [{"requested_name": n, "node_id": None, "matched_name": None, "description_len": 0, "degree": 0, "claim_count": 0} for n in prereq_names]
+
+    cov_by_requested = {r.get("requested_name"): r for r in coverage_rows if isinstance(r, dict)}
+
+    gaps = []
+    next_steps = []
+    for prereq in prereq_items:
+        requested = prereq["name"]
+        cov = cov_by_requested.get(requested, {}) if cov_by_requested else {}
+        node_id = cov.get("node_id")
+        matched_name = cov.get("matched_name")
+        description_len = int(cov.get("description_len") or 0)
+        claim_count = int(cov.get("claim_count") or 0)
+        degree = int(cov.get("degree") or 0)
+
+        if not node_id:
+            gap_type = "missing"
+            next_steps.append(f"Add '{requested}' to your graph (capture a source or add a note), then re-run gap analysis.")
+        elif claim_count == 0 or description_len < 30:
+            gap_type = "insufficient_depth"
+            next_steps.append(f"Expand '{matched_name or requested}' with at least 1–2 supporting claims and a short description.")
+        else:
+            gap_type = "sufficient"
+
+        gaps.append(
+            {
+                "requested_name": requested,
+                "matched_name": matched_name,
+                "concept_id": node_id,
+                "gap_type": gap_type,
+                "importance": prereq.get("importance"),
+                "why": prereq.get("why"),
+                "coverage": {
+                    "degree": degree,
+                    "claim_count": claim_count,
+                    "description_len": description_len,
+                },
+            }
+        )
+
+    # Deduplicate next steps while preserving order
+    dedup_steps = []
+    seen_steps = set()
+    for s in next_steps:
+        if s in seen_steps:
+            continue
+        seen_steps.add(s)
+        dedup_steps.append(s)
+
     return {
-        "message": "Gap analysis not yet implemented",
+        "question": question,
+        "gaps": gaps,
+        "assumptions": parsed.get("assumptions", []) if isinstance(parsed, dict) else [],
+        "next_steps": dedup_steps[:8],
+        "context_used": {
+            "communities": len(context_result.get("communities", [])),
+            "claims": len(context_result.get("claims", [])),
+            "concepts": len(context_result.get("concepts", [])),
+        },
         "task_type": task.task_type.value,
     }
 
@@ -422,9 +671,120 @@ def _process_retrieve_context(session: Session, task: Task) -> Dict[str, Any]:
 
 def _process_extract_concepts(session: Session, task: Task) -> Dict[str, Any]:
     """Extract concepts from uploaded content."""
-    # TODO: Use existing concept extraction logic
+    _ensure_task_graph_context(session, task)
+
+    # Preferred inputs
+    text = task.params.get("text")
+    resource_id = task.params.get("resource_id")
+    artifact_type = "manual"
+    extra_metadata: Dict[str, Any] = {}
+
+    if not (isinstance(text, str) and text.strip()) and resource_id:
+        # Resource-backed extraction (PDF/text)
+        rid = str(resource_id).strip()
+        q = """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        MATCH (r:Resource {graph_id: $graph_id, resource_id: $resource_id})-[:BELONGS_TO]->(g)
+        WHERE $branch_id IN COALESCE(r.on_branches, [])
+        RETURN r.kind AS kind, r.mime_type AS mime_type, r.url AS url, r.title AS title, r.storage_path AS storage_path
+        LIMIT 1
+        """
+        rec = session.run(q, graph_id=task.graph_id, branch_id=task.branch_id, resource_id=rid).single()
+        if not rec:
+            return {"error": f"Resource not found: {rid}", "task_type": task.task_type.value}
+
+        storage_path = rec.get("storage_path")
+        if not storage_path:
+            return {"error": "Resource is missing storage_path (re-upload the file to enable ingestion)", "task_type": task.task_type.value}
+
+        from storage import read_file
+        file_bytes = read_file(str(storage_path))
+
+        kind = str(rec.get("kind") or "").strip()
+        mime_type = str(rec.get("mime_type") or "").strip()
+        url = str(rec.get("url") or "").strip() or None
+        title = str(rec.get("title") or rid).strip() or rid
+
+        if mime_type == "application/pdf" or kind == "pdf":
+            from services_pdf_enhanced import extract_pdf_enhanced
+            pdf_result = extract_pdf_enhanced(pdf_path=str(storage_path), pdf_bytes=file_bytes, use_ocr=False, extract_tables=True)
+            text = pdf_result.full_text
+            artifact_type = "pdf"
+            extra_metadata = {
+                "resource_id": rid,
+                "pdf_metadata": pdf_result.metadata.dict(),
+                "extraction_method": pdf_result.extraction_method,
+            }
+        elif mime_type.startswith("text/"):
+            try:
+                text = file_bytes.decode("utf-8")
+            except Exception:
+                text = file_bytes.decode("utf-8", errors="replace")
+            artifact_type = "manual"
+            extra_metadata = {"resource_id": rid, "mime_type": mime_type}
+        else:
+            return {"error": f"Unsupported resource type for concept extraction: {mime_type or kind or 'unknown'}", "task_type": task.task_type.value}
+
+        task.params["source_url"] = url
+        task.params["title"] = title
+
+    if not (isinstance(text, str) and text.strip()):
+        text = _get_trigger_transcript(session, task) or ""
+
+    text = str(text).strip()
+    if not text:
+        return {"error": "No text/transcript provided for concept extraction", "task_type": task.task_type.value}
+
+    from services_ingestion_kernel import ingest_artifact
+    from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+
+    title = str(task.params.get("title") or "Concept extraction").strip() or "Concept extraction"
+    domain = task.params.get("domain")
+    source_url = task.params.get("source_url")
+    source_id = task.params.get("source_id") or task.task_id
+
+    artifact_input = ArtifactInput(
+        artifact_type=artifact_type,  # type: ignore[arg-type]
+        source_url=str(source_url).strip() if isinstance(source_url, str) and source_url.strip() else None,
+        source_id=str(source_id).strip() if source_id else None,
+        title=title,
+        domain=str(domain).strip() if isinstance(domain, str) and domain.strip() else None,
+        text=text,
+        metadata={
+            "capture_mode": "task_extract_concepts",
+            "task_id": task.task_id,
+            **extra_metadata,
+        },
+        actions=IngestionActions(
+            run_lecture_extraction=True,
+            run_chunk_and_claims=False,
+            embed_claims=False,
+            create_lecture_node=True,
+            create_artifact_node=True,
+        ),
+        policy=IngestionPolicy(
+            local_only=True,
+            max_chars=200_000,
+            min_chars=20,
+        ),
+    )
+
+    try:
+        ingest_result = ingest_artifact(session, artifact_input)
+    except Exception as e:
+        logger.error(f"Error extracting concepts via ingestion kernel: {e}", exc_info=True)
+        return {"error": str(e), "task_type": task.task_type.value}
+
+    created = ingest_result.created_concept_ids or []
+    updated = ingest_result.updated_concept_ids or []
+
     return {
-        "message": "Concept extraction not yet implemented",
+        "artifact_id": ingest_result.artifact_id,
+        "run_id": ingest_result.run_id,
+        "status": ingest_result.status,
+        "created_concept_ids": created,
+        "updated_concept_ids": updated,
+        "created_relationship_count": ingest_result.created_relationship_count,
         "task_type": task.task_type.value,
     }
 

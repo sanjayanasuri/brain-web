@@ -1,4 +1,4 @@
-# backend/db_analytics_schema.sql
+-- backend/db_analytics_schema.sql
 """
 Analytics database schema for Phase 4.
 Tracks performance history, concept mastery, difficulty levels, and recommendations.

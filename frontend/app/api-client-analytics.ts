@@ -4,129 +4,60 @@
  * Phase 4: Fetch performance data, recommendations, and insights.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import { API_BASE_URL, getApiHeaders } from './api/base';
+
+const API_BASE = API_BASE_URL.replace(/\/+$/, '');
+
+async function fetchAnalytics(path: string, init: RequestInit = {}) {
+    const headers = await getApiHeaders();
+    const res = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        headers: {
+            ...headers,
+            ...(init.headers || {}),
+        },
+    });
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        throw new Error(errorText || `Analytics request failed: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+}
 
 // Fetch performance trends
 export async function fetchPerformanceTrends(days: number = 30) {
-    const response = await fetch(`${API_BASE}/api/analytics/trends?days=${days}`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch performance trends');
-    }
-
-    return response.json();
+    return fetchAnalytics(`/analytics/trends?days=${days}`, { method: 'GET' });
 }
 
 // Fetch concept mastery
 export async function fetchConceptMastery(limit?: number) {
-    const url = limit
-        ? `${API_BASE}/api/analytics/mastery?limit=${limit}`
-        : `${API_BASE}/api/analytics/mastery`;
-
-    const response = await fetch(url, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch concept mastery');
-    }
-
-    return response.json();
+    const path = limit != null ? `/analytics/mastery?limit=${limit}` : `/analytics/mastery`;
+    return fetchAnalytics(path, { method: 'GET' });
 }
 
 // Fetch learning velocity
 export async function fetchLearningVelocity() {
-    const response = await fetch(`${API_BASE}/api/analytics/velocity`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch learning velocity');
-    }
-
-    return response.json();
+    return fetchAnalytics(`/analytics/velocity`, { method: 'GET' });
 }
 
 // Fetch weak areas
 export async function fetchWeakAreas() {
-    const response = await fetch(`${API_BASE}/api/analytics/weak-areas`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch weak areas');
-    }
-
-    return response.json();
+    return fetchAnalytics(`/analytics/weak-areas`, { method: 'GET' });
 }
 
 // Fetch session stats
 export async function fetchSessionStats() {
-    const response = await fetch(`${API_BASE}/api/analytics/stats`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch session stats');
-    }
-
-    return response.json();
+    return fetchAnalytics(`/analytics/stats`, { method: 'GET' });
 }
 
 // Fetch recommendations
 export async function fetchRecommendations(limit: number = 5) {
-    const response = await fetch(`${API_BASE}/api/analytics/recommendations?limit=${limit}`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to fetch recommendations');
-    }
-
-    return response.json();
+    return fetchAnalytics(`/analytics/recommendations?limit=${limit}`, { method: 'GET' });
 }
 
 // Dismiss recommendation
 export async function dismissRecommendation(recId: string) {
-    const response = await fetch(`${API_BASE}/api/analytics/recommendations/${recId}/dismiss`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error('Failed to dismiss recommendation');
-    }
-
-    return response.json();
+    return fetchAnalytics(`/analytics/recommendations/${encodeURIComponent(recId)}/dismiss`, { method: 'POST' });
 }
 
 // Fetch all analytics data at once

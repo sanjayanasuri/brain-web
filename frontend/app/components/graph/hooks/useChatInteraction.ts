@@ -65,6 +65,7 @@ export function useChatInteraction(
             suggestedActions: [],
             retrievalMeta: null,
             evidenceUsed: [],
+            anchorCitations: [],
         };
         chat.actions.addChatMessage(pendingMessage);
 
@@ -126,7 +127,7 @@ export function useChatInteraction(
             const data = await response.json();
             if (data.error) throw new Error(data.error);
 
-            // Handle extracted graph data from Perplexica
+            // Handle extracted graph data from web search (if provided)
             if (data.graph_data) {
                 console.log('[Chat] Received graph data from search:', data.graph_data);
                 setGraphData(prev => {
@@ -137,7 +138,7 @@ export function useChatInteraction(
 
                     if (Array.isArray(data.graph_data.nodes)) {
                         data.graph_data.nodes.forEach((n: any) => {
-                            // Map Perplexica format (id, label) to VisualNode (node_id, name)
+                            // Map {id,label} style nodes to VisualNode {node_id,name}
                             const nodeId = n.id || n.node_id;
                             if (nodeId && !newNodes.some(existing => existing.node_id === nodeId)) {
                                 newNodes.push({
@@ -274,6 +275,7 @@ export function useChatInteraction(
                 suggestedActions: data.suggestedActions || [],
                 retrievalMeta: data.retrievalMeta || null,
                 evidenceUsed: normalizedEvidence,
+                anchorCitations: data.anchorCitations || data.citations || [],
                 extractedGraphData: data.graph_data, // Store for "Save" button
                 webSearchResults: data.webSearchResults
             });

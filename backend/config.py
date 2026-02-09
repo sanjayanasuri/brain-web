@@ -12,6 +12,8 @@ backend_env = Path(__file__).parent / ".env"
 # 1) backend/.env (lowest)
 # 2) repo_root/.env (overrides backend)
 # 3) repo_root/.env.local (highest)
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")  # "production" or "development"
+
 if backend_env.exists():
     load_dotenv(dotenv_path=backend_env, override=False)
 if env_file.exists():
@@ -47,7 +49,6 @@ VOICE_AGENT_NAME = os.getenv("VOICE_AGENT_NAME", "Learning Companion")
 # Notion API integration
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 BRAINWEB_API_BASE = os.getenv("BRAINWEB_API_BASE", "http://127.0.0.1:8000")
-PERPLEXICA_URL = os.getenv("PERPLEXICA_URL", "http://127.0.0.1:3000")
 
 # Notion sync configuration
 NOTION_DATABASE_IDS_STR = os.getenv("NOTION_DATABASE_IDS", "")
@@ -75,13 +76,6 @@ PDF_MAX_FILE_SIZE_MB = int(os.getenv("PDF_MAX_FILE_SIZE_MB", "50"))  # 50MB defa
 PDF_MAX_FILE_SIZE_BYTES = PDF_MAX_FILE_SIZE_MB * 1024 * 1024
 PDF_MAX_PAGES = int(os.getenv("PDF_MAX_PAGES", "1000"))  # Max pages to process
 PDF_RATE_LIMIT_PER_MINUTE = int(os.getenv("PDF_RATE_LIMIT_PER_MINUTE", "10"))  # 10 PDFs per minute per user
-
-# SEC EDGAR API User-Agent (required by SEC)
-SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "BrainWeb/1.0 contact@example.com")
-
-# Finance skill IDs (kept for reference, or remove if unused)
-BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_DISCOVERY_SKILL_ID")
-BROWSER_USE_FINANCE_TRACKER_SKILL_ID = os.getenv("BROWSER_USE_FINANCE_TRACKER_SKILL_ID")
 
 # Storage configuration (for resource files)
 # Set STORAGE_BACKEND=s3 to use S3, otherwise uses local filesystem (default, no cost)
@@ -157,3 +151,13 @@ DEMO_SAFE_WRITE_PATHS = [
 DEMO_RATE_LIMIT_PER_IP_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_IP_PER_MIN", "60"))
 DEMO_RATE_LIMIT_PER_SESSION_PER_MIN = int(os.getenv("DEMO_RATE_LIMIT_PER_SESSION_PER_MIN", "30"))
 DEMO_BEDROCK_MAX_TOKENS_PER_SESSION = int(os.getenv("DEMO_BEDROCK_MAX_TOKENS_PER_SESSION", "50000"))
+
+# Voice Activity Detection (VAD) configuration
+VAD_ENGINE = os.getenv("VAD_ENGINE", "silero").lower()  # "silero" or "energy"
+SILERO_VAD_MODEL_PATH = os.getenv("SILERO_VAD_MODEL_PATH", "/app/models/silero_vad.jit")
+SILERO_VAD_THRESHOLD = float(os.getenv("SILERO_VAD_THRESHOLD", "0.5"))  # Detection threshold (0.0-1.0)
+SILERO_VAD_SAMPLING_RATE = int(os.getenv("SILERO_VAD_SAMPLING_RATE", "16000"))  # 8000 or 16000 Hz
+
+# Energy VAD fallback configuration (if VAD_ENGINE=energy)
+ENERGY_VAD_THRESHOLD = float(os.getenv("ENERGY_VAD_THRESHOLD", "0.03"))
+ENERGY_VAD_FRAME_LENGTH_MS = int(os.getenv("ENERGY_VAD_FRAME_LENGTH_MS", "30"))

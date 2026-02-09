@@ -18,6 +18,7 @@ from models import (
     ConversationSummary,
     LearningTopic
 )
+from models_tutor_profile import TutorProfile, TutorProfilePatch
 from db_neo4j import get_neo4j_session
 from services_graph import (
     get_response_style_profile,
@@ -35,9 +36,32 @@ from services_graph import (
     get_active_learning_topics,
     patch_user_profile
 )
+from services_tutor_profile import (
+    get_tutor_profile as get_tutor_profile_service,
+    set_tutor_profile as set_tutor_profile_service,
+    patch_tutor_profile as patch_tutor_profile_service,
+)
 from auth import get_user_context_from_request
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
+
+def _get_request_user_id(request: Request) -> str:
+    # Prefer middleware-authenticated state (works in demo mode elevation too)
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        return str(user_id)
+    # Fallback: parse token directly (legacy)
+    user_context = get_user_context_from_request(request)
+    token_user_id = user_context.get("user_id")
+    return str(token_user_id) if token_user_id else "default"
+
+def _get_request_tenant_id(request: Request) -> str:
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if tenant_id:
+        return str(tenant_id)
+    user_context = get_user_context_from_request(request)
+    token_tenant_id = user_context.get("tenant_id")
+    return str(token_tenant_id) if token_tenant_id else "default"
 
 
 @router.get("/response-style", response_model=ResponseStyleProfileWrapper)
@@ -89,8 +113,7 @@ def get_profile(request: Request, session=Depends(get_neo4j_session)):
     Get the user profile.
     The profile encodes background, interests, weak spots, and learning preferences.
     """
-    user_context = get_user_context_from_request(request)
-    user_id = user_context.get("user_id", "default")
+    user_id = _get_request_user_id(request)
     return get_user_profile(session, user_id=user_id)
 
 
@@ -99,8 +122,7 @@ def set_profile(profile: UserProfile, request: Request, session=Depends(get_neo4
     """
     Update the user profile.
     """
-    user_context = get_user_context_from_request(request)
-    user_id = user_context.get("user_id", "default")
+    user_id = _get_request_user_id(request)
     return update_user_profile(session, profile, user_id=user_id)
 
 
@@ -109,9 +131,35 @@ def patch_profile(update_dict: dict, request: Request, session=Depends(get_neo4j
     """
     Partial update of the user profile.
     """
-    user_context = get_user_context_from_request(request)
-    user_id = user_context.get("user_id", "default")
+    user_id = _get_request_user_id(request)
     return patch_user_profile(session, update_dict, user_id=user_id)
+
+@router.get("/tutor-profile", response_model=TutorProfile)
+def get_tutor_profile(request: Request, session=Depends(get_neo4j_session)):
+    """
+    Get the per-user TutorProfile (Phase F).
+    Stored under UserProfile.learning_preferences["tutor_profile"].
+    """
+    user_id = _get_request_user_id(request)
+    return get_tutor_profile_service(session, user_id=user_id)
+
+
+@router.post("/tutor-profile", response_model=TutorProfile)
+def set_tutor_profile(profile: TutorProfile, request: Request, session=Depends(get_neo4j_session)):
+    """
+    Set the per-user TutorProfile (overwrite).
+    """
+    user_id = _get_request_user_id(request)
+    return set_tutor_profile_service(session, user_id=user_id, profile=profile)
+
+
+@router.patch("/tutor-profile", response_model=TutorProfile)
+def patch_tutor_profile(patch: TutorProfilePatch, request: Request, session=Depends(get_neo4j_session)):
+    """
+    Patch the per-user TutorProfile (partial update).
+    """
+    user_id = _get_request_user_id(request)
+    return patch_tutor_profile_service(session, user_id=user_id, patch=patch)
 
 
 @router.get("/ui", response_model=UIPreferences)
@@ -131,19 +179,23 @@ def set_ui_prefs(prefs: UIPreferences, session=Depends(get_neo4j_session)):
 
 
 @router.post("/conversation-summaries", response_model=ConversationSummary)
-def store_summary(summary: ConversationSummary, session=Depends(get_neo4j_session)):
+def store_summary(summary: ConversationSummary, request: Request, session=Depends(get_neo4j_session)):
     """
     Store a conversation summary for long-term memory.
     """
-    return store_conversation_summary(session, summary)
+    user_id = _get_request_user_id(request)
+    tenant_id = _get_request_tenant_id(request)
+    return store_conversation_summary(session, summary, user_id=user_id, tenant_id=tenant_id)
 
 
 @router.get("/conversation-summaries", response_model=List[ConversationSummary])
-def get_summaries(limit: int = 10, session=Depends(get_neo4j_session)):
+def get_summaries(request: Request, limit: int = 10, session=Depends(get_neo4j_session)):
     """
     Get recent conversation summaries for context.
     """
-    return get_recent_conversation_summaries(session, limit)
+    user_id = _get_request_user_id(request)
+    tenant_id = _get_request_tenant_id(request)
+    return get_recent_conversation_summaries(session, limit, user_id=user_id, tenant_id=tenant_id)
 
 
 @router.post("/learning-topics", response_model=LearningTopic)

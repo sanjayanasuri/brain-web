@@ -10,6 +10,8 @@ import { getChatSession, getCurrentSessionId } from '../../lib/chatSessions';
 import { storeLectureLinkReturn } from '../../lib/lectureLinkNavigation';
 import { getAuthHeaders } from '../../lib/authToken';
 import { useBranchContext } from './BranchContext';
+import TaskCard from '../study/TaskCard';
+import Feedback from '../study/Feedback';
 
 interface Branch {
   id: string;
@@ -172,6 +174,12 @@ export default function ChatMessageWithBranches({
     branch.bridging_hints?.hints || []
   );
 
+  // Parse Study Task
+  const studyTaskMatch = role === 'assistant' ? content.match(/\[STUDY_TASK:\s*(\w+)\]([\s\S]*)/) : null;
+  const taskType = studyTaskMatch ? studyTaskMatch[1] : null;
+  const taskPrompt = studyTaskMatch ? studyTaskMatch[2].trim() : null;
+  const displayContent = studyTaskMatch ? content.split('[STUDY_TASK:')[0].trim() : content;
+
   return (
     <div id={`message-${messageId}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{
@@ -188,13 +196,27 @@ export default function ChatMessageWithBranches({
         wordBreak: 'break-word',
       }}>
         {role === 'assistant' ? (
-          <SelectableText
-            text={content}
-            messageId={messageId}
-            onExplain={handleExplain}
-            highlightStart={highlightStart}
-            highlightEnd={highlightEnd}
-          />
+          <>
+            {displayContent && (
+              <SelectableText
+                text={displayContent}
+                messageId={messageId}
+                onExplain={handleExplain}
+                highlightStart={highlightStart}
+                highlightEnd={highlightEnd}
+              />
+            )}
+            {taskType && taskPrompt && (
+              <div style={{ marginTop: displayContent ? '16px' : '0' }}>
+                <TaskCard
+                  taskType={taskType}
+                  prompt={taskPrompt}
+                  excerpts={[]}
+                  compact={true}
+                />
+              </div>
+            )}
+          </>
         ) : (
           <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>
         )}

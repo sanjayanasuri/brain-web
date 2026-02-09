@@ -4,7 +4,7 @@ Base interfaces for vertical-specific retrieval.
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Literal, List
 
-VerticalName = Literal["general", "finance"]
+VerticalName = Literal["general"]
 
 
 @dataclass

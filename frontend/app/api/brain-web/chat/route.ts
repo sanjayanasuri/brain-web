@@ -50,7 +50,11 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
  * - Privacy-respecting (no tracking)
  * - Self-hostable (full control)
  */
-async function performWebSearch(query: string, graph_id: string = 'default'): Promise<{
+async function performWebSearch(
+  query: string,
+  graph_id: string = 'default',
+  backendHeaders?: Record<string, string>
+): Promise<{
   results: Array<{
     title: string;
     snippet: string;
@@ -62,6 +66,7 @@ async function performWebSearch(query: string, graph_id: string = 'default'): Pr
   error?: string;
 }> {
   const backendUrl = API_BASE_URL;
+  const headers = backendHeaders ?? getBackendHeaders();
 
   try {
     // Attempt native deep research first
@@ -69,7 +74,7 @@ async function performWebSearch(query: string, graph_id: string = 'default'): Pr
       `${backendUrl}/web-search/research?query=${encodeURIComponent(query)}&active_graph_id=${graph_id}`,
       {
         method: 'POST',
-        headers: getBackendHeaders(),
+        headers,
       }
     );
 
@@ -102,7 +107,7 @@ async function performWebSearch(query: string, graph_id: string = 'default'): Pr
       `${backendUrl}/web-search/search-and-fetch?query=${encodeURIComponent(query)}&num_results=3&max_content_length=10000`,
       {
         signal: searchAndFetchController.signal,
-        headers: getBackendHeaders(),
+        headers,
       }
     );
     clearTimeout(searchAndFetchTimeout);
@@ -225,6 +230,38 @@ function getBackendHeaders(): Record<string, string> {
   };
 }
 
+async function getBackendHeadersForRequest(request: NextRequest): Promise<Record<string, string>> {
+  const authorization = request.headers.get('authorization');
+  if (authorization) {
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': authorization,
+    };
+  }
+
+  // Jest runs in a JS DOM environment and can struggle with NextAuth's jose dependencies.
+  // For route tests we can safely fall back to the dev token path.
+  if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
+    return getBackendHeaders();
+  }
+
+  try {
+    const { getToken } = await import('next-auth/jwt');
+    const token = await getToken({ req: request as any });
+    const accessToken = (token as any)?.accessToken;
+    if (typeof accessToken === 'string' && accessToken.length > 0) {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      };
+    }
+  } catch (error) {
+    console.warn('[Chat API] Failed to read NextAuth token, falling back to dev token:', error);
+  }
+
+  return getBackendHeaders();
+}
+
 interface Concept {
   node_id: string;
   name: string;
@@ -260,8 +297,6 @@ interface ChatRequest {
   graph_id?: string;
   branch_id?: string;
   lecture_id?: string | null;
-  vertical?: 'general' | 'finance';
-  lens?: string;
   recency_days?: number;
   evidence_strictness?: 'high' | 'medium' | 'low';
   include_proposed_edges?: boolean;
@@ -296,6 +331,8 @@ interface EvidenceItem {
   title: string;
   url?: string | null;
   source: string;
+  // Optional: some callers use `source_type` (we return both for compatibility)
+  source_type?: string;
   as_of?: string | number | null;
   snippet?: string | null;
   resource_id?: string | null;
@@ -331,7 +368,11 @@ interface ChatResponse {
       published_at?: string;
     }>;
   };
+  // Phase C: evidence is normalized client-side; keep both keys for backward-compat
+  evidence?: EvidenceItem[];
   evidenceUsed?: EvidenceItem[];
+  // Phase C: AnchorRef-based citations from /ai/retrieve (retrieval chunks/quotes)
+  anchorCitations?: any[];
   answer_sections?: AnswerSection[];
   graph_data?: any;
   webSearchResults?: Array<{ title: string; snippet: string; link: string; fullContent?: string; graph?: any }>;
@@ -518,6 +559,7 @@ export async function POST(request: NextRequest) {
     const apiKey = getOpenAIApiKey();
 
     const body: ChatRequest = await request.json();
+    const backendHeaders = await getBackendHeadersForRequest(request);
 
     // Check cache for identical query
     const cacheKey = JSON.stringify({
@@ -535,10 +577,8 @@ export async function POST(request: NextRequest) {
     }
     // Always use GraphRAG - it's superior to classic mode in all cases
     // Mode parameter is deprecated but kept for backward compatibility
-    const { message: initialMessage, mode = 'graphrag', graph_id, branch_id, lecture_id, vertical: initialVertical, lens: initialLens, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url, image, ui_context } = body;
+    const { message: initialMessage, mode = 'graphrag', graph_id, branch_id, lecture_id, recency_days, evidence_strictness, include_proposed_edges, response_prefs, voice_id, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url, image, ui_context } = body;
     let message = initialMessage;
-    let vertical = initialVertical;
-    let lens = initialLens;
 
     // Default ResponsePreferences if not provided
     const defaultResponsePrefs: ResponsePreferences = {
@@ -549,24 +589,57 @@ export async function POST(request: NextRequest) {
     const finalResponsePrefs: ResponsePreferences = { ...defaultResponsePrefs, ...(response_prefs || {}) };
     const finalVoiceId = voice_id || 'neutral';
 
-    // Handle finance: prefix
-    if (message.toLowerCase().startsWith('finance:')) {
-      vertical = 'finance';
-      message = message.substring(8).trim(); // Remove "finance:" prefix
-
-      // Parse lens from message if present (e.g., "finance: NVIDIA lens=competition")
-      const lensMatch = message.match(/lens=(\w+)/i);
-      if (lensMatch) {
-        lens = lensMatch[1];
-        message = message.replace(/lens=\w+/i, '').trim(); // Remove lens= part
-      }
-    }
-
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
         { error: 'Message is required and must be a string' },
         { status: 400 }
       );
+    }
+
+    // Phase E: /fill command router (handled before OpenAI key checks)
+    if (message.trim().toLowerCase().startsWith('/fill')) {
+      const fillStartTime = Date.now();
+      try {
+        const fillResp = await fetch(`${API_BASE_URL}/fill`, {
+          method: 'POST',
+          headers: backendHeaders,
+          body: JSON.stringify({
+            command: message,
+            graph_id: graph_id || 'default',
+            branch_id: branch_id || 'main',
+            limit: 5,
+          }),
+        });
+
+        if (!fillResp.ok) {
+          const errorText = await fillResp.text();
+          return NextResponse.json({
+            answer: `❌ /fill failed: ${errorText || fillResp.statusText}`,
+            usedNodes: [],
+            suggestedQuestions: [],
+            meta: { mode: 'fill', duration_ms: Date.now() - fillStartTime },
+          });
+        }
+
+        const fillData: any = await fillResp.json();
+        return NextResponse.json({
+          answer: fillData?.answer || '',
+          usedNodes: [],
+          suggestedQuestions: [],
+          meta: {
+            mode: 'fill',
+            duration_ms: Date.now() - fillStartTime,
+            fill: fillData,
+          },
+        });
+      } catch (err: any) {
+        return NextResponse.json({
+          answer: `❌ /fill failed: ${err?.message || 'Unknown error'}`,
+          usedNodes: [],
+          suggestedQuestions: [],
+          meta: { mode: 'fill', duration_ms: Date.now() - fillStartTime },
+        });
+      }
     }
 
     if (!apiKey) {
@@ -591,7 +664,7 @@ export async function POST(request: NextRequest) {
     console.log(`[Chat API] Processing question: "${message.substring(0, 50)}..." (always using GraphRAG)`);
 
     // Check for Assessment/Study Mode
-    if ((vertical as string) === 'study' || (body as any).mode === 'assessment') {
+    if (mode === 'assessment') {
       console.log('[Chat API] Routing to Assessment Agent...');
 
       // Determine action: probe or evaluate
@@ -625,7 +698,7 @@ export async function POST(request: NextRequest) {
       // Call Assessment Endpoint
       const assessResponse = await fetch(`${API_BASE_URL}/ai/assess`, {
         method: 'POST',
-        headers: getBackendHeaders(),
+        headers: backendHeaders,
         body: JSON.stringify({
           action,
           concept_name: conceptName,
@@ -657,7 +730,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Always use GraphRAG mode - it's superior in all cases
-    const result = await handleGraphRAGMode(message, graph_id, branch_id, lecture_id, apiKey, vertical, lens, recency_days, evidence_strictness, include_proposed_edges, finalResponsePrefs, finalVoiceId, chatHistory, trail_id, focus_concept_id, focus_quote_id, focus_page_url, image, ui_context, (body as any).forceWebSearch);
+    const result = await handleGraphRAGMode(
+      message,
+      graph_id,
+      branch_id,
+      lecture_id,
+      apiKey,
+      recency_days,
+      evidence_strictness,
+      include_proposed_edges,
+      finalResponsePrefs,
+      finalVoiceId,
+      chatHistory,
+      trail_id,
+      focus_concept_id,
+      focus_quote_id,
+      focus_page_url,
+      image,
+      ui_context,
+      (body as any).forceWebSearch,
+      backendHeaders
+    );
 
     // Cache the successful response
     try {
@@ -830,8 +923,6 @@ async function handleGraphRAGMode(
   branch_id: string | undefined,
   lecture_id: string | null | undefined,
   apiKey: string,
-  vertical?: 'general' | 'finance',
-  lens?: string,
   recency_days?: number,
   evidence_strictness?: 'high' | 'medium' | 'low',
   include_proposed_edges?: boolean,
@@ -844,7 +935,8 @@ async function handleGraphRAGMode(
   focus_page_url?: string,
   image?: string,
   ui_context?: ChatRequest['ui_context'],
-  forceWebSearch?: boolean
+  forceWebSearch?: boolean,
+  backendHeaders?: Record<string, string>
 ): Promise<NextResponse> {
   const startTime = Date.now();
 
@@ -854,8 +946,9 @@ async function handleGraphRAGMode(
     ask_question_policy: 'at_most_one',
     end_with_next_step: true,
   };
-  const finalResponsePrefs = responsePrefs || defaultResponsePrefs;
-  const finalVoiceId = voiceId || 'neutral';
+  let finalResponsePrefs: ResponsePreferences = { ...defaultResponsePrefs, ...(responsePrefs || {}) };
+  let finalVoiceId = voiceId || 'neutral';
+  let tutorProfile: any = null;
 
   // Declare variables used throughout the function
   // Analysis result variables
@@ -864,6 +957,7 @@ async function handleGraphRAGMode(
   let retrievalIntent = 'DEFINITION_OVERVIEW';
   let trace: any[] = [];
   let context: any = {};
+  let anchorCitations: any[] = [];
   let styleFeedbackResponse: PromiseSettledResult<Response | null> | null = null;
   let styleFeedbackExamples: string = '';
   let userProfile: any = null;
@@ -900,16 +994,18 @@ async function handleGraphRAGMode(
     const defaultGraphId = graph_id || 'default';
     const defaultBranchId = branch_id || 'main';
 
-    console.log(`[Chat API] GraphRAG mode: fetching context for graph_id=${defaultGraphId}, branch_id=${defaultBranchId}, vertical=${vertical || 'general'}`);
+    console.log(`[Chat API] GraphRAG mode: fetching context for graph_id=${defaultGraphId}, branch_id=${defaultBranchId}`);
+
+    const resolvedBackendHeaders = backendHeaders ?? getBackendHeaders();
 
     // Step 0: Start non-critical metadata fetches early (in parallel with the router)
     const earlyMetadataFetches = [
-      fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`).catch(() => null),
-      fetch(`${API_BASE_URL}/preferences/learning-topics?limit=10`).catch(() => null),
-      fetch(`${API_BASE_URL}/ai/focus-areas`).catch(() => null),
-      fetch(`${API_BASE_URL}/preferences/response-style`).catch(() => null),
-      fetch(`${API_BASE_URL}/preferences/user-profile`).catch(() => null),
-      fetch(`${API_BASE_URL}/preferences/conversation-summaries?limit=5`).catch(() => null),
+      fetch(`${API_BASE_URL}/feedback/style/examples?limit=5`, { headers: resolvedBackendHeaders }).catch(() => null),
+      fetch(`${API_BASE_URL}/preferences/learning-topics?limit=10`, { headers: resolvedBackendHeaders }).catch(() => null),
+      fetch(`${API_BASE_URL}/ai/focus-areas`, { headers: resolvedBackendHeaders }).catch(() => null),
+      fetch(`${API_BASE_URL}/preferences/response-style`, { headers: resolvedBackendHeaders }).catch(() => null),
+      fetch(`${API_BASE_URL}/preferences/user-profile`, { headers: resolvedBackendHeaders }).catch(() => null),
+      fetch(`${API_BASE_URL}/preferences/conversation-summaries?limit=5`, { headers: resolvedBackendHeaders }).catch(() => null),
     ];
 
     // Step 1: AI-Based Query Routing
@@ -967,26 +1063,33 @@ async function handleGraphRAGMode(
 
     if (routingResult.needsRetrieval) {
       const retrievalIntent = routingResult.requiresSelfKnowledge ? 'SELF_KNOWLEDGE' : undefined;
-      retrievalTasks.push(fetch(`${API_BASE_URL}/ai/retrieve`, {
-        method: 'POST',
-        headers: getBackendHeaders(),
-        body: JSON.stringify({
-          message,
-          mode: 'graphrag',
-          limit: 5,
-          graph_id: defaultGraphId,
-          branch_id: defaultBranchId,
-          trail_id,
-          intent: retrievalIntent
-        }),
-        signal: AbortSignal.timeout(2500)
-      }).catch(() => null));
+      const retrievalController = new AbortController();
+      const retrievalTimeout = setTimeout(() => retrievalController.abort(), 2500);
+      retrievalTasks.push(
+        fetch(`${API_BASE_URL}/ai/retrieve`, {
+          method: 'POST',
+          headers: resolvedBackendHeaders,
+          body: JSON.stringify({
+            message,
+            mode: 'graphrag',
+            limit: 5,
+            detail_level: 'summary',
+            graph_id: defaultGraphId,
+            branch_id: defaultBranchId,
+            trail_id,
+            intent: retrievalIntent
+          }),
+          signal: retrievalController.signal
+        })
+          .finally(() => clearTimeout(retrievalTimeout))
+          .catch(() => null)
+      );
     } else {
       retrievalTasks.push(Promise.resolve(null));
     }
 
     if (routingResult.needsWebSearch) {
-      retrievalTasks.push(performWebSearch(routingResult.searchQuery || message).catch(() => ({ results: [] })));
+      retrievalTasks.push(performWebSearch(routingResult.searchQuery || message, defaultGraphId, resolvedBackendHeaders).catch(() => ({ results: [] })));
     } else {
       retrievalTasks.push(Promise.resolve({ results: [] }));
     }
@@ -1033,6 +1136,7 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
         retrievalIntent = retrievalData.intent || 'DEFINITION_OVERVIEW';
         trace = retrievalData.trace || [];
         context = retrievalData.context || {};
+        anchorCitations = Array.isArray(retrievalData.citations) ? retrievalData.citations : [];
       }
     }
 
@@ -1061,6 +1165,17 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
 
     if (userProfileRes?.status === 'fulfilled' && userProfileRes.value?.ok) {
       userProfile = await userProfileRes.value.json().catch(() => null);
+      tutorProfile = userProfile?.learning_preferences?.tutor_profile || null;
+      if (tutorProfile && typeof tutorProfile === 'object') {
+        if (!responsePrefs?.mode && tutorProfile.response_mode) finalResponsePrefs.mode = tutorProfile.response_mode;
+        if (!responsePrefs?.ask_question_policy && tutorProfile.ask_question_policy) finalResponsePrefs.ask_question_policy = tutorProfile.ask_question_policy;
+        if (responsePrefs?.end_with_next_step === undefined && tutorProfile.end_with_next_step !== undefined) {
+          finalResponsePrefs.end_with_next_step = !!tutorProfile.end_with_next_step;
+        }
+        if (!voiceId && (tutorProfile.voice_id || tutorProfile.voiceId)) {
+          finalVoiceId = tutorProfile.voice_id || tutorProfile.voiceId;
+        }
+      }
     }
 
     if (summariesRes?.status === 'fulfilled' && summariesRes.value?.ok) {
@@ -1103,7 +1218,14 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
     // Add long-term context
     let longTermContext = '';
     if (recentSummaries?.length > 0) {
-      longTermContext += `## Recent Conversation\n` + recentSummaries.slice(0, 3).map((s: any) => `Q: ${s.question}`).join('\n') + '\n\n';
+      longTermContext += `## Recent Conversation\n` + recentSummaries.slice(0, 3).map((s: any) => {
+        const q = String(s?.question || '').trim();
+        const sm = String(s?.summary || '').trim();
+        const a = String(s?.answer || '').trim();
+        if (sm) return `Q: ${q}\nSummary: ${sm}`;
+        if (a) return `Q: ${q}\nA: ${a}`;
+        return `Q: ${q}`;
+      }).join('\n\n') + '\n\n';
     }
     if (activeTopics?.length > 0) {
       longTermContext += `## Active Topics\nYou've been learning about: ` + activeTopics.slice(0, 5).map((t: any) => t.name).join(', ') + '\n\n';
@@ -1118,6 +1240,22 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
     const baseSystemPromptGraphrag = `You are Brain Web, a teaching assistant. Use context to answer. Cite [Quote: ID], [Claim: ID], or [Source: URL] ONLY if context is available. No bold for concepts.`;
 
     const additionalLayers: string[] = [];
+    if (tutorProfile && typeof tutorProfile === 'object') {
+      const audience = tutorProfile.audience_mode || tutorProfile.audienceMode || 'default';
+      const pacing = tutorProfile.pacing || 'normal';
+      const noGlazing = tutorProfile.no_glazing !== false;
+      const audienceLayer: Record<string, string> = {
+        default: 'Audience: default.',
+        eli5: 'Audience: ELI5 (simple, concrete, no jargon unless defined).',
+        ceo_pitch: 'Audience: CEO pitch (executive summary, impact/tradeoffs, crisp).',
+        recruiter_interview: 'Audience: recruiter interview (clear definition + practical example; be concise).',
+        technical: 'Audience: technical (precise terms, rigorous reasoning, minimal fluff).',
+      };
+      additionalLayers.push(`## Tutor Profile\n${audienceLayer[audience] || audienceLayer.default}\nPacing: ${pacing}.\nCorrectness: ${noGlazing ? 'Be direct; answer yes/no when asked; correct errors (no glazing).' : 'Be supportive, but still correct errors.'}`);
+      if (pacing === 'slow') {
+        additionalLayers.push('## Pacing\nGo step-by-step. Use short sentences. Pause between steps and check alignment before moving on.');
+      }
+    }
     if (userProfile) additionalLayers.push(`## User Identity & Background\n${JSON.stringify(userProfile, null, 2)}`);
     if (customInstructions) additionalLayers.push(customInstructions);
     if (styleFeedbackExamples) additionalLayers.push(`## Style Feedback (Learned Patterns):\n${styleFeedbackExamples}`);
@@ -1152,12 +1290,40 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
     if (followUpMatch) try { suggestedQuestions = JSON.parse(followUpMatch[1]); } catch (e) { }
 
     answerId = `answer-${Date.now()}`;
-    answer_sections = mapEvidenceToSections(splitAnswerIntoSections(answer), []);
+
+    // Phase C: return evidence + retrieval meta for UI highlighting and provenance.
+    const toEvidenceSourceType = (raw: any): string => {
+      const s = String(raw || '').toLowerCase();
+      if (s === 'web' || s === 'browser') return 'browser_use';
+      if (s === 'voice') return 'voice_transcript_chunk';
+      if (['browser_use', 'upload', 'notion', 'voice_transcript_chunk', 'quote', 'source_chunk'].includes(s)) return s;
+      return 'unknown';
+    };
+
+    const retrievalMeta = context?.retrieval_meta || null;
+    const evidence = Array.isArray(context?.evidence_used)
+      ? (context.evidence_used as any[]).slice(0, 8).map((e: any, idx: number) => {
+        const sourceType = toEvidenceSourceType(e?.source);
+        return {
+          id: e?.resource_id || e?.url || `evidence-${idx}`,
+          title: e?.title || e?.url || 'Source',
+          url: e?.url || null,
+          source: sourceType,
+          source_type: sourceType,
+          as_of: e?.as_of ?? null,
+          snippet: e?.snippet ?? null,
+          resource_id: e?.resource_id ?? null,
+          concept_id: e?.concept_id ?? null,
+        } as EvidenceItem;
+      })
+      : [];
+
+    answer_sections = mapEvidenceToSections(splitAnswerIntoSections(answer), evidence);
 
     // Background storage and profile update
     const storagePromise = fetch(`${API_BASE_URL}/answers/store`, {
       method: 'POST',
-      headers: getBackendHeaders(),
+      headers: resolvedBackendHeaders,
       body: JSON.stringify({ answer_id: answerId, question: message, raw_answer: answer, used_node_ids: usedNodes.map(n => n.node_id) }),
     }).catch(() => null);
 
@@ -1168,7 +1334,7 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
           console.log('[Chat API] Profile updates detected:', result.updates);
           await fetch(`${API_BASE_URL}/preferences/user-profile`, {
             method: 'PATCH', // Changed from POST for partial updates
-            headers: getBackendHeaders(),
+            headers: resolvedBackendHeaders,
             body: JSON.stringify(result.updates),
           }).catch(() => null);
         }
@@ -1193,8 +1359,8 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
         if (extractionResponse.ok) {
           const { topics, summary } = await extractionResponse.json().then(d => JSON.parse(d.choices[0].message.content));
           await fetch(`${API_BASE_URL}/preferences/conversation-summaries`, {
-            method: 'POST', headers: getBackendHeaders(),
-            body: JSON.stringify({ timestamp: Math.floor(Date.now() / 1000), question: message, answer: answer.substring(0, 500), topics, summary })
+            method: 'POST', headers: resolvedBackendHeaders,
+            body: JSON.stringify({ id: `cs-${answerId}`, timestamp: Math.floor(Date.now() / 1000), question: message, answer: answer.substring(0, 500), topics, summary })
           });
         }
       } catch (e) { }
@@ -1204,6 +1370,10 @@ Forbidden Styles: ${p.forbidden_styles && Array.isArray(p.forbidden_styles) ? p.
     return NextResponse.json({
       answer, usedNodes, suggestedQuestions: suggestedQuestions.slice(0, 3),
       suggestedActions: suggestedActions.slice(0, 5), answerId, answer_sections,
+      retrievalMeta,
+      evidence,
+      evidenceUsed: evidence,
+      anchorCitations,
       graph_data: extractedGraphData, webSearchResults,
       meta: { mode: 'graphrag', duration_ms: duration, intent: retrievalIntent, traceSteps: trace.length, rewriteApplied: false }
     });
@@ -1473,6 +1643,15 @@ async function buildContextTextFromStructured(
   const printedQuotes: string[] = [];
   const printedSources: string[] = [];
 
+  const formatMs = (ms: any): string | null => {
+    const n = Number(ms);
+    if (!Number.isFinite(n)) return null;
+    const totalSeconds = Math.max(0, Math.floor(n / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = String(totalSeconds % 60).padStart(2, '0');
+    return `${minutes}:${seconds}`;
+  };
+
   // Phase A: Identify all chunks to optimize
   const optimizationPromises: Record<string, Promise<any>> = {};
 
@@ -1499,6 +1678,19 @@ async function buildContextTextFromStructured(
   // Phase B: Build text parts
   if (context.session_context) {
     parts.push(`## Session Context\nTrail: ${context.session_context.summary || 'Active session'}\n`);
+  }
+
+  if (Array.isArray(context.voice_transcript_chunks) && context.voice_transcript_chunks.length > 0) {
+    parts.push("## Voice Transcript Excerpts");
+    context.voice_transcript_chunks.slice(0, 3).forEach((c: any) => {
+      const role = (c?.role || '').toString().trim() || 'voice';
+      const when = formatMs(c?.start_ms);
+      const content = (c?.content || '').toString().replace(/\s+/g, ' ').trim();
+      if (!content) return;
+      const label = when ? `${role} @ ${when}` : role;
+      const excerpt = content.length > 320 ? content.slice(0, 319) + '…' : content;
+      parts.push(`${label}: "${excerpt}"`);
+    });
   }
 
   if (results.quotes) {

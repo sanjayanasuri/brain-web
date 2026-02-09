@@ -73,7 +73,8 @@ def semantic_search_nodes(
     session: Session,
     limit: int = 5,
     graph_id: Optional[str] = None,
-    domain: Optional[str] = None
+    domain: Optional[str] = None,
+    tenant_id: Optional[str] = None
 ) -> List[Dict]:
     """
     Performs semantic search over concepts using Qdrant vector database.
@@ -84,11 +85,16 @@ def semantic_search_nodes(
     
     Returns list of dicts with 'node' (Concept) and 'score' (float).
     """
+    # --- Bouncer Layer (Hard Multi-tenant Isolation) ---
+    # Qdrant searches MUST be tenant-scoped to prevent cross-tenant leakage.
+    if not tenant_id:
+        raise ValueError("tenant_id is required for Qdrant semantic_search_nodes()")
+
     if not client:
         print("ERROR: Cannot perform semantic search - OpenAI client not initialized.")
         print("Please set OPENAI_API_KEY in backend/.env file")
         # Return nodes by name match as fallback
-        all_concepts = get_all_concepts(session)
+        all_concepts = get_all_concepts(session, tenant_id=tenant_id)
         query_lower = query.lower()
         matched = [c for c in all_concepts if query_lower in c.name.lower()]
         return [{"node": c, "score": 0.5} for c in matched[:limit]]
@@ -104,7 +110,7 @@ def semantic_search_nodes(
     except Exception as e:
         print(f"ERROR: Failed to get query embedding: {e}")
         # Fallback to name matching
-        all_concepts = get_all_concepts(session)
+        all_concepts = get_all_concepts(session, tenant_id=tenant_id)
         query_lower = query.lower()
         matched = [c for c in all_concepts if query_lower in c.name.lower()]
         return [{"node": c, "score": 0.5} for c in matched[:limit]]
@@ -116,12 +122,13 @@ def semantic_search_nodes(
             limit=limit * 2,  # Get more results, filter by actual concept existence
             graph_id=graph_id,
             domain=domain,
-            min_score=0.0
+            min_score=0.0,
+            tenant_id=tenant_id
         )
     except Exception as e:
         print(f"ERROR: Qdrant search failed: {e}")
         print("Falling back to name matching...")
-        all_concepts = get_all_concepts(session)
+        all_concepts = get_all_concepts(session, tenant_id=tenant_id)
         query_lower = query.lower()
         matched = [c for c in all_concepts if query_lower in c.name.lower()]
         return [{"node": c, "score": 0.5} for c in matched[:limit]]
@@ -135,7 +142,7 @@ def semantic_search_nodes(
     concept_ids = [r["concept_id"] for r in qdrant_results[:limit]]
     
     # Fetch concepts from Neo4j
-    all_concepts = get_all_concepts(session)
+    all_concepts = get_all_concepts(session, tenant_id=tenant_id)
     concept_map = {c.node_id: c for c in all_concepts}
     
     # Build results with Concept objects
@@ -156,13 +163,15 @@ def semantic_search_nodes(
     return results
 
 
-def sync_concept_to_qdrant(concept: Concept, session: Session) -> None:
+def sync_concept_to_qdrant(concept: Concept, session: Session, tenant_id: str) -> None:
     """
     Sync a single concept's embedding to Qdrant.
     Called when a concept is created or updated.
     """
     if not client:
         return
+    if not tenant_id:
+        raise ValueError("tenant_id is required for sync_concept_to_qdrant()")
     
     try:
         # Build text representation
@@ -180,6 +189,7 @@ def sync_concept_to_qdrant(concept: Concept, session: Session) -> None:
                 "domain": concept.domain or "",
                 "graph_id": getattr(concept, "graph_id", "default"),
                 "type": concept.type or "",
+                "tenant_id": tenant_id,
             }
         )
     except Exception as e:
