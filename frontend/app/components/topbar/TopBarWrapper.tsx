@@ -10,6 +10,10 @@ import { ChatProvider } from '../graph/hooks/useChatState';
 
 // Routes that should NOT show the Sidebar/TopBar
 const HIDE_UI_ROUTES = [
+  '/',
+  '/welcome',
+  '/login',
+  '/signup',
   '/api',
   '/mobile',
 ];
@@ -19,7 +23,10 @@ export default function TopBarWrapper({ children }: { children: React.ReactNode 
   const searchParams = useSearchParams();
   const { isSidebarCollapsed, setIsSidebarCollapsed } = useSidebar();
 
-  const shouldHideUI = pathname ? HIDE_UI_ROUTES.some(route => pathname.startsWith(route)) : false;
+  const shouldHideUI = pathname ? HIDE_UI_ROUTES.some(route => {
+    if (route === '/') return pathname === '/';
+    return pathname.startsWith(route);
+  }) : false;
 
   const activeGraphId = searchParams?.get('graph_id') || undefined;
   const hideFAB = shouldHideUI || pathname?.startsWith('/debug') || pathname?.startsWith('/admin');

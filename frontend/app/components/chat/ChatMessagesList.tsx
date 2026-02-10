@@ -8,6 +8,8 @@ interface ChatMessagesListProps {
     messages: ChatMessage[];
     chatSessionId: string | null;
     loading: boolean;
+    statusMessages?: string[];
+    isStreaming?: boolean;
 }
 
 export default function ChatMessagesList({
@@ -51,15 +53,26 @@ export default function ChatMessagesList({
     }, [branchContext]);
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-lg)', flex: 1 }}>
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '24px',
+            flex: 1,
+            width: '100%',
+            maxWidth: '1000px',
+            margin: '0 auto',
+            padding: '0 24px 120px 24px',
+            boxSizing: 'border-box'
+        }}>
             {messages.map((msg) => (
                 <div
                     key={msg.id}
                     style={{
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: 'var(--spacing-sm)',
+                        gap: '8px',
                         alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                        width: '100%'
                     }}
                 >
                     {msg.role === 'assistant' ? (
@@ -74,40 +87,54 @@ export default function ChatMessagesList({
                             highlightEnd={branchContext.getHighlightSpan(msg.id)?.end}
                         />
                     ) : (
-                        <>
+                        <div style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'flex-end',
+                            maxWidth: '100%'
+                        }}>
                             <div style={{
-                                maxWidth: 'min(80%, 600px)',
-                                padding: 'var(--spacing-md) var(--spacing-md)',
-                                borderRadius: '16px',
+                                maxWidth: '85%',
+                                padding: '12px 18px',
+                                borderRadius: '18px',
+                                borderBottomRightRadius: '4px',
                                 background: 'var(--accent)',
                                 color: 'white',
-                                fontSize: 'clamp(15px, 2.1vw, 17px)',
-                                lineHeight: '1.6',
+                                fontSize: '15px',
+                                lineHeight: '1.5',
                                 whiteSpace: 'pre-wrap',
                                 wordBreak: 'break-word',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
                             }}>
                                 {msg.content}
                             </div>
                             <div style={{
-                                fontSize: 'clamp(11px, 1.6vw, 12px)',
+                                fontSize: '11px',
                                 color: 'var(--muted)',
-                                padding: '0 var(--spacing-xs)',
+                                padding: '4px 4px 0 0',
                             }}>
                                 {new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
                             </div>
-                        </>
+                        </div>
                     )}
                 </div>
             ))}
             {loading && (
                 <div style={{
-                    padding: '16px 20px',
-                    borderRadius: '16px',
+                    alignSelf: 'flex-start',
+                    padding: '12px 18px',
+                    borderRadius: '18px',
+                    borderBottomLeftRadius: '4px',
                     background: 'var(--panel)',
                     border: '1px solid var(--border)',
                     color: 'var(--muted)',
-                    fontSize: 'clamp(15px, 2.1vw, 17px)',
+                    fontSize: '15px',
+                    maxWidth: '85%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
                 }}>
+                    <div className="w-2 h-2 rounded-full bg-muted animate-pulse" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--muted)', opacity: 0.6 }} />
                     Thinking...
                 </div>
             )}

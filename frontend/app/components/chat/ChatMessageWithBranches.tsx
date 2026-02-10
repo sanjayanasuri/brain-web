@@ -183,17 +183,20 @@ export default function ChatMessageWithBranches({
   return (
     <div id={`message-${messageId}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{
-        maxWidth: 'min(80%, 600px)',
-        padding: 'var(--spacing-md) var(--spacing-md)',
-        borderRadius: '16px',
+        maxWidth: '85%',
+        padding: '12px 18px',
+        borderRadius: '18px',
+        borderBottomLeftRadius: role === 'assistant' ? '4px' : '18px',
+        borderBottomRightRadius: role === 'user' ? '4px' : '18px',
         background: role === 'user'
           ? 'var(--accent)'
           : 'var(--panel)',
         color: role === 'user' ? 'white' : 'var(--ink)',
         border: role === 'assistant' ? '1px solid var(--border)' : 'none',
-        fontSize: 'clamp(15px, 2.1vw, 17px)',
-        lineHeight: '1.6',
+        fontSize: '15px',
+        lineHeight: '1.5',
         wordBreak: 'break-word',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
       }}>
         {role === 'assistant' ? (
           <>

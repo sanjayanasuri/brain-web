@@ -535,7 +535,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                             </div>
                         ))}
 
-                        {state.isChatLoading && (
+                        {state.isChatLoading && (state.chatHistory.length === 0 || !state.chatHistory[state.chatHistory.length - 1].answer) && (
                             <div style={{ alignSelf: 'flex-start', display: 'flex', gap: '8px', alignItems: 'center', padding: '12px' }}>
                                 <div className="typing-indicator">
                                     <span></span>

@@ -1986,28 +1986,35 @@ export default function TopBar() {
           <div style={{ width: '12px' }} />
           {!isMobile && (
             <>
-              <Link href="/home" style={{
-                fontSize: '14px',
-                color: pathname === '/home' ? 'var(--ink)' : 'var(--muted)',
-                textDecoration: 'none',
-                transition: 'all 0.2s',
-                fontWeight: pathname === '/home' ? 600 : 500,
-                padding: '6px 12px',
-                borderRadius: '6px',
-                backgroundColor: pathname === '/home' ? 'var(--panel)' : 'transparent',
-              }}
+              <Link
+                href="/home"
+                onClick={(e) => {
+                  if (pathname === '/home') {
+                    window.dispatchEvent(new CustomEvent('brainweb:resetHome'));
+                  }
+                }}
+                style={{
+                  fontSize: '14px',
+                  color: pathname === '/home' ? 'var(--ink)' : 'var(--muted)',
+                  textDecoration: 'none',
+                  transition: 'all 0.2s',
+                  fontWeight: pathname === '/home' ? 600 : 500,
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  backgroundColor: pathname === '/home' ? 'var(--panel)' : 'transparent',
+                }}
               >
                 Home
               </Link>
-              <Link href={`/?graph_id=${activeGraphId || 'default'}`} style={{
+              <Link href={`/explorer?graph_id=${activeGraphId || 'default'}`} style={{
                 fontSize: '14px',
-                color: pathname === '/' ? 'var(--ink)' : 'var(--muted)',
+                color: pathname === '/explorer' ? 'var(--ink)' : 'var(--muted)',
                 textDecoration: 'none',
                 transition: 'all 0.2s',
-                fontWeight: pathname === '/' ? 600 : 500,
+                fontWeight: pathname === '/explorer' ? 600 : 500,
                 padding: '6px 12px',
                 borderRadius: '6px',
-                backgroundColor: pathname === '/' ? 'var(--panel)' : 'transparent',
+                backgroundColor: pathname === '/explorer' ? 'var(--panel)' : 'transparent',
               }}
               >
                 Explorer

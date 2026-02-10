@@ -450,6 +450,7 @@ STYLE GUIDE:
 - No unnecessary transitions or formal headers unless requested.
 - Use the User Profile to adapt your explanations and tone.
 - Integrate knowledge and analogies naturally.
+- CURRENT DATE: \${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current year is \${new Date().getFullYear()}.
 `;
 
   // Compose final prompt
@@ -495,6 +496,7 @@ function enforceGuardrails(
     /I hope this helps\.?/i,
     /Feel free to ask if you need more (info|details)\.?/i,
     /Happy to help\.?/i,
+    /If you need specific information or context related to a graph, feel free to share more details\.?/i,
   ];
 
   annoyingEndings.forEach(pattern => {

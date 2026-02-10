@@ -18,6 +18,7 @@ import {
   setCurrentSessionId,
   createChatSession,
   addMessageToSession,
+  deleteChatSession,
   type ChatSession,
 } from "../lib/chatSessions";
 import {
@@ -38,9 +39,11 @@ import DayEventsList from "../components/calendar/DayEventsList";
 import ChatMessagesList from "../components/chat/ChatMessagesList";
 import StudyPanel from "../components/dashboard/StudyPanel";
 import VoiceAgentPanel from "../components/voice/VoiceAgentPanel";
+import { ActionButtons } from "../components/chat/ActionButtons";
 
 function HomePageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -77,6 +80,10 @@ function HomePageInner() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousSessionIdRef = useRef<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, sessionId: string } | null>(null);
+  const [statusMessages, setStatusMessages] = useState<string[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [currentActions, setCurrentActions] = useState<any[]>([]);
 
   // Handle responsive design
   useEffect(() => {
@@ -86,6 +93,18 @@ function HomePageInner() {
     checkMobile();
     window.addEventListener("resize", checkMobile);
     return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
+  // Listen for reset events from TopBar
+  useEffect(() => {
+    const handleReset = () => {
+      setMessages([]);
+      setQuery("");
+      setCurrentSessionIdState(null);
+      setCurrentSessionId(null);
+    };
+    window.addEventListener('brainweb:resetHome', handleReset);
+    return () => window.removeEventListener('brainweb:resetHome', handleReset);
   }, []);
 
   // Load focus areas and active graph
@@ -132,6 +151,28 @@ function HomePageInner() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    const handleWindowClick = () => setContextMenu(null);
+    window.addEventListener('click', handleWindowClick);
+    return () => window.removeEventListener('click', handleWindowClick);
+  }, []);
+
+  const handleDeleteSession = useCallback((sessionId: string) => {
+    deleteChatSession(sessionId);
+    setChatSessions(prev => prev.filter(s => s.id !== sessionId));
+    if (currentSessionId === sessionId) {
+      setMessages([]);
+      setQuery("");
+      setCurrentSessionIdState(null);
+    }
+    setContextMenu(null);
+  }, [currentSessionId]);
+
+  const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, sessionId });
+  };
+
   const handleSubmit = useCallback(
     async (e?: React.FormEvent) => {
       e?.preventDefault();
@@ -148,6 +189,9 @@ function HomePageInner() {
       setQuery("");
       setAttachedFiles([]);
       setLoading(true);
+      setIsStreaming(true);
+      setStatusMessages([]);
+      setCurrentActions([]);
 
       // Map linear messages to structured Q&A pairs for backend history
       const history = [];
@@ -163,7 +207,8 @@ function HomePageInner() {
       }
 
       try {
-        const response = await fetch("/api/brain-web/chat", {
+        // Call streaming endpoint
+        const response = await fetch("/api/brain-web/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -181,13 +226,73 @@ function HomePageInner() {
         });
 
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || "Failed to get response");
+          throw new Error("Failed to get response");
         }
 
-        const data = await response.json();
-        const answer =
-          data.answer || "I apologize, but I could not generate a response.";
+        // Parse SSE stream
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let accumulatedAnswer = "";
+        const receivedActions: any[] = [];
+
+        while (true) {
+          const { done, value } = await reader!.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6));
+
+                if (data.type === "status") {
+                  // Add status message
+                  setStatusMessages(prev => [...prev, data.content]);
+                } else if (data.type === "chunk") {
+                  // Accumulate response
+                  accumulatedAnswer += data.content;
+                } else if (data.type === "actions") {
+                  // Store actions and update state
+                  receivedActions.push(...data.actions);
+                  setCurrentActions(prev => [...prev, ...data.actions]);
+                } else if (data.type === "done") {
+                  // Stream complete
+                  break;
+                } else if (data.type === "error") {
+                  throw new Error(data.content);
+                }
+              } catch (e) {
+                console.error("Error parsing SSE data:", e);
+              }
+            }
+          }
+        }
+
+        const answer = accumulatedAnswer || "I apologize, but I could not generate a response.";
+
+        // Fade out status messages
+        setIsStreaming(false);
+        setTimeout(() => setStatusMessages([]), 700);
+
+        // Auto-refresh graphs if a graph was created
+        if (receivedActions.some(action => action.type === 'view_graph')) {
+          try {
+            const graphsData = await listGraphs();
+            setGraphs(graphsData.graphs || []);
+
+            // Auto-select newly created graph if present
+            const newGraphAction = receivedActions.find(a => a.type === 'view_graph');
+            if (newGraphAction?.graph_id) {
+              setActiveGraphId(newGraphAction.graph_id);
+            }
+          } catch (err) {
+            console.error("Failed to refresh graphs:", err);
+          }
+        }
 
         const assistantMessage: ChatMessage = {
           id: (Date.now() + 1).toString(),
@@ -204,7 +309,7 @@ function HomePageInner() {
             const newSession = await createChatSession(
               userMessage.content,
               answer,
-              data.answerId || null,
+              null, // answerId not available in streaming
               null,
               activeGraphId || "default",
             );
@@ -220,9 +325,9 @@ function HomePageInner() {
               currentSessionId,
               userMessage.content,
               answer,
-              data.answerId || null,
-              data.suggestedQuestions || [],
-              data.evidenceUsed || [],
+              null, // answerId not available in streaming
+              [], // suggestedQuestions not available in streaming
+              [], // evidenceUsed not available in streaming
             );
 
             // Refresh chat sessions list
@@ -235,6 +340,8 @@ function HomePageInner() {
         }
       } catch (error: any) {
         console.error("Chat error:", error);
+        setIsStreaming(false);
+        setStatusMessages([]);
         const errorMessage: ChatMessage = {
           id: `error-${Date.now()}`,
           role: "assistant",
@@ -360,12 +467,58 @@ function HomePageInner() {
             display: "flex",
             flexDirection: "column",
             flex: 1,
-            overflow: "hidden",
-            padding: "20px clamp(16px, 5vw, 60px)",
+            overflowX: "hidden",
+            overflowY: "auto",
+            scrollBehavior: "smooth",
             position: "relative",
-            justifyContent: messages.length === 0 ? "center" : "flex-start",
+            justifyContent: "flex-start",
+            paddingTop: (messages.length > 0 || currentSessionId) ? "60px" : "18vh",
           }}
         >
+          {/* Back Icon (fixed in top-left) */}
+          {(messages.length > 0 || currentSessionId || loading) && (
+            <div style={{
+              position: "fixed",
+              top: "92px",
+              left: "20px",
+              zIndex: 100
+            }}>
+              <button
+                onClick={() => {
+                  setMessages([]);
+                  setQuery("");
+                  setCurrentSessionIdState(null);
+                  setCurrentSessionId(null);
+                }}
+                title="Back to Search"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "32px",
+                  height: "32px",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--ink)",
+                  cursor: "pointer",
+                  transition: "transform 0.2s ease, opacity 0.2s ease",
+                  padding: "0"
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateX(-2px)";
+                  e.currentTarget.style.opacity = "0.7";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateX(0)";
+                  e.currentTarget.style.opacity = "1";
+                }}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.1))" }}>
+                  <path d="m15 18-6-6 6-6" />
+                </svg>
+              </button>
+            </div>
+          )}
           <div
             style={{
               width: "100%",
@@ -461,8 +614,13 @@ function HomePageInner() {
                       placeholder="Ask anything..."
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
+                      onInput={(e) => {
+                        const target = e.target as HTMLTextAreaElement;
+                        target.style.height = 'auto';
+                        target.style.height = `${Math.min(target.scrollHeight, 150)}px`;
+                      }}
                       onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
-                      style={{ width: "100%", background: "transparent", border: "none", outline: "none", fontSize: "20px", color: "var(--ink)", resize: "none", minHeight: "44px", maxHeight: "150px", padding: "8px 0", lineHeight: "1.5" }}
+                      style={{ width: "100%", background: "transparent", border: "none", outline: "none", fontSize: "20px", color: "var(--ink)", resize: "none", minHeight: "44px", maxHeight: "150px", padding: "8px 0", lineHeight: "1.5", overflowY: "auto" }}
                       rows={1}
                     />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "12px" }}>
@@ -492,6 +650,7 @@ function HomePageInner() {
                       <div
                         key={chatSession.id}
                         onClick={() => handleLoadChatSession(chatSession)}
+                        onContextMenu={(e) => handleContextMenu(e, chatSession.id)}
                         style={{
                           padding: "10px 18px",
                           borderRadius: "12px",
@@ -503,6 +662,7 @@ function HomePageInner() {
                           justifyContent: "space-between",
                           alignItems: "center",
                           boxShadow: "0 2px 4px rgba(0,0,0,0.01)",
+                          position: "relative",
                         }}
                         className="conversation-card"
                       >
@@ -516,12 +676,71 @@ function HomePageInner() {
                     ))}
                   </div>
                 </div>
+
+                {/* Custom Context Menu */}
+                {contextMenu && (
+                  <div
+                    style={{
+                      position: "fixed",
+                      top: contextMenu.y,
+                      left: contextMenu.x,
+                      zIndex: 1000,
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "12px",
+                      boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+                      padding: "8px",
+                      minWidth: "140px",
+                      backdropFilter: "blur(12px)",
+                      animation: "fadeInScale 0.15s ease-out"
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      onClick={() => handleDeleteSession(contextMenu.sessionId)}
+                      style={{
+                        width: "100%",
+                        padding: "10px 12px",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        color: "#ef4444",
+                        fontSize: "13px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        borderRadius: "8px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        transition: "background 0.2s"
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = "rgba(239, 68, 68, 0.08)"}
+                      onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6m4-6v6" /></svg>
+                      Delete Chat
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
             {messages.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "32px", paddingBottom: "100px", height: "100%", overflowY: "auto" }}>
-                <ChatMessagesList messages={messages} chatSessionId={currentSessionId} loading={loading} />
+              <div style={{ display: "flex", flexDirection: "column", width: "100%", gap: "32px", paddingBottom: "100px" }}>
+                <ChatMessagesList
+                  messages={messages}
+                  chatSessionId={currentSessionId}
+                  loading={loading}
+                  statusMessages={statusMessages}
+                  isStreaming={isStreaming}
+                />
+
+                {/* Action Buttons from Tool Execution */}
+                {currentActions.length > 0 && (
+                  <div style={{ marginTop: '16px', marginBottom: '16px' }}>
+                    <ActionButtons actions={currentActions} />
+                  </div>
+                )}
                 <div ref={messagesEndRef} />
 
                 {/* Floating-style Input for active chat */}
@@ -532,8 +751,13 @@ function HomePageInner() {
                         ref={inputRef}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
+                        onInput={(e) => {
+                          const target = e.target as HTMLTextAreaElement;
+                          target.style.height = 'auto';
+                          target.style.height = `${Math.min(target.scrollHeight, 150)}px`;
+                        }}
                         placeholder="Continue the conversation..."
-                        style={{ flex: 1, border: "none", background: "transparent", color: "var(--ink)", fontSize: "20px", outline: "none", resize: "none", minHeight: "32px" }}
+                        style={{ flex: 1, border: "none", background: "transparent", color: "var(--ink)", fontSize: "20px", outline: "none", resize: "none", minHeight: "32px", maxHeight: "150px", overflowY: "auto" }}
                         rows={1}
                         onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
                       />

@@ -417,10 +417,11 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           flex-direction: column;
           gap: 16px;
           padding: 20px;
-          background: rgba(255, 255, 255, 0.85);
+          background: var(--glass-background, rgba(255, 255, 255, 0.85));
           backdrop-filter: blur(24px);
-          border: 1px solid rgba(255, 255, 255, 0.4);
+          border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.4));
           box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+          color: var(--ink, #333);
         }
         
         .live-tag {
@@ -437,13 +438,13 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
         .status-thinking .live-tag { background: rgba(251, 191, 36, 0.1); color: #fbbf24; }
         .study-tag { background: rgba(155, 89, 182, 0.1) !important; color: #9b59b6 !important; border: 1px solid rgba(155, 89, 182, 0.2); }
         .status-reconnecting .live-tag { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .status-idle .live-tag { background: rgba(0,0,0,0.05); color: #999; }
+        .status-idle .live-tag { background: var(--bg-soft, rgba(0,0,0,0.05)); color: var(--ink-soft, #999); }
 
         .status-indicator {
           width: 8px;
           height: 8px;
           border-radius: 50%;
-          background: #ccc;
+          background: var(--bg-soft, #ccc);
           transition: all 0.4s ease;
         }
         .session-active .status-indicator { background: #10b981; }
@@ -457,7 +458,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           align-items: center;
           justify-content: center;
           position: relative;
-          background: rgba(0,0,0,0.02);
+          background: var(--bg-soft, rgba(0,0,0,0.02));
           border-radius: 24px;
         }
 
@@ -474,7 +475,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: #ccc;
+          background: var(--bg-soft, #ccc);
           transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
           filter: blur(0.5px);
         }
@@ -542,6 +543,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
         }
         .visualizer-bar {
           width: 3px;
+          background: var(--bg-soft, #ccc);
           position: absolute;
           border-radius: 4px;
         }
@@ -559,7 +561,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
         .network-fail-overlay {
           position: absolute;
           inset: 0;
-          background: rgba(255,255,255,0.95);
+          background: var(--background, rgba(255,255,255,0.95));
           backdrop-filter: blur(16px);
           z-index: 200;
           display: flex;
@@ -583,7 +585,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           flex-direction: column;
           gap: 12px;
           padding: 10px;
-          background: rgba(0,0,0,0.02);
+          background: var(--bg-soft, rgba(0,0,0,0.02));
           border-radius: 16px;
         }
         
@@ -595,9 +597,9 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           line-height: 1.5;
           animation: slideIn 0.3s ease-out;
         }
-        .user-box { background: white; border: 1px solid rgba(0,0,0,0.05); }
-        .agent-box { background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.1); }
-        .system-box { background: transparent; color: #999; font-style: italic; text-align: center; }
+        .user-box { background: var(--background, white); border: 1px solid var(--border-soft, rgba(0,0,0,0.05)); }
+        .agent-box { background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); }
+        .system-box { background: transparent; color: var(--ink-soft, #999); font-style: italic; text-align: center; }
         
         .interim { border: 1px dashed #10b981; opacity: 0.8; }
         
@@ -607,9 +609,9 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           left: 10px;
           font-size: 8px;
           font-weight: 800;
-          background: white;
+          background: var(--background, white);
           padding: 0 4px;
-          color: #aaa;
+          color: var(--ink-soft, #aaa);
         }
         .message-text { margin: 0; }
 
@@ -639,29 +641,29 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           align-items: center;
           gap: 12px;
           padding: 8px 12px;
-          background: white;
-          border: 1px solid rgba(0,0,0,0.05);
+          background: var(--background, white);
+          border: 1px solid var(--border-soft, rgba(0,0,0,0.05));
           border-radius: 12px;
         }
         .mode-switch { position: relative; width: 32px; height: 18px; }
         .mode-switch input { opacity: 0; width: 0; height: 0; }
         .mode-slider {
           position: absolute; cursor: pointer; inset: 0;
-          background-color: #eee; transition: .4s; border-radius: 20px;
+          background-color: var(--bg-medium, #eee); transition: .4s; border-radius: 20px;
         }
         .mode-slider:before {
           position: absolute; content: ""; height: 12px; width: 12px;
-          left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%;
+          left: 3px; bottom: 3px; background-color: var(--ink-invert, white); transition: .4s; border-radius: 50%;
         }
         input:checked + .mode-slider { background-color: #3b82f6; }
         input:checked + .mode-slider:before { transform: translateX(14px); }
 
         .settings-overlay {
-            background: rgba(255, 255, 255, 0.95);
+            background: var(--glass-background, rgba(255, 255, 255, 0.95));
             padding: 12px;
             border-radius: 12px;
             margin-bottom: 12px;
-            border: 1px solid rgba(0,0,0,0.05);
+            border: 1px solid var(--glass-border, rgba(0,0,0,0.05));
             animation: slideDown 0.2s ease-out;
             box-shadow: 0 4px 12px rgba(0,0,0,0.05);
         }
@@ -671,14 +673,14 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
             align-items: center;
             margin-bottom: 8px;
             padding-bottom: 4px;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--border-soft, #eee);
         }
         .settings-header h4 {
             margin: 0;
             font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: #666;
+            color: var(--ink-soft, #666);
             font-weight: 700;
         }
         .setting-row {
@@ -690,17 +692,17 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
             font-size: 10px;
             font-weight: 600;
             margin-bottom: 3px;
-            color: #555;
+            color: var(--ink-soft, #555);
             text-transform: uppercase;
         }
         .setting-row select {
             width: 100%;
             padding: 4px 6px;
             border-radius: 6px;
-            border: 1px solid #ddd;
+            border: 1px solid var(--border-soft, #ddd);
             font-size: 11px;
-            background: white;
-            color: #333;
+            background: var(--background, white);
+            color: var(--ink, #333);
         }
         @keyframes slideDown {
             from { opacity: 0; transform: translateY(-5px); }
