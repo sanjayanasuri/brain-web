@@ -5,14 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Download Silero VAD model
-RUN mkdir -p /app/models && \
-    apt-get update && \
-    apt-get install -y wget && \
-    wget -O /app/models/silero_vad.jit https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.jit && \
-    apt-get remove -y wget && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+# Create models directory (VAD model will be downloaded at runtime via torch.hub)
+RUN mkdir -p /app/models
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
