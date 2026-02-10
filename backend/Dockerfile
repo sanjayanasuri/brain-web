@@ -9,7 +9,7 @@ WORKDIR /app
 RUN mkdir -p /app/models && \
     apt-get update && \
     apt-get install -y wget && \
-    wget -O /app/models/silero_vad.jit https://models.silero.ai/models/vad/silero_vad.jit && \
+    wget -O /app/models/silero_vad.jit https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.jit && \
     apt-get remove -y wget && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
