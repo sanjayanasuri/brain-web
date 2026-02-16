@@ -18,20 +18,25 @@ export default function LoginPage() {
         setError('');
 
         try {
+            console.log('[Login] Attempting sign-in with email:', email);
             const result = await signIn('credentials', {
                 email,
                 password,
                 redirect: false,
             });
 
+            console.log('[Login] Sign-in result:', result);
+
             if (result?.error) {
-                setError('Authentication failed.');
+                console.error('[Login] Sign-in error:', result.error);
+                setError(`Authentication failed: ${result.error}`);
                 setIsLoading(false);
             } else {
-                // Stay loading during transition
+                console.log('[Login] Sign-in successful, navigating to /home');
                 router.push('/home');
             }
         } catch (err) {
+            console.error('[Login] Unexpected error:', err);
             setError('Synchronization error.');
             setIsLoading(false);
         }

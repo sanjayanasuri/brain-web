@@ -8,14 +8,17 @@ This guide explains how to configure your Vercel frontend to connect to your Het
 
 1. Go to your project on [Vercel Dashboard](https://vercel.com/dashboard)
 2. Navigate to **Settings** → **Environment Variables**
-3. Add the following variable:
+4. Add the following variables:
 
-   **Name:** `NEXT_PUBLIC_API_URL`  
-   **Value:** `https://demo.sanjayanasuri.com`  
-   **Environment:** Production, Preview, Development
+   | Name | Value | Description |
+   |------|-------|-------------|
+   | `NEXT_PUBLIC_API_URL` | `https://demo.sanjayanasuri.com` | Backend API URL |
+   | `NEXTAUTH_URL` | `https://[YOUR-VERCEL-DOMAIN].vercel.app` | The canonical URL of your frontend |
+   | `NEXTAUTH_SECRET` | `[RANDOM-STRING]` | A secure random string for JWT encryption |
 
-4. Click **Save**
-5. Redeploy your application
+5. **Generate a Secret:** You can generate a random string using `openssl rand -base64 32` or just type a long random string.
+6. Click **Save**
+7. Redeploy your application
 
 ### Option 2: Using Vercel CLI
 

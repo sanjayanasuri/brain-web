@@ -11,11 +11,15 @@ const handler = NextAuth({
             },
             async authorize(credentials) {
                 if (!credentials?.email || !credentials?.password) {
+                    console.log('[NextAuth] Missing credentials');
                     return null;
                 }
 
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+                console.log(`[NextAuth] Authorizing ${credentials.email} against ${apiUrl}`);
+
                 try {
-                    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/auth/login`, {
+                    const res = await fetch(`${apiUrl}/auth/login`, {
                         method: 'POST',
                         body: JSON.stringify({
                             email: credentials.email,
@@ -24,21 +28,28 @@ const handler = NextAuth({
                         headers: { "Content-Type": "application/json" }
                     });
 
-                    const data = await res.json();
+                    if (!res.ok) {
+                        const errorText = await res.text();
+                        console.error(`[NextAuth] Login failed with status ${res.status}: ${errorText}`);
+                        return null;
+                    }
 
-                    if (res.ok && data.access_token) {
-                        // Return user object with token embedded
+                    const data = await res.json();
+                    console.log('[NextAuth] Backend response:', JSON.stringify(data).substring(0, 100) + '...');
+
+                    if (data.access_token && data.user) {
                         return {
-                            id: data.user.user_id,
+                            id: String(data.user.user_id), // Ensure it's a string
                             name: data.user.full_name,
                             email: data.user.email,
                             tenantId: data.user.tenant_id,
                             accessToken: data.access_token,
                         };
                     }
+                    console.error('[NextAuth] Missing token or user in response');
                     return null;
-                } catch (error) {
-                    console.error('[NextAuth] Authorize error:', error);
+                } catch (error: any) {
+                    console.error('[NextAuth] Authorize error:', error.message || error);
                     return null;
                 }
             }
