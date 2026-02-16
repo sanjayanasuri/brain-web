@@ -29,7 +29,6 @@ def _get_driver():
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
-            liveness_check_timeout=30,
         )
 
     try:
@@ -46,7 +45,6 @@ def _get_driver():
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
-            liveness_check_timeout=30,
         )
     return _driver
 
