@@ -59,8 +59,8 @@ export default function ChatMessagesList({
             gap: '24px',
             flex: 1,
             width: '100%',
-            maxWidth: '1000px',
-            margin: '0 auto',
+            maxWidth: '1200px',
+            margin: '0',
             padding: '0 24px 120px 24px',
             boxSizing: 'border-box'
         }}>
