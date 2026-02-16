@@ -19,6 +19,7 @@ security = HTTPBearer(auto_error=False)
 
 # Public endpoints that don't require authentication
 PUBLIC_ENDPOINTS = {
+    "/",
     "/docs",
     "/openapi.json",
     "/redoc",
