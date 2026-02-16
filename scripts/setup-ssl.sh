@@ -36,7 +36,9 @@ sudo certbot certonly --standalone \
 # Step 4: Update Nginx configuration
 echo ""
 echo "Step 4: Updating Nginx configuration..."
-sudo cp /Users/sanjayanasuri/brain-web/brain-web/scripts/nginx-brainweb.conf /etc/nginx/sites-available/brainweb
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+sudo cp "$SCRIPT_DIR/nginx-brainweb.conf" /etc/nginx/sites-available/brainweb
+sudo ln -sf /etc/nginx/sites-available/brainweb /etc/nginx/sites-enabled/default
 
 # Step 5: Test Nginx configuration
 echo ""
