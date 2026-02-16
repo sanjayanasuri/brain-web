@@ -20,6 +20,7 @@ from openai import OpenAI
 from config import OPENAI_API_KEY
 import json
 import logging
+from tools import GRAPH_TOOLS, execute_tool
 
 logger = logging.getLogger("brain_web")
 
@@ -285,9 +286,27 @@ async def chat_stream_endpoint(
             try:
                 from services_memory_orchestrator import build_system_prompt_with_memory
                 
-                # Base prompt with profile instructions
+                # Base prompt with profile instructions and tool capabilities
                 base_prompt = f"""
-                You are a helpful assistant for Brain Web.
+                You are a helpful assistant for Brain Web with the ability to take actions.
+                
+                ## Available Actions
+                You have access to tools that allow you to:
+                - **Create knowledge graphs** for topics the user wants to learn about
+                - **Add concepts and relationships** to graphs
+                - **Fetch metadata from the web** to enrich graphs
+                - **Update the user's learning profile** with new interests
+                
+                ## When to Use Tools
+                - User asks to "learn about X" or "create a graph for Y" → Use create_knowledge_graph + fetch_web_metadata
+                - User mentions a new interest or topic → Use update_user_interests
+                - User wants to add information to a graph → Use add_concepts_to_graph
+                - User asks for connections between concepts → Use create_relationships
+                
+                ## Response Style
+                - Be proactive: suggest creating graphs when appropriate
+                - Explain what you're doing as you use tools
+                - After creating a graph, mention that the user can view it
                 
                 {recent_activity}
                 
@@ -313,7 +332,7 @@ async def chat_stream_endpoint(
             # 4. Use Model Router with chat history
             chat_history = unified_context.get("chat_history", [])
 
-            # 5. Use Model Router
+            # 5. Use Model Router with Tool Support
             from services_model_router import model_router, TASK_CHAT_FAST
             
             # Build messages array with history
@@ -323,21 +342,165 @@ async def chat_stream_endpoint(
                 {"role": "user", "content": payload.message}
             ]
             
+            # Add tools to the completion call
             stream = model_router.completion(
                 task_type=TASK_CHAT_FAST,
                 messages=messages,
-                stream=True
+                stream=True,
+                tools=GRAPH_TOOLS,
+                tool_choice="auto"
             )
         
-            # Accumulate assistant response for saving
+            # Accumulate assistant response and tool calls
             full_response = ""
+            tool_calls = []
+            actions = []  # Store action buttons to send to frontend
             
             for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    full_response += content
-                    data = {"type": "chunk", "content": content, "cache": {"hit": False}}
+                delta = chunk.choices[0].delta
+                
+                # Handle tool calls
+                if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index if tc.index is not None else 0
+                        
+                        # Ensure we have enough tool call slots
+                        while len(tool_calls) <= idx:
+                            tool_calls.append({
+                                "id": None,
+                                "type": "function",
+                                "function": {
+                                    "name": None,
+                                    "arguments": ""
+                                }
+                            })
+                        
+                        # Update ID if present
+                        if tc.id:
+                            tool_calls[idx]["id"] = tc.id
+                        
+                        # Update function name if present
+                        if tc.function and tc.function.name:
+                            tool_calls[idx]["function"]["name"] = tc.function.name
+                        
+                        # Accumulate arguments
+                        if tc.function and tc.function.arguments:
+                            tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+                
+                # Handle regular content
+                if delta.content:
+                    full_response += delta.content
+                    data = {"type": "chunk", "content": delta.content, "cache": {"hit": False}}
                     yield f"data: {json.dumps(data)}\n\n"
+            
+            # Filter out any incomplete tool calls (missing ID or name)
+            tool_calls = [tc for tc in tool_calls if tc["id"] and tc["function"]["name"]]
+            
+            # Execute tool calls if any
+            if tool_calls:
+                logger.info(f"Executing {len(tool_calls)} tool calls")
+                
+                # Status callback to emit status events
+                def emit_status(msg: str):
+                    status_data = {"type": "status", "content": msg}
+                    return f"data: {json.dumps(status_data)}\n\n"
+                
+                tool_results = []
+                for tc in tool_calls:
+                    try:
+                        # Get raw arguments string
+                        args_str = tc["function"]["arguments"]
+                        tool_name = tc["function"]["name"]
+                        
+                        # Log for debugging
+                        logger.info(f"Executing tool: {tool_name}")
+                        logger.debug(f"Raw arguments (first 200 chars): {args_str[:200]}")
+                        
+                        # Parse arguments with error handling
+                        try:
+                            args = json.loads(args_str)
+                        except json.JSONDecodeError as e:
+                            error_msg = f"Failed to parse arguments for {tool_name}: {str(e)}"
+                            logger.error(f"{error_msg}. Raw args: {args_str}")
+                            yield emit_status(f"Error: {error_msg}")
+                            
+                            # Add error result
+                            tool_results.append({
+                                "tool_call_id": tc["id"],
+                                "role": "tool",
+                                "name": tool_name,
+                                "content": json.dumps({"error": error_msg})
+                            })
+                            continue
+                        
+                        # Emit status and execute tool
+                        status_messages = []
+                        def status_callback(msg: str):
+                            status_messages.append(msg)
+                        
+                        # Execute tool
+                        logger.info(f"Calling execute_tool for {tool_name} with args: {args}")
+                        result = await execute_tool(
+                            tool_name=tool_name,
+                            arguments=args,
+                            session=session,
+                            user_id=auth.get("user_id", "unknown"),
+                            tenant_id=auth.get("tenant_id", "default"),
+                            status_callback=status_callback
+                        )
+                        
+                        logger.info(f"Tool {tool_name} result: {result}")
+                        
+                        # Emit all status messages
+                        for msg in status_messages:
+                            yield emit_status(msg)
+                        
+                        # Store action if present
+                        if "action" in result:
+                            actions.append(result["action"])
+                        
+                        tool_results.append({
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": tc["function"]["name"],
+                            "content": json.dumps(result)
+                        })
+                    except Exception as e:
+                        logger.error(f"Tool execution error: {e}")
+                        yield emit_status(f"Error: {str(e)}")
+                        tool_results.append({
+                            "tool_call_id": tc["id"],
+                            "role": "tool",
+                            "name": tc["function"]["name"],
+                            "content": json.dumps({"error": str(e)})
+                        })
+                
+                # Send tool results back to model for final response
+                messages.append({
+                    "role": "assistant",
+                    "tool_calls": tool_calls
+                })
+                for result in tool_results:
+                    messages.append(result)
+                
+                # Get final response from model
+                final_stream = model_router.completion(
+                    task_type=TASK_CHAT_FAST,
+                    messages=messages,
+                    stream=True
+                )
+                
+                for chunk in final_stream:
+                    if chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        full_response += content
+                        data = {"type": "chunk", "content": content, "cache": {"hit": False}}
+                        yield f"data: {json.dumps(data)}\n\n"
+            
+            # Send action buttons if any
+            if actions:
+                action_data = {"type": "actions", "actions": actions}
+                yield f"data: {json.dumps(action_data)}\n\n"
 
             # Store response in semantic cache (best-effort)
             try:

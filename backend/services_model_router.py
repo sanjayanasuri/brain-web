@@ -47,7 +47,9 @@ class ModelRouter:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         stream: bool = False,
-        response_format: Optional[Dict[str, Any]] = None
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None
     ) -> Union[str, Generator[Any, None, None]]:
         """
         Wrapper for OpenAI chat completion.
@@ -72,6 +74,10 @@ class ModelRouter:
             kwargs["max_tokens"] = max_tokens
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if tools is not None:
+            kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
 
         try:
             response = self.client.chat.completions.create(**kwargs)

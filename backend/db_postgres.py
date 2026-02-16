@@ -4,6 +4,7 @@ Used for study sessions, usage tracking, and event synchronization.
 """
 import os
 import logging
+import time
 from typing import Optional, Generator
 import psycopg2
 from psycopg2.extensions import register_adapter

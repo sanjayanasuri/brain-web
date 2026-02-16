@@ -25,7 +25,7 @@ logger = logging.getLogger("brain_web")
 class VadConfig:
     sample_rate_hz: int = 16000
     frame_ms: int = 30
-    speech_threshold: float = 0.5
+    speech_threshold: float = 0.65
     end_silence_ms: int = 700
     min_speech_ms: int = 200
     pre_roll_ms: int = 240

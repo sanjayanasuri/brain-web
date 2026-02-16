@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status
+import logging
 from pydantic import BaseModel, EmailStr
 from typing import Optional, Dict, Any
 from auth import create_token
@@ -10,6 +11,7 @@ from services_user import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -35,6 +37,8 @@ def signup(payload: UserSignup):
     
     # Generate token immediately after signup
     token = create_token(user["user_id"], user["tenant_id"])
+    
+    logger.info(f"User signed up: {payload.email} (user_id: {user['user_id']})")
     
     return {
         "status": "ok",

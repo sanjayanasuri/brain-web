@@ -1,5 +1,5 @@
-from neo4j import GraphDatabase  # type: ignore[reportMissingImports]
-from neo4j.exceptions import SessionExpired, ServiceUnavailable, TransientError
+from neo4j import GraphDatabase
+from neo4j.exceptions import SessionExpired, ServiceUnavailable, TransientError, DriverError
 from typing import Generator, Optional
 from contextlib import contextmanager
 import time
@@ -25,10 +25,11 @@ def _get_driver():
         _driver = GraphDatabase.driver(
             NEO4J_URI,
             auth=(NEO4J_USER, NEO4J_PASSWORD),
-            max_connection_lifetime=3600,
+            max_connection_lifetime=600,
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
+            liveness_check_timeout=30,
         )
 
     try:
@@ -41,10 +42,11 @@ def _get_driver():
         _driver = GraphDatabase.driver(
             NEO4J_URI,
             auth=(NEO4J_USER, NEO4J_PASSWORD),
-            max_connection_lifetime=3600,
+            max_connection_lifetime=600,
             max_connection_pool_size=50,
             connection_acquisition_timeout=30,
             keep_alive=True,
+            liveness_check_timeout=30,
         )
     return _driver
 
@@ -56,7 +58,12 @@ def retry_neo4j_operation(func, max_retries=3, delay=1):
     for attempt in range(max_retries):
         try:
             return func()
-        except (SessionExpired, ServiceUnavailable, TransientError, ConnectionResetError, TimeoutError) as e:
+        except (SessionExpired, ServiceUnavailable, TransientError, ConnectionResetError, TimeoutError, DriverError) as e:
+            # Check for "defunct" in the error message specifically
+            error_msg = str(e).lower()
+            if "defunct" in error_msg:
+                logger.error(f"Defunct connection detected: {e}")
+            
             logger.warning(f"Neo4j operation failed on attempt {attempt + 1}: {e}")
             if attempt == max_retries - 1:
                 raise

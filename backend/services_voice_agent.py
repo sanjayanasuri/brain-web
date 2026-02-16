@@ -535,10 +535,12 @@ class VoiceAgentOrchestrator:
             {", ".join(action_summaries) if action_summaries else "None"}
 
             Instructions:
-            - Keep responses concise and conversational.
+            - Keep responses concise, direct, and conversational.
+            - ABSOLUTELY FORBIDDEN: Do not say "I'm here to help", "Goodbye", "Take care", or use generic customer service pleasantries. 
             - Be kind, but do not glaze: if the user asks whether something is correct, say yes/no and correct it if needed.
             - If policy says no interruption, only speak when the user yields (asks a question or requests a response).
             - If policy says slow pacing, use short sentences and a slower cadence. This is CRITICAL.
+            - If policy says fast pacing, speak quickly and get straight to the point.
             - If the user has a "EUREKA" moment, acknowledge it warmly.
             - If they were confused, present the simplified explanation as yours. Mention you've saved this "Insight" to their graph.
             - Do not use markdown (bold/bullets) for voice.
@@ -560,7 +562,13 @@ class VoiceAgentOrchestrator:
                 if any(s.get("kind") == "turn_taking_request" for s in extracted_signals):
                     agent_reply = "Got it. I won’t interrupt — just ask when you want me to jump in."
                 elif any(s.get("kind") == "pacing_request" for s in extracted_signals):
-                    agent_reply = "Okay. I’ll slow down."
+                    pace = policy.get("pacing", "normal")
+                    if pace == "slow":
+                        agent_reply = "Okay. I’ll slow down."
+                    elif pace == "fast":
+                        agent_reply = "Got it. Speeding up."
+                    else:
+                        agent_reply = "Okay, back to normal speed."
                 else:
                     # Pass the chat history from unified context for session continuity
                     current_history = unified_context.get("chat_history", [])
@@ -657,7 +665,7 @@ class VoiceAgentOrchestrator:
             return {
                 "agent_response": agent_reply,
                 "should_speak": should_speak,
-                "speech_rate": 0.9 if policy.get("pacing") == "slow" else 1.0,
+                "speech_rate": 0.85 if policy.get("pacing") == "slow" else (1.25 if policy.get("pacing") == "fast" else 1.0),
                 "learning_signals": extracted_signals,
                 "policy": policy,
                 "user_transcript_chunk": user_transcript_chunk,

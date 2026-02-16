@@ -54,6 +54,22 @@ def extract_learning_signals(transcript: str) -> List[Dict[str, Any]]:
     ):
         signals.append({"kind": "pacing_request", "pace": "slow"})
 
+    if any(
+        phrase in t
+        for phrase in [
+            "speed up",
+            "talk faster",
+            "talk fast",
+            "speak faster",
+            "faster please",
+            "too slow",
+        ]
+    ):
+        signals.append({"kind": "pacing_request", "pace": "fast"})
+
+    if any(phrase in t for phrase in ["normal speed", "resume speed", "standard speed"]):
+        signals.append({"kind": "pacing_request", "pace": "normal"})
+
     # Restart / repeat
     if any(
         phrase in t
@@ -145,9 +161,11 @@ def apply_signals_to_policy(policy: Dict[str, Any], signals: List[Dict[str, Any]
             if policy.get("turn_taking") != "no_interrupt":
                 policy["turn_taking"] = "no_interrupt"
                 changed = True
-        if kind == "pacing_request" and sig.get("pace") == "slow":
-            if policy.get("pacing") != "slow":
-                policy["pacing"] = "slow"
-                changed = True
+        if kind == "pacing_request":
+            pace = sig.get("pace")
+            if pace in ["slow", "fast", "normal"]:
+                if policy.get("pacing") != pace:
+                    policy["pacing"] = pace
+                    changed = True
     return policy, changed
 
