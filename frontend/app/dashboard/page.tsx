@@ -7,7 +7,6 @@ import SignalsView from '../components/dashboard/SignalsView';
 import WorkflowStatusView from '../components/dashboard/WorkflowStatusView';
 import SuggestedPlan from '../components/dashboard/SuggestedPlan';
 import TaskQuickAdd from '../components/dashboard/TaskQuickAdd';
-import LandingPage from '../components/landing/LandingPage';
 import { useState, useEffect } from 'react';
 
 export default function DashboardPage() {
