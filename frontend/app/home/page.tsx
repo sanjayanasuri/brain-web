@@ -299,6 +299,7 @@ function HomePageInner() {
           role: "assistant",
           content: answer,
           timestamp: Date.now(),
+          actions: receivedActions.length > 0 ? receivedActions : undefined,
         };
 
         setMessages((prev) => [...prev, assistantMessage]);

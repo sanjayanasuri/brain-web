@@ -81,6 +81,7 @@ export default function ChatMessagesList({
                             content={msg.content}
                             role={msg.role}
                             timestamp={msg.timestamp}
+                            actions={msg.actions}
                             onExplain={handleExplain}
                             onOpenBranch={handleOpenBranch}
                             highlightStart={branchContext.getHighlightSpan(msg.id)?.start}

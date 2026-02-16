@@ -12,6 +12,7 @@ import { getAuthHeaders } from '../../lib/authToken';
 import { useBranchContext } from './BranchContext';
 import TaskCard from '../study/TaskCard';
 import Feedback from '../study/Feedback';
+import { ActionButtons } from './ActionButtons';
 
 interface Branch {
   id: string;
@@ -35,6 +36,13 @@ interface ChatMessageWithBranchesProps {
   content: string;
   role: 'user' | 'assistant';
   timestamp: number;
+  actions?: Array<{
+    type: 'view_graph' | 'add_to_profile' | 'open_url';
+    label: string;
+    graph_id?: string;
+    url?: string;
+    interest?: string;
+  }>;
   onExplain: (messageId: string, startOffset: number, endOffset: number, selectedText: string, parentContent: string) => void;
   onOpenBranch: (branchId: string, messageId: string) => void;
   highlightStart?: number;
@@ -48,6 +56,7 @@ export default function ChatMessageWithBranches({
   content,
   role,
   timestamp,
+  actions,
   onExplain,
   onOpenBranch,
   highlightStart,
@@ -224,6 +233,13 @@ export default function ChatMessageWithBranches({
           <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>
         )}
       </div>
+
+      {/* Action Buttons */}
+      {actions && actions.length > 0 && (
+        <div style={{ alignSelf: 'flex-start', marginTop: '8px' }}>
+          <ActionButtons actions={actions} />
+        </div>
+      )}
 
       {role === 'assistant' && (
         <button
