@@ -1,81 +1,92 @@
-# Vercel Frontend Setup for Railway Backend
+# Vercel Environment Configuration
 
-## Quick Setup
+This guide explains how to configure your Vercel frontend to connect to your Hetzner backend.
 
-### Step 1: Connect Repository to Vercel
-1. Go to [vercel.com](https://vercel.com)
-2. Click "Add New Project"
-3. Import your `brain-web` repository
-4. Vercel will auto-detect Next.js
+## Environment Variable Setup
 
-### Step 2: Configure Build Settings
-**CRITICAL**: Set the Root Directory in Vercel dashboard:
-1. Go to **Settings** → **General**
-2. Scroll to **Root Directory**
-3. Set it to: `frontend`
+### Option 1: Using Vercel Dashboard (Recommended)
+
+1. Go to your project on [Vercel Dashboard](https://vercel.com/dashboard)
+2. Navigate to **Settings** → **Environment Variables**
+3. Add the following variable:
+
+   **Name:** `NEXT_PUBLIC_API_URL`  
+   **Value:** `https://demo.sanjayanasuri.com`  
+   **Environment:** Production, Preview, Development
+
 4. Click **Save**
+5. Redeploy your application
 
-**Why this is needed**: Your Next.js app is in the `frontend/` subdirectory, not the repo root. Setting Root Directory tells Vercel to treat `frontend/` as the project root.
+### Option 2: Using Vercel CLI
 
-After setting Root Directory, Vercel will:
-- Auto-detect Next.js framework
-- Run `npm install` and `npm run build` from the `frontend/` directory
-- Use the `.next` output directory automatically
+```bash
+# Install Vercel CLI if not already installed
+npm i -g vercel
 
-### Step 3: Set Environment Variables
-Go to **Settings** → **Environment Variables** and add:
+# Set environment variable
+vercel env add NEXT_PUBLIC_API_URL production
+# When prompted, enter: https://demo.sanjayanasuri.com
 
-#### Required:
+# Redeploy
+vercel --prod
 ```
-NEXT_PUBLIC_API_URL=https://your-railway-url.railway.app
-```
-Replace `your-railway-url` with your actual Railway backend URL (e.g., `brain-web-production.up.railway.app`)
 
-#### Optional (for full AI features):
-```
-OPENAI_API_KEY=sk-proj-...
-```
-Only needed if you want AI chat to work. Can be left empty for demo (chat will be disabled).
+## Verification
 
-### Step 4: Deploy
-1. Click "Deploy"
-2. Vercel will build and deploy your frontend
-3. You'll get a URL like: `brain-web.vercel.app`
+After updating the environment variable and redeploying:
 
-### Step 5: Set Custom Domain (Optional)
-1. Go to **Settings** → **Domains**
-2. Add `demo.sanjayanasuri.com`
-3. Update DNS:
-   - Add CNAME record: `demo` → `cname.vercel-dns.com`
-   - Or use Vercel's nameservers if managing DNS through Vercel
+1. **Check Frontend Build Logs:**
+   - Go to Vercel Dashboard → Deployments
+   - Click on latest deployment
+   - Verify `NEXT_PUBLIC_API_URL` is set correctly
 
-## Environment Variables Reference
+2. **Test API Connection:**
+   - Open your deployed frontend
+   - Open browser console (F12)
+   - Check network tab for API requests
+   - Verify requests go to `https://demo.sanjayanasuri.com`
 
-| Variable | Required | Description | Example |
-|----------|----------|-------------|---------|
-| `NEXT_PUBLIC_API_URL` | ✅ Yes | Railway backend URL | `https://brain-web-production.up.railway.app` |
-| `OPENAI_API_KEY` | ❌ No | OpenAI API key for AI chat | `sk-proj-...` |
+3. **Test Functionality:**
+   - Try creating a conversation
+   - Check if graph data loads
+   - Verify all features work correctly
 
-## Testing
+## Important Notes
 
-After deployment:
-1. Visit your Vercel URL
-2. Check browser console for any API connection errors
-3. Test the graph visualization
-4. Test AI chat (if `OPENAI_API_KEY` is set)
+> [!IMPORTANT]
+> - Use `https://` (not `http://`) after SSL is set up
+> - The variable must start with `NEXT_PUBLIC_` to be accessible in the browser
+> - You must redeploy after changing environment variables
+
+> [!WARNING]
+> - Don't commit `.env.local` files with production URLs to Git
+> - Keep development and production URLs separate
 
 ## Troubleshooting
 
-### Frontend can't connect to backend
-- Verify `NEXT_PUBLIC_API_URL` is set correctly in Vercel
-- Check Railway backend is running and accessible
-- Check CORS settings in backend (should allow Vercel domain)
+### CORS Errors
+If you see CORS errors in the browser console:
+- Verify the backend allows requests from your Vercel domain
+- Check Nginx configuration includes proper CORS headers
 
-### Build fails
-- Check that `frontend/` directory exists
-- Verify `package.json` is in `frontend/` directory
-- Check build logs in Vercel dashboard
+### Connection Refused
+If API requests fail:
+- Verify SSL certificate is installed: `curl https://demo.sanjayanasuri.com/health`
+- Check backend is running: `docker compose ps`
+- Verify firewall allows HTTPS: `sudo ufw status`
 
-### API calls return CORS errors
-- Update `backend/main.py` CORS origins to include your Vercel domain
-- Add your Vercel URL to allowed origins list
+### Mixed Content Warnings
+If you see mixed content warnings:
+- Ensure all API URLs use `https://` not `http://`
+- Check that `NEXT_PUBLIC_API_URL` doesn't have trailing slash
+
+## Local Development
+
+For local development, create a `.env.local` file:
+
+```bash
+# .env.local (for local development only)
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+This allows you to test against your local backend while the production deployment uses the Hetzner server.
