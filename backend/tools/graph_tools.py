@@ -212,8 +212,8 @@ async def execute_tool(
         
         try:
             # Use existing web search
-            from services_web_search import search_and_fetch_content
-            results = await search_and_fetch_content(topic, num_results=num_results)
+            from services_web_search import search_and_fetch
+            results = await search_and_fetch(topic, num_results=num_results)
             
             status_callback(f"Found {len(results)} sources for {topic}")
             return {"success": True, "sources": results, "count": len(results)}
