@@ -34,6 +34,7 @@ echo "Step 1: Validating environment configuration..."
 required_vars=(
     "NEO4J_PASSWORD"
     "POSTGRES_PASSWORD"
+    "OPENAI_API_KEY"
 )
 
 missing_vars=()
