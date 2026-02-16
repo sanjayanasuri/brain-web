@@ -87,7 +87,7 @@ async def chat_stream_endpoint(
     async def generate_stream():
         try:
             if not OPENAI_API_KEY:
-                error_msg = {"type": "error", "content": "OpenAI API Key not missing"}
+                error_msg = {"type": "error", "content": "OpenAI API Key is missing on the server"}
                 yield f"data: {json.dumps(error_msg)}\n\n"
                 return
 

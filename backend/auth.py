@@ -225,9 +225,9 @@ def is_public_endpoint(path: str) -> bool:
     if path in PUBLIC_ENDPOINTS:
         return True
     
-    # Check if path starts with any public prefix
+    # Check if path starts with any public prefix (excluding root '/')
     for public_path in PUBLIC_ENDPOINTS:
-        if path.startswith(public_path):
+        if public_path != "/" and path.startswith(public_path):
             return True
     
     return False
