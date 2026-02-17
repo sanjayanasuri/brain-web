@@ -8,6 +8,9 @@ WORKDIR /app
 # Create models directory (VAD model will be downloaded at runtime via torch.hub)
 RUN mkdir -p /app/models
 
+# Install ffmpeg for audio processing/VAD
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
