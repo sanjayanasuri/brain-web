@@ -110,6 +110,7 @@ export function useChatInteraction(
                     graph_id: activeGraphId,
                     branch_id: activeBranchId,
                     chatHistory: chatHistoryForAPI,
+                    chat_id: getCurrentSessionId() || undefined,
                     ui_context: context ? {
                         dom_path: context.domPath,
                         position: context.position,

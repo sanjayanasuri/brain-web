@@ -70,9 +70,9 @@ export default function FloatingActionButton({ activeGraphId, className }: Float
       id: 'notes',
       label: 'Take Notes',
       icon: '📝',
-      url: '/home?mode=notes',
+      url: '/lecture-editor',
       shortcut: 'n',
-      description: 'Quick note taking'
+      description: 'Handwriting and rich notes'
     }
   ], [activeGraphId]);
 

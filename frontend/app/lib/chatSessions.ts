@@ -1,7 +1,4 @@
-/**
- * Chat session management
- * Stores conversations with auto-generated titles based on first question
- */
+import { getApiHeaders } from '../api/base';
 
 export interface ChatSession {
   id: string;
@@ -35,11 +32,11 @@ export async function generateSessionTitle(firstQuestion: string): Promise<strin
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: firstQuestion }),
     });
-    
+
     if (!response.ok) {
       throw new Error('Failed to generate title');
     }
-    
+
     const data = await response.json();
     return data.title || truncateTitle(firstQuestion);
   } catch (err) {
@@ -54,7 +51,45 @@ function truncateTitle(question: string, maxLength: number = 50): string {
 }
 
 /**
- * Get all chat sessions
+ * Sync with backend: Fetch all chat sessions
+ */
+export async function fetchChatSessions(): Promise<ChatSession[]> {
+  try {
+    const headers = await getApiHeaders();
+    const response = await fetch('/api/brain-web/ai/chat/sessions', { headers });
+    if (!response.ok) throw new Error('Failed to fetch sessions');
+    const data = await response.json();
+
+    const sessions = data.sessions || [];
+    // Update local storage
+    if (typeof window !== 'undefined') {
+      saveChatSessions(sessions);
+    }
+    return sessions;
+  } catch (err) {
+    console.warn('Failed to fetch sessions from backend, using local:', err);
+    return getChatSessions();
+  }
+}
+
+/**
+ * Sync with backend: Fetch full history for a session
+ */
+export async function fetchChatHistory(chatId: string): Promise<any[]> {
+  try {
+    const headers = await getApiHeaders();
+    const response = await fetch(`/api/brain-web/ai/chat/history/${chatId}`, { headers });
+    if (!response.ok) throw new Error('Failed to fetch history');
+    const data = await response.json();
+    return data.messages || [];
+  } catch (err) {
+    console.warn('Failed to fetch history from backend:', err);
+    return [];
+  }
+}
+
+/**
+ * Get all chat sessions (local)
  */
 export function getChatSessions(): ChatSession[] {
   if (typeof window === 'undefined') return [];
@@ -68,7 +103,7 @@ export function getChatSessions(): ChatSession[] {
 }
 
 /**
- * Get a specific session by ID
+ * Get a specific session by ID (local)
  */
 export function getChatSession(sessionId: string): ChatSession | null {
   const sessions = getChatSessions();
@@ -88,7 +123,7 @@ export async function createChatSession(
 ): Promise<ChatSession> {
   const title = await generateSessionTitle(firstQuestion);
   const now = Date.now();
-  
+
   const session: ChatSession = {
     id: `session_${now}_${Math.random().toString(36).substr(2, 9)}`,
     title,
@@ -105,7 +140,7 @@ export async function createChatSession(
     graphId,
     branchId,
   };
-  
+
   saveChatSession(session);
   return session;
 }
@@ -124,12 +159,12 @@ export function addMessageToSession(
 ): void {
   const sessions = getChatSessions();
   const session = sessions.find(s => s.id === sessionId);
-  
+
   if (!session) {
     console.warn('Session not found:', sessionId);
     return;
   }
-  
+
   const now = Date.now();
   session.messages.push({
     id: `msg_${now}`,
@@ -141,7 +176,7 @@ export function addMessageToSession(
     suggestedQuestions,
     evidenceUsed,
   });
-  
+
   session.updatedAt = now;
   saveChatSessions(sessions);
 }
@@ -152,9 +187,9 @@ export function addMessageToSession(
 export function updateSessionTitle(sessionId: string, newTitle: string): void {
   const sessions = getChatSessions();
   const session = sessions.find(s => s.id === sessionId);
-  
+
   if (!session) return;
-  
+
   session.title = newTitle;
   session.updatedAt = Date.now();
   saveChatSessions(sessions);
@@ -173,12 +208,8 @@ export function deleteChatSession(sessionId: string): void {
  * Get the current active session ID (most recently updated)
  */
 export function getCurrentSessionId(): string | null {
-  const sessions = getChatSessions();
-  if (sessions.length === 0) return null;
-  
-  // Sort by updatedAt descending
-  const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
-  return sorted[0].id;
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('brainweb:currentChatSession');
 }
 
 /**
@@ -212,13 +243,13 @@ export function getCurrentSession(): ChatSession | null {
 function saveChatSession(session: ChatSession): void {
   const sessions = getChatSessions();
   const existingIndex = sessions.findIndex(s => s.id === session.id);
-  
+
   if (existingIndex >= 0) {
     sessions[existingIndex] = session;
   } else {
     sessions.push(session);
   }
-  
+
   saveChatSessions(sessions);
 }
 

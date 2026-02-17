@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 import hashlib
+import uuid
 from models import (
     AIChatRequest, AIChatResponse,
     SemanticSearchRequest, SemanticSearchResponse,
@@ -25,6 +26,37 @@ from tools import GRAPH_TOOLS, execute_tool
 logger = logging.getLogger("brain_web")
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+@router.get("/chat/sessions")
+async def get_sessions_endpoint(
+    limit: int = 50,
+    auth: dict = Depends(require_auth)
+):
+    """List recent chat sessions for the authenticated user."""
+    from services_chat_history import get_user_sessions
+    
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    
+    sessions = get_user_sessions(user_id=user_id, tenant_id=tenant_id, limit=limit)
+    return {"sessions": sessions}
+
+
+@router.get("/chat/history/{chat_id}")
+async def get_history_endpoint(
+    chat_id: str,
+    limit: int = 50,
+    auth: dict = Depends(require_auth)
+):
+    """Get message history for a specific chat ID."""
+    from services_chat_history import get_chat_history
+    
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    
+    messages = get_chat_history(chat_id=chat_id, user_id=user_id, tenant_id=tenant_id, limit=limit)
+    return {"messages": messages}
 
 
 class EvidenceSubgraphRequest(BaseModel):
@@ -290,23 +322,21 @@ async def chat_stream_endpoint(
                 base_prompt = f"""
                 You are a helpful assistant for Brain Web with the ability to take actions.
                 
+                ## Tool Usage Strategy
+                - If the user asks a general question, answer it directly using your knowledge and any provided context.
+                - ONLY create a new knowledge graph if the user explicitly asks for one (e.g., "create a graph for X") OR if they introduce a completely new, major research topic.
+                - If you are discussing concepts related to the user's current interests or the active graph, use `add_concepts_to_graph` and `create_relationships` instead of creating a new graph.
+                - Be concise. Don't announce tool usage every time unless it's a major action like creating a graph.
+                
                 ## Available Actions
-                You have access to tools that allow you to:
-                - **Create knowledge graphs** for topics the user wants to learn about
-                - **Add concepts and relationships** to graphs
-                - **Fetch metadata from the web** to enrich graphs
-                - **Update the user's learning profile** with new interests
+                - **create_knowledge_graph**: Use this ONLY for major new topics or explicit user requests.
+                - **add_concepts_to_graph**: Use this to expand the current graph with new nodes.
+                - **create_relationships**: Use this to connect concepts.
+                - **fetch_web_metadata**: Use this to get real-world context for concepts.
+                - **update_user_interests**: Use this to track what the user is curious about.
                 
-                ## When to Use Tools
-                - User asks to "learn about X" or "create a graph for Y" → Use create_knowledge_graph + fetch_web_metadata
-                - User mentions a new interest or topic → Use update_user_interests
-                - User wants to add information to a graph → Use add_concepts_to_graph
-                - User asks for connections between concepts → Use create_relationships
-                
-                ## Response Style
-                - Be proactive: suggest creating graphs when appropriate
-                - Explain what you're doing as you use tools
-                - After creating a graph, mention that the user can view it
+                ## Linking to Graphs
+                - When you create or discuss a graph, you can reference it. Use the provided action buttons for navigation.
                 
                 {recent_activity}
                 
@@ -331,6 +361,14 @@ async def chat_stream_endpoint(
 
             # 4. Use Model Router with chat history
             chat_history = unified_context.get("chat_history", [])
+            
+            # Fallback to payload history if DB is empty (helps with immediate turn context)
+            if not chat_history and payload.chatHistory:
+                logger.info(f"Using frontend-provided history fallback ({len(payload.chatHistory)} pairs)")
+                for pair in payload.chatHistory:
+                    chat_history.append({"role": "user", "content": pair.get("question", "")})
+                    if pair.get("answer"):
+                        chat_history.append({"role": "assistant", "content": pair.get("answer", "")})
 
             # 5. Use Model Router with Tool Support
             from services_model_router import model_router, TASK_CHAT_FAST
@@ -520,46 +558,46 @@ async def chat_stream_endpoint(
                 logger.debug(f"Semantic cache store skipped/failed: {e}")
             
             # Save messages to history
-            if payload.chat_id:
-                try:
-                    from services_chat_history import save_message
-                    
-                    # Save user message
+            chat_id_to_save = payload.chat_id or "default"
+            try:
+                from services_chat_history import save_message
+                
+                # Save user message
+                save_message(
+                    chat_id=chat_id_to_save,
+                    user_id=auth.get("user_id", "unknown"),
+                    tenant_id=auth.get("tenant_id", "default"),
+                    role="user",
+                    content=payload.message
+                )
+                
+                # Save assistant response
+                if full_response:
                     save_message(
-                        chat_id=payload.chat_id,
+                        chat_id=chat_id_to_save,
                         user_id=auth.get("user_id", "unknown"),
                         tenant_id=auth.get("tenant_id", "default"),
-                        role="user",
-                        content=payload.message
+                        role="assistant",
+                        content=full_response,
+                        metadata={"answer_id": str(uuid.uuid4())}
                     )
                     
-                    # Save assistant response
-                    if full_response:
-                        save_message(
-                            chat_id=payload.chat_id,
+                    # Extract facts in background for cross-session memory
+                    try:
+                        from services_fact_extractor import extract_facts_from_conversation
+                        background_tasks.add_task(
+                            extract_facts_from_conversation,
+                            user_message=payload.message,
+                            assistant_response=full_response,
+                            chat_id=chat_id_to_save,
                             user_id=auth.get("user_id", "unknown"),
                             tenant_id=auth.get("tenant_id", "default"),
-                            role="assistant",
-                            content=full_response
+                            session=session
                         )
-                        
-                        # Extract facts in background for cross-session memory
-                        try:
-                            from services_fact_extractor import extract_facts_from_conversation
-                            background_tasks.add_task(
-                                extract_facts_from_conversation,
-                                user_message=payload.message,
-                                assistant_response=full_response,
-                                chat_id=payload.chat_id,
-                                user_id=auth.get("user_id", "unknown"),
-                                tenant_id=auth.get("tenant_id", "default"),
-                                session=session
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to queue fact extraction: {e}")
-                            
-                except Exception as e:
-                    logger.warning(f"Failed to save chat history: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to queue fact extraction: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to save chat history: {e}")
             
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             

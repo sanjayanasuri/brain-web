@@ -143,8 +143,9 @@ async def execute_tool(
     Returns:
         Tool execution result
     """
-    from services_branch_explorer import create_graph, set_active_graph
-    from services_graph import get_user_profile, patch_user_profile
+    from services_branch_explorer import create_graph, set_active_graph, get_active_graph_context
+    from services_graph import get_user_profile, patch_user_profile, create_concept, create_relationship
+    from models import ConceptCreate, RelationshipCreate
     
     if tool_name == "create_knowledge_graph":
         name = arguments["name"]
@@ -185,18 +186,18 @@ async def execute_tool(
         status_callback(f"Adding {len(concepts)} concepts to graph...")
         
         try:
+            _, branch_id = get_active_graph_context(session)
+            
             added = []
             for concept in concepts:
-                # Create concept using existing API
-                # Note: This is a simplified version - you may need to adapt based on your actual API
-                concept_data = {
-                    "name": concept["name"],
-                    "domain": concept.get("domain", "general"),
-                    "description": concept.get("description", ""),
-                    "type": "entity"
-                }
-                # TODO: Call actual concept creation function
-                added.append(concept_data)
+                payload = ConceptCreate(
+                    name=concept["name"],
+                    domain=concept.get("domain", "general"),
+                    description=concept.get("description", ""),
+                    type="entity"
+                )
+                new_concept = create_concept(session, payload, tenant_id=tenant_id)
+                added.append(new_concept)
             
             status_callback(f"Added {len(added)} concepts successfully")
             return {"success": True, "added_count": len(added), "concepts": added}
@@ -259,10 +260,16 @@ async def execute_tool(
         status_callback(f"Creating {len(relationships)} connections...")
         
         try:
-            # TODO: Implement relationship creation using existing graph services
+            _, branch_id = get_active_graph_context(session)
+            
             created = []
             for rel in relationships:
-                # Placeholder for relationship creation
+                payload = RelationshipCreate(
+                    source_name=rel["source"],
+                    target_name=rel["target"],
+                    predicate=rel["predicate"]
+                )
+                create_relationship(session, payload, tenant_id=tenant_id)
                 created.append(rel)
             
             status_callback(f"Created {len(created)} connections")

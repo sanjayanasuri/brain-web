@@ -273,6 +273,36 @@ function LectureStudioPageInner() {
 
             <div style={{ display: 'flex', gap: '12px' }}>
               <button
+                onClick={() => router.push('/lecture-editor')}
+                style={{
+                  padding: '12px 24px',
+                  background: 'var(--panel)',
+                  color: 'var(--ink)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '14px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: 'var(--shadow)',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.background = 'var(--surface)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.background = 'var(--panel)';
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                Write Notes
+              </button>
+
+              <button
                 onClick={() => setShowIngestModal(true)}
                 style={{
                   padding: '12px 24px',
@@ -299,7 +329,7 @@ function LectureStudioPageInner() {
                 }}
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>
-                New Lecture
+                Import / AI Ingest
               </button>
             </div>
           </div>
@@ -382,7 +412,7 @@ function LectureStudioPageInner() {
                 </div>
                 {!searchQuery && (
                   <div style={{ fontSize: '14px', color: 'var(--muted)' }}>
-                    Start by creating a new lecture or uploading a document.
+                    Start by writing a new note or uploading a document for AI ingestion.
                   </div>
                 )}
               </div>
@@ -571,6 +601,22 @@ function LectureStudioPageInner() {
             }}>
               <strong>Getting Started:</strong> This lecture has no content yet.
               <button
+                onClick={() => router.push(`/lecture-editor?lectureId=${lectureId}`)}
+                style={{
+                  marginLeft: '8px',
+                  padding: '6px 12px',
+                  background: 'var(--panel)',
+                  color: 'var(--ink)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                }}
+              >
+                Open Editor
+              </button>
+              <button
                 onClick={() => setShowIngestModal(true)}
                 style={{
                   marginLeft: '8px',
@@ -584,7 +630,7 @@ function LectureStudioPageInner() {
                   cursor: 'pointer',
                 }}
               >
-                Add Content
+                AI Ingest
               </button>
               {' '}to add content to this lecture.
             </div>
@@ -612,19 +658,19 @@ function LectureStudioPageInner() {
               <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px' }}>Timeline</h2>
               {segments.length === 0 && (
                 <button
-                  onClick={() => setShowIngestModal(true)}
+                  onClick={() => router.push(`/lecture-editor?lectureId=${lectureId}`)}
                   style={{
                     padding: '6px 12px',
-                    background: 'var(--accent)',
-                    color: 'white',
-                    border: 'none',
+                    background: 'var(--panel)',
+                    color: 'var(--ink)',
+                    border: '1px solid var(--border)',
                     borderRadius: '6px',
                     fontSize: '12px',
                     fontWeight: '600',
                     cursor: 'pointer',
                   }}
                 >
-                  + Add Content
+                  Write Notes
                 </button>
               )}
             </div>
@@ -640,7 +686,7 @@ function LectureStudioPageInner() {
               }}>
                 <div style={{ marginBottom: '12px' }}>No segments available</div>
                 <button
-                  onClick={() => setShowIngestModal(true)}
+                  onClick={() => router.push(`/lecture-editor?lectureId=${lectureId}`)}
                   style={{
                     padding: '10px 20px',
                     background: 'var(--accent)',
@@ -652,7 +698,7 @@ function LectureStudioPageInner() {
                     cursor: 'pointer',
                   }}
                 >
-                  Add Lecture Content
+                  Start Writing
                 </button>
                 <div style={{ marginTop: '12px', fontSize: '12px', color: 'var(--muted)' }}>
                   Click &quot;Add Lecture Content&quot; above to get started

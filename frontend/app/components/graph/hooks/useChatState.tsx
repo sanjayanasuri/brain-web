@@ -270,23 +270,84 @@ export function useChatState() {
 }
 
 import { createContext, useContext, ReactNode, useEffect, useRef } from 'react';
+import { getCurrentSessionId, fetchChatHistory } from '../../../lib/chatSessions';
 
 const ChatContext = createContext<{
   state: ChatState;
   actions: ReturnType<typeof useChatState>['actions'];
 } | null>(null);
 
+function mapBackendToChatHistory(backendMessages: any[]): ChatMessage[] {
+  const history: ChatMessage[] = [];
+  for (let i = 0; i < backendMessages.length; i++) {
+    const msg = backendMessages[i];
+    if (msg.role === 'user') {
+      const nextMsg = backendMessages[i + 1];
+      history.push({
+        id: msg.id || `msg-${i}`,
+        question: msg.content,
+        answer: (nextMsg && nextMsg.role === 'assistant') ? nextMsg.content : '',
+        answerId: (nextMsg && nextMsg.role === 'assistant') ? (nextMsg.metadata?.answer_id || null) : null,
+        answerSections: null,
+        timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+        suggestedQuestions: (nextMsg && nextMsg.role === 'assistant') ? (nextMsg.metadata?.suggested_questions || []) : [],
+        usedNodes: [],
+        suggestedActions: [],
+        retrievalMeta: null,
+        evidenceUsed: [],
+      });
+      if (nextMsg && nextMsg.role === 'assistant') i++;
+    } else if (msg.role === 'assistant') {
+      history.push({
+        id: msg.id || `msg-${i}`,
+        question: '',
+        answer: msg.content,
+        answerId: msg.metadata?.answer_id || null,
+        answerSections: null,
+        timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+        suggestedQuestions: msg.metadata?.suggested_questions || [],
+        usedNodes: [],
+        suggestedActions: [],
+        retrievalMeta: null,
+        evidenceUsed: [],
+      });
+    }
+  }
+  return history;
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const chat = useChatState();
-
   const hasLoadedRef = useRef(false);
-  // Load history on mount to avoid hydration mismatch
+  const lastSessionIdRef = useRef<string | null>(null);
+
+  // Load history on mount or when session changes
   useEffect(() => {
-    if (hasLoadedRef.current) return;
-    const history = loadChatHistoryFromStorage();
-    if (history.length > 0) {
-      chat.actions.setChatHistory(history);
+    const sessionId = getCurrentSessionId();
+
+    if (sessionId && sessionId !== lastSessionIdRef.current) {
+      lastSessionIdRef.current = sessionId;
+      fetchChatHistory(sessionId).then(backendMessages => {
+        if (backendMessages && backendMessages.length > 0) {
+          const history = mapBackendToChatHistory(backendMessages);
+          chat.actions.setChatHistory(history);
+        }
+      }).catch(err => {
+        console.error('Failed to load chat history from backend:', err);
+        // Fallback to local storage if needed
+        if (!hasLoadedRef.current) {
+          const localHistory = loadChatHistoryFromStorage();
+          if (localHistory.length > 0) chat.actions.setChatHistory(localHistory);
+        }
+      });
+    } else if (!sessionId && !hasLoadedRef.current) {
+      // Fallback for no session
+      const history = loadChatHistoryFromStorage();
+      if (history.length > 0) {
+        chat.actions.setChatHistory(history);
+      }
     }
+
     hasLoadedRef.current = true;
   }, [chat.actions]);
 

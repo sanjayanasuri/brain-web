@@ -2451,6 +2451,26 @@ export default function TopBar() {
                 </div>
                 <div
                   onClick={() => {
+                    router.push('/lecture-editor');
+                    setNewMenuOpen(false);
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>📝</span> Write Notes
+                </div>
+                <div
+                  onClick={() => {
                     setNewNoteModalOpen(true);
                     setNewMenuOpen(false);
                   }}
@@ -2467,7 +2487,7 @@ export default function TopBar() {
                   }}
                   className="menu-item-hover"
                 >
-                  <span style={{ fontSize: '16px' }}>✍️</span> New Note
+                  <span style={{ fontSize: '16px' }}>✍️</span> Quick Concept
                 </div>
                 <div
                   onClick={() => {

@@ -331,3 +331,48 @@ def get_chat_count(user_id: str, tenant_id: str, days: int = 30) -> int:
         return 0
     finally:
         pool.putconn(conn)
+
+
+def get_user_sessions(user_id: str, tenant_id: str, limit: int = 50) -> List[Dict]:
+    """
+    Get all unique chat sessions for a user.
+    """
+    if not PSYCOPG2_AVAILABLE:
+        return []
+    
+    pool = _get_postgres_pool()
+    conn = pool.getconn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT 
+                    chat_id as id, 
+                    MIN(content) as title, 
+                    MIN(created_at) as createdAt,
+                    MAX(created_at) as updatedAt
+                FROM chat_messages
+                WHERE user_id = %s AND tenant_id = %s
+                GROUP BY chat_id
+                ORDER BY updatedAt DESC
+                LIMIT %s
+            """, (user_id, tenant_id, limit))
+            
+            sessions = []
+            for row in cur.fetchall():
+                title = row["title"]
+                if len(title) > 50:
+                    title = title[:47] + "..."
+                
+                sessions.append({
+                    "id": row["id"],
+                    "title": title,
+                    "createdAt": int(row["createdat"].timestamp() * 1000),
+                    "updatedAt": int(row["updatedat"].timestamp() * 1000),
+                    "messages": [] 
+                })
+            return sessions
+    except Exception as e:
+        logger.error(f"Failed to get user sessions: {e}")
+        return []
+    finally:
+        pool.putconn(conn)

@@ -20,7 +20,7 @@ export function ActionButtons({ actions }: ActionButtonsProps) {
     const handleAction = (action: Action) => {
         if (action.type === 'view_graph' && action.graph_id) {
             // Navigate to graph view
-            router.push(`/graph?id=${action.graph_id}`);
+            router.push(`/explorer?graph_id=${action.graph_id}`);
         } else if (action.type === 'add_to_profile') {
             // Profile already updated by backend, just show confirmation
             console.log(`Added ${action.interest} to profile`);

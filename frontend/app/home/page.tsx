@@ -19,6 +19,8 @@ import {
   createChatSession,
   addMessageToSession,
   deleteChatSession,
+  fetchChatSessions,
+  fetchChatHistory,
   type ChatSession,
 } from "../lib/chatSessions";
 import {
@@ -126,7 +128,7 @@ function HomePageInner() {
         setRecentSessions(sessions);
 
         // Load chat sessions
-        const chats = getChatSessions();
+        const chats = await fetchChatSessions();
         const sortedChats = [...chats].sort(
           (a, b) => b.updatedAt - a.updatedAt,
         );
@@ -217,6 +219,7 @@ function HomePageInner() {
             graph_id: activeGraphId || "default",
             forceWebSearch: isWebSearchEnabled,
             chatHistory: history,
+            chat_id: currentSessionId || undefined,
             response_prefs: {
               mode: "compact",
               ask_question_policy: "at_most_one",
@@ -395,23 +398,42 @@ function HomePageInner() {
       setCurrentSessionId(chatSession.id);
       setActiveGraphId(chatSession.graphId || "");
 
-      // Load messages from session
-      const history: ChatMessage[] = [];
-      chatSession.messages.forEach(m => {
-        history.push({
-          id: `q-${Date.now()}-${Math.random()}`,
-          role: 'user',
-          content: m.question,
-          timestamp: chatSession.updatedAt
-        });
-        history.push({
-          id: `a-${Date.now()}-${Math.random()}`,
-          role: 'assistant',
-          content: m.answer,
-          timestamp: chatSession.updatedAt
-        });
-      });
-      setMessages(history);
+      try {
+        setLoading(true);
+        const backendMessages = await fetchChatHistory(chatSession.id);
+
+        if (backendMessages && backendMessages.length > 0) {
+          const history: ChatMessage[] = backendMessages.map((m, idx) => ({
+            id: `msg-${chatSession.id}-${idx}`,
+            role: m.role,
+            content: m.content,
+            timestamp: chatSession.updatedAt // Fallback
+          }));
+          setMessages(history);
+        } else {
+          // Load messages from local session object as fallback
+          const history: ChatMessage[] = [];
+          chatSession.messages.forEach(m => {
+            history.push({
+              id: `q-${Date.now()}-${Math.random()}`,
+              role: 'user',
+              content: m.question,
+              timestamp: chatSession.updatedAt
+            });
+            history.push({
+              id: `a-${Date.now()}-${Math.random()}`,
+              role: 'assistant',
+              content: m.answer,
+              timestamp: chatSession.updatedAt
+            });
+          });
+          setMessages(history);
+        }
+      } catch (err) {
+        console.error("Failed to fetch full history:", err);
+      } finally {
+        setLoading(false);
+      }
     },
     [],
   );
