@@ -64,6 +64,7 @@ services:
       - NEXTAUTH_URL=${NEXTAUTH_URL:-https://demo.sanjayanasuri.com}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - API_TOKEN_SECRET=${API_TOKEN_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
     depends_on:
       - backend
 
