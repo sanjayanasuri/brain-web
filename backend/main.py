@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api_auth import router as auth_router
 from api_health import router as health_router
-from services_user import init_user_db
+from db_postgres import init_postgres_db
 from api_concepts import router as concepts_router
 from api_ai import router as ai_router
 from api_retrieval import router as retrieval_router
@@ -185,11 +185,11 @@ async def lifespan(app: FastAPI):
         print(f"[SYNC] ✗ Error during startup: {e}")
         logger.error(f"Error during startup: {e}", exc_info=True)
     
-    # Always try to initialize user database
+    # Always try to initialize Postgres database
     try:
-        init_user_db()
+        init_postgres_db()
     except Exception as e:
-        print(f"Warning: Failed to initialize user database: {e}")
+        print(f"Warning: Failed to initialize Postgres database: {e}")
     
     # Start Notion auto-sync background loop if enabled
     from config import ENABLE_NOTION_AUTO_SYNC

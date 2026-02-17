@@ -1022,6 +1022,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
       AND {edge_visibility_clause}
     WITH c, count(DISTINCT r) AS degree
     WHERE degree > 0
+    WITH c, degree
     ORDER BY degree DESC, c.node_id ASC
     LIMIT $limit_nodes
     RETURN c.node_id AS node_id,
@@ -1052,6 +1053,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
       AND {edge_visibility_clause}
     WITH c, count(DISTINCT r) AS degree
     WHERE degree = 0
+    WITH c
     ORDER BY c.node_id ASC
     RETURN c.node_id AS node_id,
            c.name AS name,
