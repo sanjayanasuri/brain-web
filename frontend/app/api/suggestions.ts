@@ -2,7 +2,7 @@
  * Suggestions related API methods
  */
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 import { Suggestion, SuggestedPath } from './types';
 
 export async function getSuggestions(
@@ -22,7 +22,9 @@ export async function getSuggestions(
     if (conceptId) {
         params.set('concept_id', conceptId);
     }
-    const res = await fetch(`${API_BASE_URL}/suggestions?${params.toString()}`);
+    const res = await fetch(`${API_BASE_URL}/suggestions?${params.toString()}`, {
+        headers: await getApiHeaders(),
+    });
     if (!res.ok) throw new Error('Failed to load suggestions');
     return res.json();
 }
@@ -38,7 +40,9 @@ export async function getSuggestedPaths(
     if (graphId) {
         params.set('graph_id', graphId);
     }
-    const res = await fetch(`${API_BASE_URL}/suggestions/paths?${params.toString()}`);
+    const res = await fetch(`${API_BASE_URL}/suggestions/paths?${params.toString()}`, {
+        headers: await getApiHeaders(),
+    });
     if (!res.ok) throw new Error('Failed to load suggested paths');
     return res.json();
 }

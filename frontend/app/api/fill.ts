@@ -1,5 +1,5 @@
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 
 export interface FillResponse {
     status: string;
@@ -10,17 +10,9 @@ export interface FillResponse {
 }
 
 export async function runFillCommand(command: string, graphId?: string): Promise<FillResponse> {
-    const token = localStorage.getItem('token');
-    const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-    };
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
-
     const res = await fetch(`${API_BASE_URL}/fill`, {
         method: 'POST',
-        headers,
+        headers: await getApiHeaders(),
         body: JSON.stringify({ command, graph_id: graphId }),
     });
 

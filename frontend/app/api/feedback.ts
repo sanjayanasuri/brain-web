@@ -2,7 +2,7 @@
  * Feedback related API methods
  */
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 
 /**
  * Submit feedback on a Brain Web answer
@@ -15,7 +15,7 @@ export async function submitFeedback(
 ): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/feedback/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({
             answer_id: answerId,
             question: question || '',

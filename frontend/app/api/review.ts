@@ -2,7 +2,7 @@
  * Review related API methods
  */
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 import {
     RelationshipReviewListResponse,
     RelationshipReviewActionResponse
@@ -25,7 +25,10 @@ export async function listProposedRelationships(
         params.append('ingestion_run_id', ingestionRunId);
     }
     const res = await fetch(
-        `${API_BASE_URL}/review/relationships?${params.toString()}`
+        `${API_BASE_URL}/review/relationships?${params.toString()}`,
+        {
+            headers: await getApiHeaders(),
+        }
     );
     if (!res.ok) throw new Error('Failed to load relationships for review');
     return res.json();
@@ -38,7 +41,7 @@ export async function acceptRelationships(
 ): Promise<RelationshipReviewActionResponse> {
     const res = await fetch(`${API_BASE_URL}/review/relationships/accept`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({
             graph_id: graphId,
             edges,
@@ -56,7 +59,7 @@ export async function rejectRelationships(
 ): Promise<RelationshipReviewActionResponse> {
     const res = await fetch(`${API_BASE_URL}/review/relationships/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({
             graph_id: graphId,
             edges,
@@ -77,7 +80,7 @@ export async function editRelationship(
 ): Promise<RelationshipReviewActionResponse> {
     const res = await fetch(`${API_BASE_URL}/review/relationships/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({
             graph_id: graphId,
             src_node_id: srcNodeId,

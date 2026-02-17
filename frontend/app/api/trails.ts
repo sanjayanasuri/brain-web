@@ -2,7 +2,7 @@
  * Trails related API methods
  */
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 import {
     TrailSummary,
     Trail
@@ -13,7 +13,9 @@ export async function listTrails(status?: string, limit: number = 10): Promise<{
     if (status) params.append('status', status);
     params.append('limit', limit.toString());
 
-    const res = await fetch(`${API_BASE_URL}/trails?${params.toString()}`);
+    const res = await fetch(`${API_BASE_URL}/trails?${params.toString()}`, {
+        headers: await getApiHeaders(),
+    });
     if (!res.ok) {
         throw new Error(`Failed to list trails: ${res.statusText}`);
     }
@@ -21,7 +23,9 @@ export async function listTrails(status?: string, limit: number = 10): Promise<{
 }
 
 export async function getTrail(trailId: string): Promise<Trail> {
-    const res = await fetch(`${API_BASE_URL}/trails/${trailId}`);
+    const res = await fetch(`${API_BASE_URL}/trails/${trailId}`, {
+        headers: await getApiHeaders(),
+    });
     if (!res.ok) {
         throw new Error(`Failed to get trail: ${res.statusText}`);
     }
@@ -31,7 +35,7 @@ export async function getTrail(trailId: string): Promise<Trail> {
 export async function createTrail(title: string, pinned: boolean = false): Promise<{ trail_id: string; title: string; status: string }> {
     const res = await fetch(`${API_BASE_URL}/trails/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({ title, pinned }),
     });
     if (!res.ok) {
@@ -43,6 +47,7 @@ export async function createTrail(title: string, pinned: boolean = false): Promi
 export async function resumeTrail(trailId: string): Promise<{ trail_id: string; status: string; last_step_id?: string; last_step_index?: number; last_step_kind?: string; last_step_ref_id?: string }> {
     const res = await fetch(`${API_BASE_URL}/trails/${trailId}/resume`, {
         method: 'POST',
+        headers: await getApiHeaders(),
     });
     if (!res.ok) {
         throw new Error(`Failed to resume trail: ${res.statusText}`);
@@ -53,6 +58,7 @@ export async function resumeTrail(trailId: string): Promise<{ trail_id: string; 
 export async function archiveTrail(trailId: string): Promise<any> {
     const res = await fetch(`${API_BASE_URL}/trails/${trailId}/archive`, {
         method: 'POST',
+        headers: await getApiHeaders(),
     });
     if (!res.ok) {
         throw new Error(`Failed to archive trail: ${res.statusText}`);
@@ -70,7 +76,7 @@ export async function appendTrailStep(
 ): Promise<{ step_id: string; index: number }> {
     const res = await fetch(`${API_BASE_URL}/trails/${trailId}/append`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({ kind, ref_id: refId, title, note, meta }),
     });
     if (!res.ok) {

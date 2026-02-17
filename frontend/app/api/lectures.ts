@@ -30,7 +30,7 @@ export async function ingestLecture(payload: {
 }): Promise<LectureIngestResult> {
     const response = await fetch(`${API_BASE_URL}/lectures/ingest`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -44,7 +44,9 @@ export async function ingestLecture(payload: {
  * Fetch all blocks for a lecture
  */
 export async function getLectureBlocks(lectureId: string): Promise<LectureBlock[]> {
-    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/blocks`);
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/blocks`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch lecture blocks: ${response.statusText} - ${errorText}`);
@@ -61,7 +63,7 @@ export async function upsertLectureBlocks(
 ): Promise<LectureBlock[]> {
     const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/blocks`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({ blocks }),
     });
     if (!response.ok) {
@@ -75,7 +77,9 @@ export async function upsertLectureBlocks(
  * Fetch all linked mentions for a lecture
  */
 export async function getLectureMentions(lectureId: string): Promise<LectureMention[]> {
-    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/mentions`);
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/mentions`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch lecture mentions: ${response.statusText} - ${errorText}`);
@@ -89,7 +93,7 @@ export async function getLectureMentions(lectureId: string): Promise<LectureMent
 export async function createLectureMention(payload: LectureMentionCreate): Promise<LectureMention> {
     const response = await fetch(`${API_BASE_URL}/mentions/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -108,7 +112,7 @@ export async function updateLectureMention(
 ): Promise<LectureMention> {
     const response = await fetch(`${API_BASE_URL}/mentions/${mentionId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -124,6 +128,7 @@ export async function updateLectureMention(
 export async function deleteLectureMention(mentionId: string): Promise<{ status: string; mention_id: string }> {
     const response = await fetch(`${API_BASE_URL}/mentions/${mentionId}`, {
         method: 'DELETE',
+        headers: await getApiHeaders(),
     });
     if (!response.ok) {
         const errorText = await response.text();
@@ -136,7 +141,9 @@ export async function deleteLectureMention(mentionId: string): Promise<{ status:
  * Fetch concept backlinks from lecture mentions
  */
 export async function getConceptMentions(conceptId: string): Promise<LectureMention[]> {
-    const response = await fetch(`${API_BASE_URL}/concepts/${conceptId}/mentions`);
+    const response = await fetch(`${API_BASE_URL}/concepts/${conceptId}/mentions`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch concept mentions: ${response.statusText} - ${errorText}`);
@@ -148,7 +155,9 @@ export async function getConceptMentions(conceptId: string): Promise<LectureMent
  * List all lectures
  */
 export async function listLectures(): Promise<Lecture[]> {
-    const response = await fetch(`${API_BASE_URL}/lectures/`);
+    const response = await fetch(`${API_BASE_URL}/lectures/`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to list lectures: ${response.statusText} - ${errorText}`);
@@ -157,7 +166,9 @@ export async function listLectures(): Promise<Lecture[]> {
 }
 
 export async function getLecture(lectureId: string): Promise<Lecture> {
-    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}`);
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch lecture: ${response.statusText} - ${errorText}`);
@@ -179,7 +190,7 @@ export async function createLecture(payload: {
 }): Promise<Lecture> {
     const response = await fetch(`${API_BASE_URL}/lectures/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -203,7 +214,7 @@ export async function updateLecture(
 ): Promise<Lecture> {
     const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -217,7 +228,9 @@ export async function updateLecture(
  * Fetch all segments for a lecture
  */
 export async function getLectureSegments(lectureId: string): Promise<LectureSegment[]> {
-    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/segments`);
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/segments`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch lecture segments: ${response.statusText} - ${errorText}`);
@@ -240,7 +253,7 @@ export async function updateSegment(
 ): Promise<LectureSegment> {
     const response = await fetch(`${API_BASE_URL}/lectures/segments/${segmentId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!response.ok) {
@@ -326,7 +339,9 @@ export async function submitLectureLinkFeedback(
  */
 export async function getSegmentsByConcept(conceptName: string): Promise<LectureSegment[]> {
     const encodedName = encodeURIComponent(conceptName);
-    const response = await fetch(`${API_BASE_URL}/lectures/segments/by-concept/${encodedName}`);
+    const response = await fetch(`${API_BASE_URL}/lectures/segments/by-concept/${encodedName}`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch segments by concept: ${response.statusText} - ${errorText}`);
@@ -338,7 +353,9 @@ export async function getSegmentsByConcept(conceptName: string): Promise<Lecture
  * Fetch all notebook pages for a lecture
  */
 export async function getNotebookPages(lectureId: string): Promise<NotebookPage[]> {
-    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/pages`);
+    const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/pages`, {
+        headers: await getApiHeaders(),
+    });
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Failed to fetch notebook pages: ${response.statusText} - ${errorText}`);
@@ -355,7 +372,7 @@ export async function updateNotebookPage(
 ): Promise<NotebookPage> {
     const response = await fetch(`${API_BASE_URL}/lectures/${lectureId}/pages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({ ...payload, lecture_id: lectureId }),
     });
     if (!response.ok) {

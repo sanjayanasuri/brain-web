@@ -42,10 +42,9 @@ export async function getCalendarEvent(eventId: string): Promise<CalendarEvent> 
 }
 
 export async function createCalendarEvent(event: CalendarEventCreate): Promise<CalendarEvent> {
-    const headers = await getApiHeaders();
     const res = await fetch(`${API_BASE_URL}/calendar/events`, {
         method: 'POST',
-        headers,
+        headers: await getApiHeaders(),
         body: JSON.stringify(event),
     });
     if (!res.ok) {

@@ -19,11 +19,13 @@ import {
 
 export async function listGraphs(): Promise<GraphListResponse> {
     try {
-        const res = await fetch(`${API_BASE_URL}/graphs/`);
-        if (!res.ok) {
-            throw new Error(`Failed to list graphs: ${res.statusText}`);
+        const response = await fetch(`${API_BASE_URL}/graphs/`, {
+            headers: await getApiHeaders(),
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to list graphs: ${response.statusText}`);
         }
-        const data = await res.json();
+        const data = await response.json();
         // Store active graph_id and branch_id for offline use
         if (typeof window !== 'undefined') {
             try {
@@ -46,7 +48,7 @@ export async function listGraphs(): Promise<GraphListResponse> {
 export async function createGraph(name: string, options?: CreateGraphOptions): Promise<GraphSelectResponse> {
     const res = await fetch(`${API_BASE_URL}/graphs/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({ name, ...options }),
     });
     if (!res.ok) throw new Error(`Failed to create graph: ${res.statusText}`);
@@ -56,6 +58,7 @@ export async function createGraph(name: string, options?: CreateGraphOptions): P
 export async function selectGraph(graphId: string): Promise<GraphSelectResponse> {
     const res = await fetch(`${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/select`, {
         method: 'POST',
+        headers: await getApiHeaders(),
     });
     if (!res.ok) throw new Error(`Failed to select graph: ${res.statusText}`);
     return res.json();
@@ -63,7 +66,9 @@ export async function selectGraph(graphId: string): Promise<GraphSelectResponse>
 
 export async function listBranches(): Promise<BranchListResponse> {
     try {
-        const res = await fetch(`${API_BASE_URL}/branches/`);
+        const res = await fetch(`${API_BASE_URL}/branches/`, {
+            headers: await getApiHeaders(),
+        });
         if (!res.ok) {
             throw new Error(`Failed to list branches: ${res.statusText}`);
         }
@@ -78,7 +83,7 @@ export async function listBranches(): Promise<BranchListResponse> {
 export async function createBranch(name: string): Promise<BranchSummary> {
     const res = await fetch(`${API_BASE_URL}/branches/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({ name }),
     });
     if (!res.ok) throw new Error(`Failed to create branch: ${res.statusText}`);
@@ -88,6 +93,7 @@ export async function createBranch(name: string): Promise<BranchSummary> {
 export async function selectBranch(branchId: string): Promise<{ graph_id: string; active_branch_id: string }> {
     const res = await fetch(`${API_BASE_URL}/branches/${encodeURIComponent(branchId)}/select`, {
         method: 'POST',
+        headers: await getApiHeaders(),
     });
     if (!res.ok) throw new Error(`Failed to select branch: ${res.statusText}`);
     return res.json();
@@ -102,7 +108,7 @@ export async function forkBranchFromNode(
         `${API_BASE_URL}/branches/${encodeURIComponent(branchId)}/fork-from-node/${encodeURIComponent(nodeId)}`,
         {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: await getApiHeaders(),
             body: JSON.stringify({ depth }),
         },
     );
@@ -116,7 +122,10 @@ export async function compareBranches(
 ): Promise<BranchCompareResponse> {
     const res = await fetch(
         `${API_BASE_URL}/branches/${encodeURIComponent(branchId)}/compare/${encodeURIComponent(otherBranchId)}`,
-        { method: 'POST' },
+        {
+            method: 'POST',
+            headers: await getApiHeaders(),
+        },
     );
     if (!res.ok) throw new Error(`Failed to compare branches: ${res.statusText}`);
     return res.json();
@@ -129,7 +138,7 @@ export async function llmCompareBranches(payload: {
 }): Promise<BranchLLMCompareResponse> {
     const res = await fetch(`${API_BASE_URL}/branches/compare`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -146,7 +155,7 @@ export async function createSnapshot(payload: {
 }): Promise<SnapshotSummary> {
     const res = await fetch(`${API_BASE_URL}/snapshots/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(`Failed to create snapshot: ${res.statusText}`);
@@ -154,7 +163,9 @@ export async function createSnapshot(payload: {
 }
 
 export async function listSnapshots(limit: number = 50): Promise<{ snapshots: SnapshotSummary[] }> {
-    const res = await fetch(`${API_BASE_URL}/snapshots/?limit=${limit}`);
+    const res = await fetch(`${API_BASE_URL}/snapshots/?limit=${limit}`, {
+        headers: await getApiHeaders(),
+    });
     if (!res.ok) throw new Error(`Failed to list snapshots: ${res.statusText}`);
     return res.json();
 }
@@ -162,6 +173,7 @@ export async function listSnapshots(limit: number = 50): Promise<{ snapshots: Sn
 export async function restoreSnapshot(snapshotId: string): Promise<any> {
     const res = await fetch(`${API_BASE_URL}/snapshots/${encodeURIComponent(snapshotId)}/restore`, {
         method: 'POST',
+        headers: await getApiHeaders(),
     });
     if (!res.ok) throw new Error(`Failed to restore snapshot: ${res.statusText}`);
     return res.json();
@@ -186,7 +198,10 @@ export async function getGraphOverview(
 
     try {
         const response = await fetch(
-            `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/overview?limit_nodes=${limitNodes}&limit_edges=${limitEdges}`
+            `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/overview?limit_nodes=${limitNodes}&limit_edges=${limitEdges}`,
+            {
+                headers: await getApiHeaders(),
+            }
         );
         if (!response.ok) {
             // If online request fails, try offline cache as fallback
@@ -244,7 +259,10 @@ export async function getGraphNeighbors(
 }> {
     try {
         const response = await fetch(
-            `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/neighbors?concept_id=${encodeURIComponent(conceptId)}&hops=${hops}&limit=${limit}`
+            `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/neighbors?concept_id=${encodeURIComponent(conceptId)}&hops=${hops}&limit=${limit}`,
+            {
+                headers: await getApiHeaders(),
+            }
         );
         if (!response.ok) {
             throw new Error(`Failed to fetch neighbors: ${response.statusText}`);
@@ -277,7 +295,10 @@ export async function listGraphConcepts(
         if (options?.offset) params.set('offset', options.offset.toString());
 
         const response = await fetch(
-            `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/concepts?${params.toString()}`
+            `${API_BASE_URL}/graphs/${encodeURIComponent(graphId)}/concepts?${params.toString()}`,
+            {
+                headers: await getApiHeaders(),
+            }
         );
         if (!response.ok) {
             throw new Error(`Failed to fetch concepts: ${response.statusText}`);

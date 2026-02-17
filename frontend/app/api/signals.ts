@@ -2,7 +2,7 @@
  * Signals related API methods
  */
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 import {
     ListSignalsOptions,
     SignalListResponse
@@ -17,7 +17,9 @@ export async function listSignals(options: ListSignalsOptions = {}): Promise<Sig
     if (options.limit) params.append('limit', options.limit.toString());
     if (options.offset) params.append('offset', options.offset.toString());
 
-    const res = await fetch(`${API_BASE_URL}/signals/?${params.toString()}`);
+    const res = await fetch(`${API_BASE_URL}/signals/?${params.toString()}`, {
+        headers: await getApiHeaders(),
+    });
     if (!res.ok) {
         throw new Error(`Failed to list signals: ${res.statusText}`);
     }

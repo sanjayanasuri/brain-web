@@ -164,7 +164,8 @@ export async function completeSuggestion(suggestionId: string): Promise<{ status
 }
 
 export async function getTask(taskId: string): Promise<BackgroundTask> {
-    const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`);
+    const headers = await getApiHeaders();
+    const res = await fetch(`${API_BASE_URL}/tasks/${taskId}`, { headers });
     if (!res.ok) {
         const errorText = await res.text();
         throw new Error(`Failed to get task: ${res.statusText} - ${errorText}`);
