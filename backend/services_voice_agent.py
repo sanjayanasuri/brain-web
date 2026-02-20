@@ -39,6 +39,17 @@ from services_agent_memory import read_agent_memory
 
 logger = logging.getLogger("brain_web")
 
+
+async def _bg_task(coro, label: str = "background") -> None:
+    """
+    Wrap a coroutine as a fire-and-forget background task with error logging.
+    Prevents silent failures when asyncio.create_task() exceptions go unobserved.
+    """
+    try:
+        await coro
+    except Exception as e:
+        logger.error(f"[voice_agent][{label}] Background task failed: {e}", exc_info=True)
+
 class VoiceAgentOrchestrator:
     def __init__(self, user_id: str, tenant_id: str):
         self.user_id = user_id
@@ -657,9 +668,9 @@ class VoiceAgentOrchestrator:
             assistant_transcript_chunk = None
             if session_id:
                 # Non-blocking: in-memory cache updated instantly; Postgres write is backgrounded
-                asyncio.create_task(self.save_interaction(session_id, last_transcript, agent_reply))
+                asyncio.create_task(_bg_task(self.save_interaction(session_id, last_transcript, agent_reply), "save_interaction"))
                 if policy_changed:
-                    asyncio.create_task(self.set_session_policy(session_id, policy))
+                    asyncio.create_task(_bg_task(self.set_session_policy(session_id, policy), "set_session_policy"))
 
                 # FACT EXTRACTION — background, never blocks the reply
                 if agent_reply:
@@ -684,7 +695,7 @@ class VoiceAgentOrchestrator:
                         except Exception as e:
                             logger.warning(f"Fact extraction failed in voice: {e}")
 
-                    asyncio.create_task(_extract_facts_bg())
+                    asyncio.create_task(_bg_task(_extract_facts_bg(), "extract_facts"))
 
                 # Persist transcript chunks + extracted learning signals as artifacts (additive)
                 try:

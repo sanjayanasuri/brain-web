@@ -148,7 +148,10 @@ async def voice_stream_ws(websocket: WebSocket):
     decoder_reader_task: Optional[asyncio.Task] = None
     decoder_stderr_task: Optional[asyncio.Task] = None
 
-    utterance_q: "asyncio.Queue[_QueuedUtterance]" = asyncio.Queue()
+    # Cap at 4 utterances — under normal use the queue should never exceed 1.
+    # If the agent pipeline is consistently slower than speech, we drop the
+    # oldest pending utterance rather than growing memory unboundedly.
+    utterance_q: "asyncio.Queue[_QueuedUtterance]" = asyncio.Queue(maxsize=4)
     utterance_worker_task: Optional[asyncio.Task] = None
 
     audio_buf: bytearray = bytearray()
@@ -486,14 +489,30 @@ async def voice_stream_ws(websocket: WebSocket):
                                 "speech_ms": seg.speech_ms,
                             }
                         )
-                        await utterance_q.put(
-                            _QueuedUtterance(
-                                pcm16=seg.pcm16,
-                                start_epoch_ms=start_ms,
-                                end_epoch_ms=end_ms,
-                                speech_ms=seg.speech_ms,
+                        try:
+                            utterance_q.put_nowait(
+                                _QueuedUtterance(
+                                    pcm16=seg.pcm16,
+                                    start_epoch_ms=start_ms,
+                                    end_epoch_ms=end_ms,
+                                    speech_ms=seg.speech_ms,
+                                )
                             )
-                        )
+                        except asyncio.QueueFull:
+                            # Pipeline is behind — drop oldest utterance, keep newest
+                            try:
+                                utterance_q.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            await _send_json({"type": "warning", "message": "Pipeline busy; dropping oldest queued utterance."})
+                            await utterance_q.put(
+                                _QueuedUtterance(
+                                    pcm16=seg.pcm16,
+                                    start_epoch_ms=start_ms,
+                                    end_epoch_ms=end_ms,
+                                    speech_ms=seg.speech_ms,
+                                )
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as e:
