@@ -1,7 +1,10 @@
+import logging
 import os
 from pathlib import Path
 from urllib.parse import urlparse
 from dotenv import load_dotenv
+
+_log = logging.getLogger("brain_web")
 
 repo_root = Path(__file__).parent.parent
 env_local = repo_root / ".env.local"
@@ -21,13 +24,7 @@ if env_file.exists():
 if env_local.exists():
     load_dotenv(dotenv_path=env_local, override=True)
 
-# Load in priority order: backend first, then repo root (with override=True for repo files)
-if backend_env.exists():
-    load_dotenv(dotenv_path=backend_env, override=False)
-if env_file.exists():
-    load_dotenv(dotenv_path=env_file, override=True)  # Repo .env overrides backend
-if env_local.exists():
-    load_dotenv(dotenv_path=env_local, override=True)  # Repo .env.local has highest priority
+
 
 # For cloud deployments (Railway/Aura), we prefer the single URI
 # Local fallback remains bolt://127.0.0.1:7687
@@ -103,10 +100,9 @@ if DATABASE_URL:
     POSTGRES_USER = parsed.username or os.getenv("POSTGRES_USER", "brainweb")
     POSTGRES_PASSWORD = parsed.password or os.getenv("POSTGRES_PASSWORD", "brainweb")
     POSTGRES_CONNECTION_STRING = DATABASE_URL
-    print(f"DEBUG: DATABASE_URL found. Host: {POSTGRES_HOST}, Port: {POSTGRES_PORT}")
-    print(f"DEBUG: Connection string: {POSTGRES_CONNECTION_STRING}")
+    _log.debug("Postgres: using DATABASE_URL (host=%s port=%s)", POSTGRES_HOST, POSTGRES_PORT)
 else:
-    print("DEBUG: DATABASE_URL not found, using individual vars")
+    _log.debug("Postgres: DATABASE_URL not set, using individual POSTGRES_* vars")
     # Fallback to individual env vars
     POSTGRES_HOST = os.getenv("POSTGRES_HOST", "127.0.0.1")
     POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))

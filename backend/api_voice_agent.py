@@ -10,12 +10,15 @@ from services_voice_agent import VoiceAgentOrchestrator
 from services_supermemory import get_sync_history
 from services_usage_tracker import get_daily_usage
 from services_voice_transcripts import list_voice_learning_signals, list_voice_transcript_chunks
+from services_voice_style_profile import get_voice_style_profile_snapshot
 
 router = APIRouter(prefix="/voice-agent", tags=["voice-agent"])
 
 def get_orchestrator(request: Request):
-    user_id = getattr(request.state, "user_id", None) or "demo"
-    tenant_id = getattr(request.state, "tenant_id", None) or "demo"
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required for voice sessions.")
     return VoiceAgentOrchestrator(user_id, tenant_id)
 
 @router.post("/session/start")
@@ -66,6 +69,19 @@ async def get_voice_usage(request: Request):
         "daily_usage_minutes": usage_seconds / 60,
         "daily_limit_minutes": 60 # Default limit
     }
+
+
+@router.get("/style-profile")
+async def get_voice_style_profile(request: Request):
+    """
+    Return the learned per-account voice style profile (pause/question/humor + VAD prefs).
+    """
+    user_id = getattr(request.state, "user_id", None) or "demo"
+    tenant_id = getattr(request.state, "tenant_id", None) or "demo"
+    try:
+        return get_voice_style_profile_snapshot(user_id=user_id, tenant_id=tenant_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch voice style profile: {str(e)}")
 
 @router.post("/interaction/context")
 async def get_interaction_context(

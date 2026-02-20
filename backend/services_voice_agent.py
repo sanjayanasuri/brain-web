@@ -29,6 +29,7 @@ from services_voice_transcripts import (
     record_voice_transcript_chunk,
 )
 from services_tutor_profile import get_tutor_profile as get_tutor_profile_service
+from services_voice_style_profile import get_voice_response_style_hint
 
 import json
 import re
@@ -574,6 +575,13 @@ Transcript:
             eureka_task = asyncio.create_task(self.handle_eureka_moment(last_transcript))
             commands_task = asyncio.create_task(self.extract_voice_commands(last_transcript, is_scribe_mode))
             memories_task = asyncio.create_task(search_memories(self.user_id, last_transcript))
+            style_hint_task = asyncio.create_task(
+                asyncio.to_thread(
+                    get_voice_response_style_hint,
+                    user_id=self.user_id,
+                    tenant_id=self.tenant_id,
+                )
+            )
 
             gathered = await asyncio.gather(
                 history_task if history_task else asyncio.sleep(0),
@@ -582,6 +590,7 @@ Transcript:
                 eureka_task,
                 commands_task,
                 memories_task,
+                style_hint_task,
                 return_exceptions=True,
             )
 
@@ -593,6 +602,9 @@ Transcript:
             is_eureka: bool = gathered[3] if not isinstance(gathered[3], Exception) else False
             actions: list = gathered[4] if not isinstance(gathered[4], Exception) else []
             personal_memories: list = gathered[5] if not isinstance(gathered[5], Exception) else []
+            learned_style_hint: str = gathered[6] if not isinstance(gathered[6], Exception) else ""
+            if not isinstance(learned_style_hint, str):
+                learned_style_hint = ""
 
             extracted_signals = extract_learning_signals(last_transcript)
             policy, policy_changed = apply_signals_to_policy(policy, extracted_signals)
@@ -745,9 +757,7 @@ Transcript:
             if unified_context.get("lecture_context"):
                 memory_sections.append(f"## Current Study Material\n{unified_context['lecture_context']}")
             
-            unified_memory_context = "\n".join(memory_sections)
             agent_memory = "\n".join(memory_sections)
-            cross_modal_context = "" # Placeholder for future cross-modal context
 
             system_prompt = f"""
             You are {VOICE_AGENT_NAME}, a knowledgeable learning companion.
@@ -760,12 +770,12 @@ Transcript:
             
             Your goal is to help the user explore the knowledge graph and reflect on their learning.
             {tutor_layer}
+            {learned_style_hint}
             {f"STIMULUS: The student is confused. Your reply should be derived from this explanation: {fog_result['explanation']}" if fog_result else ""}
             
             Knowledge Graph Context:
             {graph_context}
             {memory_context}
-            {cross_modal_context}
             
             Recent Actions Executed:
             {", ".join(action_summaries) if action_summaries else "None"}
