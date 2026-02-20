@@ -407,43 +407,82 @@ Transcript:
         return False
 
     async def handle_fog_clearing(self, graph_id: str, transcript: str, context: str) -> Dict[str, Any]:
-        """Generate a pedagogical explanation and save it as an 'UNDERSTANDING' node."""
-        
+        """
+        Generate a pedagogical explanation and — only if there is a clear,
+        nameable concept being discussed — persist it to the graph.
+
+        Old behaviour: created 'Understanding: {transcript[:30]}...' node on
+        every confused utterance.  Problem: junk nodes for filler questions.
+
+        New behaviour:
+          1. Extract a clean concept name from the utterance (e.g. 'Watson X').
+          2. If meaningful, MERGE a Concept node under that name so repeated
+             discussions of the same topic converge on one node.
+          3. If no clear concept can be identified (e.g. "okay so I have an
+             interview") skip node creation entirely.
+        """
         prompt = f"""
-        The student is confused: "{transcript}"
-        Based on this Knowledge Graph Context:
+        The student said: "{transcript}"
+        Knowledge Graph Context:
         {context}
 
-        Provide a clear, simple, and pedagogical explanation. Avoid jargon. Use analogies if possible.
-        Keep it under 100 words.
+        TASK:
+        1. Write a clear, simple pedagogical explanation (max 80 words, no jargon, use analogy if possible).
+        2. On a new line write: CONCEPT_NAME: <the single clearest concept name this confusion is about>
+           - Use a proper noun / topic name, e.g. "Watson X", "Backpropagation", "TCP/IP".
+           - If the utterance is general small-talk, a transition phrase, or has no identifiable concept, write: CONCEPT_NAME: NONE
+
+        Respond in this exact format:
+        EXPLANATION: <explanation>
+        CONCEPT_NAME: <name or NONE>
         """
 
         try:
-            explanation = model_router.completion(
-                task_type=TASK_SYNTHESIS, # Use smart model for pedagogy
+            raw = model_router.completion(
+                task_type=TASK_SYNTHESIS,
                 messages=[{"role": "system", "content": prompt}],
-                temperature=0.7
+                temperature=0.6,
             )
 
+            explanation = ""
+            concept_name = None
+            if raw:
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if line.startswith("EXPLANATION:"):
+                        explanation = line[len("EXPLANATION:"):].strip()
+                    elif line.startswith("CONCEPT_NAME:"):
+                        val = line[len("CONCEPT_NAME:"):].strip()
+                        if val and val.upper() != "NONE" and len(val) > 1:
+                            concept_name = val
 
-            # Save to Graph as an "UNDERSTANDING" node
-            with neo4j_session() as session:
-                payload = ConceptCreate(
-                    name=f"Understanding: {transcript[:30]}...",
-                    domain="learning",
-                    type="understanding",
-                    description=explanation,
-                    tags=["fog-clearing", "persistence-of-understanding"],
-                    created_by=f"voice-agent-fog-clearer-{self.user_id}"
-                )
-                node = create_concept(session, payload)
-                
-            return {
-                "explanation": explanation,
-                "node_id": node.node_id
-            }
+            if not explanation:
+                explanation = raw or "Let me re-explain that."
+
+            node_id = None
+            if concept_name:
+                try:
+                    with neo4j_session() as neo_sess:
+                        payload = ConceptCreate(
+                            name=concept_name,
+                            domain="learning",
+                            type="concept",
+                            description=explanation,
+                            tags=["voice-extracted"],
+                            created_by=f"voice-agent-{self.user_id}",
+                        )
+                        node = create_concept(neo_sess, payload)
+                        node_id = getattr(node, "node_id", None)
+                        logger.info(f"[voice_agent] Fog-clearing persisted concept: '{concept_name}' ({node_id})")
+                except Exception as e:
+                    logger.warning(f"[voice_agent] Fog-clearing node upsert failed: {e}")
+            else:
+                logger.debug(f"[voice_agent] Fog-clearing: no clear concept in '{transcript[:60]}' — skipping node creation")
+
+            return {"explanation": explanation, "node_id": node_id}
+
         except Exception as e:
-            logger.error(f"Fog-clearing failed: {e}")
+            logger.error(f"[voice_agent] Fog-clearing failed: {e}")
             return {"explanation": "I'm sorry, I tried to simplify that for you but hit a mental block.", "node_id": None}
 
     async def get_session_history(self, session_id: str) -> List[Dict[str, Any]]:
