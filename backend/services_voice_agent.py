@@ -111,46 +111,118 @@ class VoiceAgentOrchestrator:
             raise
 
     async def summarize_session(self, session_id: str, graph_id: str) -> Optional[str]:
-        """Generate a synthesis of the entire voice session and save it as a node."""
+        """
+        Extract distinct topics from the voice session and create one Concept node
+        per topic, with edges between related topics.
+
+        Old behaviour: one merged "Voice Recap: [timestamp]" node — discarded.
+        New behaviour: atomic topic nodes that naturally MERGE with existing concepts
+        across sessions.  Related topics get a [:RELATED_TO] edge so the graph
+        stays navigable without mixing their content.
+        """
         history = await self.get_session_history(session_id)
         if not history:
             return None
 
-        # Format history for LLM
-        formatted_history = "\n".join([f"{'User' if m['user'] else 'Agent'}: {m['user'] if m['user'] else m['agent']}" for m in history])
-        
-        prompt = f"""
-        Below is a transcript of a voice learning session. 
-        Synthesize the key takeaways, concepts discussed, and any breakthroughs achieved.
-        Create a concise 'Session Recap' (max 200 words).
-        
-        Transcript:
-        {formatted_history}
-        """
+        # Build a readable transcript
+        lines = []
+        for m in history:
+            u = (m.get("user") or "").strip()
+            a = (m.get("agent") or "").strip()
+            if u:
+                lines.append(f"User: {u}")
+            if a:
+                lines.append(f"Agent: {a}")
+        transcript = "\n".join(lines)
+
+        extraction_prompt = f"""You are analyzing a voice learning session transcript.
+
+Extract every DISTINCT topic or concept that was meaningfully discussed.
+For each topic return:
+  - name: a short, precise concept name (e.g. "Watson X", "Carbohydrates", "Backpropagation")
+  - summary: 1-3 sentences capturing what was said about this specific topic — NO cross-topic blending
+  - related_to: list of other topic names FROM THIS SAME LIST that are genuinely related
+
+Rules:
+- One entry per distinct topic — do NOT merge separate topics into one entry
+- If two topics happened to be mentioned in the same session but are unrelated, do NOT list them as related_to each other
+- Only include related_to links that reflect a real conceptual relationship (e.g. "Carbohydrates" -> "Macromolecules")
+- Return a JSON object: {{"topics": [...]}}
+- Return an empty list if nothing substantive was discussed
+
+Transcript:
+{transcript}
+"""
 
         try:
-            summary = model_router.completion(
-                task_type=TASK_SYNTHESIS, # Use heavy model (gpt-4o) for synthesis
-                messages=[{"role": "system", "content": prompt}],
-                temperature=0.5
+            raw = model_router.completion(
+                task_type=TASK_SYNTHESIS,
+                messages=[
+                    {"role": "system", "content": "You extract structured knowledge from transcripts. Return only valid JSON."},
+                    {"role": "user", "content": extraction_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
             )
 
+            import json as _json
+            parsed = _json.loads(raw) if raw else {}
+            topics = parsed.get("topics", [])
+            if not isinstance(topics, list) or not topics:
+                logger.info(f"[voice_agent] No topics extracted for session {session_id}")
+                return None
 
-            # Save to Graph
-            with neo4j_session() as session:
-                payload = ConceptCreate(
-                    name=f"Voice Recap: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                    domain="learning",
-                    type="synthesis",
-                    description=summary,
-                    tags=["voice-synthesis", "automatic-recap"],
-                    created_by=f"voice-agent-synthesis-{self.user_id}"
-                )
-                create_concept(session, payload)
-            
-            return summary
+            # Create / merge one Concept node per topic, collect node_ids
+            topic_node_ids: Dict[str, str] = {}  # topic name -> node_id
+
+            with neo4j_session() as neo_sess:
+                for topic in topics:
+                    t_name = (topic.get("name") or "").strip()
+                    t_summary = (topic.get("summary") or "").strip()
+                    if not t_name:
+                        continue
+
+                    # MERGE on name so repeated sessions reinforce the same node
+                    payload = ConceptCreate(
+                        name=t_name,
+                        domain="learning",
+                        type="concept",
+                        description=t_summary,
+                        tags=["voice-extracted"],
+                        created_by=f"voice-agent-{self.user_id}",
+                    )
+                    node = create_concept(neo_sess, payload)
+                    node_id = getattr(node, "node_id", None) or getattr(node, "id", None)
+                    if node_id:
+                        topic_node_ids[t_name] = node_id
+
+                # Draw edges between related topics
+                for topic in topics:
+                    t_name = (topic.get("name") or "").strip()
+                    src_id = topic_node_ids.get(t_name)
+                    if not src_id:
+                        continue
+                    for rel_name in (topic.get("related_to") or []):
+                        rel_name = (rel_name or "").strip()
+                        dst_id = topic_node_ids.get(rel_name)
+                        if dst_id and dst_id != src_id:
+                            try:
+                                rel_payload = RelationshipCreate(
+                                    source_name=t_name,
+                                    target_name=rel_name,
+                                    predicate="RELATED_TO",
+                                )
+                                create_relationship(neo_sess, rel_payload)
+                            except Exception as rel_err:
+                                logger.debug(f"[voice_agent] Could not create relationship {t_name}->{rel_name}: {rel_err}")
+
+            topic_names = [t.get("name", "") for t in topics if t.get("name")]
+            summary_text = f"Extracted {len(topic_names)} topic(s): {', '.join(topic_names)}"
+            logger.info(f"[voice_agent] Session {session_id}: {summary_text}")
+            return summary_text
+
         except Exception as e:
-            logger.error(f"Failed to synthesize session: {e}")
+            logger.error(f"[voice_agent] Failed to extract session topics: {e}", exc_info=True)
             return None
 
     async def stop_session(self, session_id: str, duration_seconds: int, tokens_used: int):
@@ -291,6 +363,47 @@ class VoiceAgentOrchestrator:
         if any(k in transcript.lower() for k in keywords):
             # Double check with a quick LLM pass if needed, but heuristic is fine for MVP
             return True
+        return False
+
+    def _is_likely_incomplete_utterance(self, transcript: str) -> bool:
+        """
+        Best-effort detector for mid-thought pauses in voice transcripts.
+        Prevents premature replies when the user is still formulating a question.
+        """
+        text = str(transcript or "").strip()
+        if not text:
+            return True
+
+        t = re.sub(r"\s+", " ", text.lower()).strip()
+        if not t:
+            return True
+
+        # Complete sentence punctuation usually means the user is done.
+        if t.endswith("?") or t.endswith(".") or t.endswith("!"):
+            return False
+
+        complete_short = {"yes", "no", "okay", "ok", "continue", "go ahead", "stop", "repeat that"}
+        if t in complete_short:
+            return False
+
+        trailing_fragments = {
+            "and", "or", "but", "so", "because", "if", "when", "while",
+            "to", "for", "with", "about", "like", "in", "on", "at", "from", "of",
+            "um", "uh", "hmm",
+        }
+        words = t.split()
+        if not words:
+            return True
+
+        if words[-1] in trailing_fragments:
+            return True
+
+        if len(words) <= 2 and t not in complete_short:
+            return True
+
+        if t.startswith(("what about", "and what about", "so about")) and len(words) <= 6:
+            return True
+
         return False
 
     async def handle_fog_clearing(self, graph_id: str, transcript: str, context: str) -> Dict[str, Any]:
@@ -642,6 +755,11 @@ class VoiceAgentOrchestrator:
                 # One-time acknowledgements still count as a "speak" even if no yield
                 ack_turn = any(s.get("kind") in {"turn_taking_request", "pacing_request"} for s in extracted_signals)
                 should_speak = bool(yield_turn or ack_turn)
+
+            # If the utterance looks unfinished, wait for continuation rather than replying too early.
+            if should_speak:
+                if self._is_likely_incomplete_utterance(last_transcript) and not is_yield_turn(last_transcript):
+                    should_speak = False
 
             agent_reply = ""
             if should_speak:

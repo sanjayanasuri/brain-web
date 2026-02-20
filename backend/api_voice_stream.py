@@ -160,6 +160,8 @@ async def voice_stream_ws(websocket: WebSocket):
 
     tts_cancelled = False
     _interrupt_event: asyncio.Event = asyncio.Event()
+    session_voice_id: Optional[str] = None
+    session_voice_resolved = False
 
     async def _send_json(obj: Dict[str, Any]) -> None:
         async with send_lock:
@@ -180,6 +182,27 @@ async def voice_stream_ws(websocket: WebSocket):
             except asyncio.QueueEmpty:
                 break
         await _send_json({"type": "interrupted"})
+
+    async def _resolve_session_voice_once() -> Optional[str]:
+        """
+        Resolve TutorProfile voice_id once per WS session.
+        This avoids mid-session voice switching when profile fetch intermittently fails.
+        """
+        nonlocal session_voice_id, session_voice_resolved
+        if session_voice_resolved:
+            return session_voice_id
+
+        session_voice_resolved = True
+        try:
+            with neo4j_session() as neo_session:
+                tp = get_tutor_profile_service(neo_session, user_id=user_id)
+                vid = getattr(tp, "voice_id", None) if tp else None
+                if isinstance(vid, str) and vid.strip():
+                    session_voice_id = vid.strip()
+        except Exception:
+            # Keep None -> backend maps to default voice consistently for this session.
+            session_voice_id = None
+        return session_voice_id
 
     async def _run_tts_stream(*, text: str, voice_id: Optional[str], speech_rate: float) -> None:
         nonlocal tts_cancelled
@@ -311,15 +334,7 @@ async def voice_stream_ws(websocket: WebSocket):
         if not should_speak or not agent_response:
             return
 
-        # Best-effort TutorProfile voice_id for TTS selection
-        voice_id = None
-        try:
-            with neo4j_session() as neo_session:
-                tp = get_tutor_profile_service(neo_session, user_id=user_id)
-                voice_id = getattr(tp, "voice_id", None) if tp else None
-        except Exception:
-            voice_id = None
-
+        voice_id = await _resolve_session_voice_once()
         await _run_tts_stream(text=agent_response, voice_id=voice_id, speech_rate=speech_rate)
 
     async def _process_utterance_pcm(utt: _QueuedUtterance) -> None:
@@ -390,15 +405,7 @@ async def voice_stream_ws(websocket: WebSocket):
         if not should_speak or not agent_response:
             return
 
-        # Best-effort TutorProfile voice_id for TTS selection
-        voice_id = None
-        try:
-            with neo4j_session() as neo_session:
-                tp = get_tutor_profile_service(neo_session, user_id=user_id)
-                voice_id = getattr(tp, "voice_id", None) if tp else None
-        except Exception:
-            voice_id = None
-
+        voice_id = await _resolve_session_voice_once()
         await _run_tts_stream(text=agent_response, voice_id=voice_id, speech_rate=speech_rate)
 
     async def _utterance_worker() -> None:
@@ -478,6 +485,15 @@ async def voice_stream_ws(websocket: WebSocket):
                     if not pcm:
                         break
                     segments = segmenter.process_pcm16(pcm)
+                    speech_start_sample = segmenter.pop_speech_start_sample()
+                    if speech_start_sample is not None:
+                        start_ms = stream_started_at_ms + int(speech_start_sample * 1000 / vad_config.sample_rate_hz)
+                        await _send_json(
+                            {
+                                "type": "vad_speech_start",
+                                "start_epoch_ms": start_ms,
+                            }
+                        )
                     for seg in segments:
                         start_ms = stream_started_at_ms + int(seg.start_sample * 1000 / vad_config.sample_rate_hz)
                         end_ms = stream_started_at_ms + int(seg.end_sample * 1000 / vad_config.sample_rate_hz)
@@ -585,6 +601,9 @@ async def voice_stream_ws(websocket: WebSocket):
                         except Exception as e:
                             await _send_json({"type": "error", "message": f"Failed to start session: {str(e)[:200]}"})
                             continue
+
+                    # Keep one stable voice per session.
+                    await _resolve_session_voice_once()
 
                     if vad_mode == "server":
                         if utterance_worker_task is None:
