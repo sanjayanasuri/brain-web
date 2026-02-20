@@ -83,37 +83,54 @@ def synthesize_speech_bytes(
     voice: str = "alloy",
     speed: float = 1.0,
     response_format: str = "mp3",
-    preferred_model: str = "gpt-4o-mini-tts",
-    fallback_model: str = "tts-1",
     instructions: Optional[str] = None,
 ) -> bytes:
     """
     Synthesize speech and return audio bytes.
 
-    Uses `gpt-4o-mini-tts` first to allow optional `instructions`, then falls back to `tts-1`.
+    Strategy (avoids an unnecessary API round-trip on every call):
+    - If `instructions` is non-empty → try gpt-4o-mini-tts (supports instructions param).
+    - Otherwise → go straight to tts-1-hd (better naturalness than tts-1, no instructions needed).
+    - Last resort fallback: tts-1.
     """
     value = (text or "").strip()
     if not value:
         return b""
 
     client = _get_openai_client()
+    clean_instructions = (instructions or "").strip()
 
-    # First try the preferred model (supports instructions).
+    # Path A: instructions provided → use gpt-4o-mini-tts which supports the param
+    if clean_instructions:
+        try:
+            resp = client.audio.speech.create(
+                model="gpt-4o-mini-tts",
+                voice=voice,
+                input=value,
+                response_format=response_format,  # type: ignore[arg-type]
+                speed=speed,
+                instructions=clean_instructions,
+            )
+            return bytes(resp.content)
+        except Exception as e:
+            logger.warning(f"[TTS] gpt-4o-mini-tts failed; falling back to tts-1-hd: {e}")
+
+    # Path B: no instructions (or gpt-4o-mini-tts failed) → tts-1-hd
     try:
         resp = client.audio.speech.create(
-            model=preferred_model,
+            model="tts-1-hd",
             voice=voice,
             input=value,
             response_format=response_format,  # type: ignore[arg-type]
             speed=speed,
-            instructions=instructions or "",
         )
         return bytes(resp.content)
     except Exception as e:
-        logger.warning(f"[TTS] Preferred model failed; falling back: {e}")
+        logger.warning(f"[TTS] tts-1-hd failed; falling back to tts-1: {e}")
 
+    # Last resort
     resp = client.audio.speech.create(
-        model=fallback_model,
+        model="tts-1",
         voice=voice,
         input=value,
         response_format=response_format,  # type: ignore[arg-type]

@@ -317,7 +317,7 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
       recordingStartMsRef.current = Date.now();
       recordingEndMsRef.current = null;
       setState(prev => ({ ...prev, isRecording: true, error: null }));
-      recorder.start(250); // 250ms chunks
+      recorder.start(100); // 100ms chunks — lower VAD detection latency
     } catch (error: any) {
       const err = error instanceof Error ? error : new Error(String(error));
       setState(prev => ({ ...prev, error: err.message, isRecording: false }));

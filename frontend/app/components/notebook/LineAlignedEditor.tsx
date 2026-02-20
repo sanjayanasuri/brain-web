@@ -17,6 +17,10 @@ interface LineAlignedEditorProps {
   editable?: boolean;
   onEditorReady?: (editor: any) => void;
   onFocus?: (editor: any) => void;
+  /** Used to set correct text color on dark vs light paper */
+  paperType?: 'ruled' | 'grid' | 'blank' | 'dotted' | 'dark';
+  /** If true, this is page 1 — auto-focus cursor on mount */
+  autoFocus?: boolean;
 }
 
 export function LineAlignedEditor({
@@ -26,8 +30,14 @@ export function LineAlignedEditor({
   editable = true,
   onEditorReady,
   onFocus,
+  paperType = 'ruled',
+  autoFocus = false,
 }: LineAlignedEditorProps) {
   const [isMounted, setIsMounted] = useState(false);
+  const isDark = paperType === 'dark';
+  const textColor = isDark ? '#e8e8e8' : '#000000';
+  const placeholderColor = isDark ? '#666' : '#aaa';
+  const selectionColor = isDark ? 'rgba(96, 165, 250, 0.3)' : 'rgba(37, 99, 235, 0.2)';
 
   useEffect(() => {
     setIsMounted(true);
@@ -90,6 +100,18 @@ export function LineAlignedEditor({
     }
   }, [editor, onEditorReady]);
 
+  // Auto-focus: put cursor on line 1 of page 1 as soon as the editor is ready
+  const didAutoFocus = React.useRef(false);
+  useEffect(() => {
+    if (autoFocus && editor && !didAutoFocus.current) {
+      didAutoFocus.current = true;
+      // Small timeout lets the DOM settle before focusing
+      setTimeout(() => {
+        editor.commands.focus('start');
+      }, 80);
+    }
+  }, [editor, autoFocus]);
+
   useEffect(() => {
     if (editor && content !== editor.getHTML()) {
       editor.commands.setContent(content);
@@ -102,6 +124,9 @@ export function LineAlignedEditor({
 
       <style jsx global>{`
         .line-aligned-editor {
+          --editor-text-color: ${textColor};
+          --editor-placeholder-color: ${placeholderColor};
+          --editor-selection-color: ${selectionColor};
           width: 100%;
           height: 100%;
           padding-left: 90px; /* Respect margin line (80px + 10px padding) */
@@ -112,7 +137,7 @@ export function LineAlignedEditor({
           font-family: 'Crimson Pro', 'Georgia', serif;
           font-size: 16px;
           line-height: 28px; /* Match ruled line spacing */
-          color: #000000;
+          color: var(--editor-text-color);
           cursor: text;
         }
 
@@ -159,7 +184,7 @@ export function LineAlignedEditor({
         .line-aligned-editor .is-editor-empty:first-child::before {
           content: attr(data-placeholder);
           float: left;
-          color: #aaa;
+          color: var(--editor-placeholder-color, #aaa);
           pointer-events: none;
           height: 0;
         }
@@ -207,7 +232,7 @@ export function LineAlignedEditor({
 
         /* Selection */
         .line-aligned-editor ::selection {
-          background: rgba(37, 99, 235, 0.2);
+          background: var(--editor-selection-color, rgba(37, 99, 235, 0.2));
         }
 
         /* Strong and emphasis */

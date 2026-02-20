@@ -123,25 +123,24 @@ def transcribe_wav_bytes(
     language: Optional[str] = "en",
 ) -> str:
     """
-    Transcribe WAV bytes.
+    Transcribe WAV bytes using an in-memory buffer (no temp-file disk I/O).
     """
     if not audio_bytes:
         return ""
 
     client = _get_openai_client()
 
-    wav_tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    wav_path = wav_tmp.name
-    try:
-        wav_tmp.write(audio_bytes)
-        wav_tmp.flush()
-        wav_tmp.close()
-        return _transcribe_file(client=client, path=wav_path, model=model, language=language)
-    finally:
-        try:
-            os.unlink(wav_path)
-        except Exception:
-            pass
+    buf = io.BytesIO(audio_bytes)
+    buf.name = "audio.wav"  # OpenAI SDK uses the file extension to determine format
+    result = client.audio.transcriptions.create(
+        model=model,
+        file=buf,
+        language=language,
+        response_format="text",
+    )
+    if isinstance(result, str):
+        return result.strip()
+    return (getattr(result, "text", None) or "").strip()
 
 
 def transcribe_webm_bytes(

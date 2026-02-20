@@ -335,7 +335,7 @@ function LectureEditorPageInner() {
     <div style={{
       height: '100dvh',
       overflow: 'hidden',
-      background: isPencilMode ? (paperType === 'dark' ? '#1a1a1a' : '#ffffff') : 'var(--background)',
+      background: isPencilMode ? (paperType === 'dark' ? '#1a1a1e' : '#e8e8e8') : 'var(--background)',
       display: 'flex',
       flexDirection: 'column'
     }}>
@@ -436,7 +436,7 @@ function LectureEditorPageInner() {
               onAnnotationsChange={handleAnnotationsChange}
               onEditorReady={setEditor}
               isPencilMode={isPencilMode}
-              paperType={paperType as 'ruled' | 'grid' | 'blank' | 'dotted'}
+              paperType={paperType as 'ruled' | 'grid' | 'blank' | 'dotted' | 'dark'}
               lectureId={lecture?.lecture_id || lectureId || undefined}
               tool={activeTool}
               color={activeColor}

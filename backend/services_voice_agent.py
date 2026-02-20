@@ -43,7 +43,8 @@ class VoiceAgentOrchestrator:
     def __init__(self, user_id: str, tenant_id: str):
         self.user_id = user_id
         self.tenant_id = tenant_id
-        # Removed direct self.client initialization
+        # In-memory history cache: avoids a Postgres round-trip on every turn
+        self._session_history: Dict[str, list] = {}
 
 
     async def start_session(self, graph_id: str, branch_id: str, metadata: Optional[Dict[str, Any]] = None, companion_session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -204,8 +205,12 @@ class VoiceAgentOrchestrator:
         
         # Add history (last 5 interactions for token efficiency)
         for entry in history[-5:]:
-            messages.append({"role": "user", "content": entry["user"]})
-            messages.append({"role": "assistant", "content": entry["agent"]})
+            user_turn = str(entry.get("user") or "").strip()
+            assistant_turn = str(entry.get("agent") or "").strip()
+            if user_turn:
+                messages.append({"role": "user", "content": user_turn})
+            if assistant_turn:
+                messages.append({"role": "assistant", "content": assistant_turn})
             
         messages.append({"role": "user", "content": user_transcript})
 
@@ -214,12 +219,60 @@ class VoiceAgentOrchestrator:
                 task_type=TASK_VOICE, # Fast model
                 messages=messages,
                 temperature=0.7,
-                max_tokens=150
+                max_tokens=220
             )
 
         except Exception as e:
             logger.error(f"Failed to generate agent reply: {e}")
             return f"I'm sorry, I encountered an error while thinking about that."
+
+    def _normalize_history_pairs(self, history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """
+        Normalize mixed history shapes into [{user, agent}] pairs for voice generation.
+
+        Supports:
+        - voice session history: [{"user": "...", "agent": "..."}]
+        - chat history style: [{"role": "user|assistant", "content": "..."}]
+        """
+        if not isinstance(history, list):
+            return []
+
+        normalized: List[Dict[str, str]] = []
+        pending_user: Optional[str] = None
+
+        for raw in history:
+            if not isinstance(raw, dict):
+                continue
+
+            # Native voice format
+            if "user" in raw or "agent" in raw:
+                user_turn = str(raw.get("user") or "").strip()
+                agent_turn = str(raw.get("agent") or "").strip()
+                if user_turn or agent_turn:
+                    normalized.append({"user": user_turn, "agent": agent_turn})
+                continue
+
+            # Generic chat format
+            role = str(raw.get("role") or "").strip().lower()
+            content = str(raw.get("content") or "").strip()
+            if not content:
+                continue
+
+            if role == "user":
+                if pending_user:
+                    normalized.append({"user": pending_user, "agent": ""})
+                pending_user = content
+            elif role == "assistant":
+                if pending_user:
+                    normalized.append({"user": pending_user, "agent": content})
+                    pending_user = None
+                else:
+                    normalized.append({"user": "", "agent": content})
+
+        if pending_user:
+            normalized.append({"user": pending_user, "agent": ""})
+
+        return normalized[-10:]
 
     async def detect_confusion(self, transcript: str) -> bool:
         """Heuristic and LLM check for user confusion."""
@@ -270,13 +323,17 @@ class VoiceAgentOrchestrator:
             return {"explanation": "I'm sorry, I tried to simplify that for you but hit a mental block.", "node_id": None}
 
     async def get_session_history(self, session_id: str) -> List[Dict[str, Any]]:
-        """Retrieve conversation history from session metadata."""
+        """Retrieve conversation history — in-memory first, Postgres as cold-start fallback."""
+        if session_id in self._session_history:
+            return list(self._session_history[session_id])
         query = "SELECT metadata FROM voice_sessions WHERE id = %s AND user_id = %s"
         try:
             res = execute_query(query, (session_id, self.user_id))
+            history: list = []
             if res and res[0]['metadata']:
-                return res[0]['metadata'].get('history', [])
-            return []
+                history = res[0]['metadata'].get('history', [])
+            self._session_history[session_id] = history
+            return list(history)
         except Exception as e:
             logger.error(f"Failed to retrieve session history: {e}")
             return []
@@ -309,24 +366,24 @@ class VoiceAgentOrchestrator:
             logger.error(f"Failed to set session policy: {e}")
 
     async def save_interaction(self, session_id: str, transcript: str, agent_response: str):
-        """Persist interaction to session metadata for continuity."""
-        history = await self.get_session_history(session_id)
-        history.append({
+        """Update in-memory history immediately, then persist to Postgres (non-blocking caller)."""
+        entry = {
             "user": transcript,
             "agent": agent_response,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-        
-        # Keep only last 20 for storage sanity
-        history = history[-20:]
-        
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        # In-memory update is instant — safe to read on next turn without a DB hit
+        cache = self._session_history.setdefault(session_id, [])
+        cache.append(entry)
+        self._session_history[session_id] = cache[-20:]
+
         query = """
         UPDATE voice_sessions
         SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{history}', %s::jsonb, true)
         WHERE id = %s AND user_id = %s
         """
         try:
-            execute_update(query, (json.dumps(history), session_id, self.user_id))
+            execute_update(query, (json.dumps(self._session_history[session_id]), session_id, self.user_id))
         except Exception as e:
             logger.error(f"Failed to save interaction history: {e}")
 
@@ -345,55 +402,66 @@ class VoiceAgentOrchestrator:
         Now includes Fog-Clearing and Session Continuity (Interaction History).
         """
         try:
-            # 1. Load History for Continuity
-            history = []
-            if session_id:
-                history = await self.get_session_history(session_id)
+            # ----------------------------------------------------------------
+            # 1. Kick off all independent I/O concurrently (major latency win)
+            # ----------------------------------------------------------------
+            history_task = asyncio.create_task(self.get_session_history(session_id)) if session_id else None
+            policy_task = asyncio.create_task(self.get_session_policy(session_id)) if session_id else None
+            confusion_task = asyncio.create_task(self.detect_confusion(last_transcript))
+            eureka_task = asyncio.create_task(self.handle_eureka_moment(last_transcript))
+            commands_task = asyncio.create_task(self.extract_voice_commands(last_transcript, is_scribe_mode))
+            memories_task = asyncio.create_task(search_memories(self.user_id, last_transcript))
 
-            # 1b. Load session policy (turn-taking/pacing)
-            policy: Dict[str, Any] = {}
-            if session_id:
-                policy = await self.get_session_policy(session_id)
+            gathered = await asyncio.gather(
+                history_task if history_task else asyncio.sleep(0),
+                policy_task if policy_task else asyncio.sleep(0),
+                confusion_task,
+                eureka_task,
+                commands_task,
+                memories_task,
+                return_exceptions=True,
+            )
+
+            session_history: list = gathered[0] if history_task and not isinstance(gathered[0], Exception) else []
+            policy: Dict[str, Any] = gathered[1] if policy_task and not isinstance(gathered[1], Exception) else {}
             if not isinstance(policy, dict):
                 policy = {}
+            is_confused: bool = gathered[2] if not isinstance(gathered[2], Exception) else False
+            is_eureka: bool = gathered[3] if not isinstance(gathered[3], Exception) else False
+            actions: list = gathered[4] if not isinstance(gathered[4], Exception) else []
+            personal_memories: list = gathered[5] if not isinstance(gathered[5], Exception) else []
 
             extracted_signals = extract_learning_signals(last_transcript)
             policy, policy_changed = apply_signals_to_policy(policy, extracted_signals)
 
-            # 2. Detect Intent
-            is_confused = await self.detect_confusion(last_transcript)
-            is_eureka = await self.handle_eureka_moment(last_transcript)
-            
-            # 2. Extract and Execute Commands (mostly for Scribe/Synthesis mode)
-            actions = await self.extract_voice_commands(last_transcript, is_scribe_mode)
             action_summaries = await self.execute_voice_commands(actions)
-            
-            # 3. Fetch Context
+
+            # 3. Fetch Context (Neo4j — still needs to be serial due to shared session)
             unified_context = {}
             tutor_profile = None
             graph_context = ""
-            
+
             with neo4j_session() as neo_session:
                 try:
                     from services_memory_orchestrator import get_unified_context, get_active_lecture_id
-                    
-                    # Load all memory tiers
+
                     unified_context = get_unified_context(
                         user_id=self.user_id,
                         tenant_id=self.tenant_id,
                         chat_id=session_id or "voice_default",
                         query=last_transcript,
                         session=neo_session,
-                        active_lecture_id=graph_id, # Use graph_id as active lecture hint for voice
+                        active_lecture_id=graph_id,
                         include_chat_history=True,
                         include_lecture_context=True,
                         include_user_facts=True,
-                        include_study_context=True
+                        include_study_context=True,
                     )
-                    
-                    logger.info(f"Voice session {session_id} loaded unified context: "
-                               f"{len(unified_context.get('chat_history', []))} messages, "
-                               f"user_facts={'yes' if unified_context.get('user_facts') else 'no'}")
+                    logger.info(
+                        f"Voice session {session_id} loaded unified context: "
+                        f"{len(unified_context.get('chat_history', []))} messages, "
+                        f"user_facts={'yes' if unified_context.get('user_facts') else 'no'}"
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to load unified context for voice: {e}")
                     unified_context = {"user_facts": "", "lecture_context": "", "chat_history": []}
@@ -402,14 +470,13 @@ class VoiceAgentOrchestrator:
                     tutor_profile = get_tutor_profile_service(neo_session, user_id=self.user_id)
                 except Exception:
                     tutor_profile = None
-                
-                # 3b. GraphRAG context (additional to lecture context)
+
                 try:
                     graphrag_data = retrieve_graphrag_context(
                         session=neo_session,
                         graph_id=graph_id,
                         branch_id=branch_id,
-                        question=last_transcript
+                        question=last_transcript,
                     )
                     graph_context = graphrag_data.get("context_text", "")
                 except Exception as e:
@@ -421,8 +488,6 @@ class VoiceAgentOrchestrator:
             if is_confused:
                 fog_result = await self.handle_fog_clearing(graph_id, last_transcript, graph_context)
 
-            # 5. Fetch from Supermemory
-            personal_memories = await search_memories(self.user_id, last_transcript)
             memory_context = ""
             if personal_memories:
                 memory_context = "\nPersonal Memory Context:\n" + "\n".join([m.get("content", "") for m in personal_memories])
@@ -441,9 +506,8 @@ class VoiceAgentOrchestrator:
             # 5c. Detect if user is responding to a task (Voice)
             task_signal = ""
             try:
-                history = await self.get_session_history(session_id) if session_id else []
-                if history:
-                    last_ast = history[-1].get("agent", "")
+                if session_history:
+                    last_ast = session_history[-1].get("agent", "")
                     if "[STUDY_TASK:" in last_ast:
                         task_signal = "\nSTIMULUS: The student is answering a previous STUDY_TASK verbally. Listen carefully and evaluate their understanding."
             except:
@@ -479,14 +543,23 @@ class VoiceAgentOrchestrator:
                     voice_id = getattr(tutor_profile, "voice_id", "neutral") or "neutral"
                     audience_mode = getattr(tutor_profile, "audience_mode", "default") or "default"
                     response_mode = getattr(tutor_profile, "response_mode", "compact") or "compact"
+                    ask_question_policy = getattr(tutor_profile, "ask_question_policy", "at_most_one") or "at_most_one"
+                    end_with_next_step = getattr(tutor_profile, "end_with_next_step", True) is not False
                     no_glazing = getattr(tutor_profile, "no_glazing", True) is not False
 
+                    question_policy_cards = {
+                        "never": "Question policy: avoid follow-up questions unless critical details are missing.",
+                        "at_most_one": "Question policy: ask at most one brief clarification, then answer directly.",
+                        "ok": "Question policy: questions are allowed, but avoid repeated clarifying loops.",
+                    }
                     tutor_layer = "\n".join(
                         [
                             "Tutor Profile:",
                             f"- {voice_cards.get(str(voice_id), voice_cards['neutral'])}",
                             f"- {audience_cards.get(str(audience_mode), audience_cards['default'])}",
                             f"- {response_depth.get(str(response_mode), response_depth['compact'])}",
+                            f"- {question_policy_cards.get(str(ask_question_policy), question_policy_cards['at_most_one'])}",
+                            f"- Closure: {'end with one concrete next step when useful.' if end_with_next_step else 'do not force next-step prompts.'}",
                             f"- Correctness: {'be direct; answer yes/no when asked; correct errors (no glazing).' if no_glazing else 'be supportive; still correct errors.'}",
                         ]
                     )
@@ -538,6 +611,9 @@ class VoiceAgentOrchestrator:
             - Keep responses concise, direct, and conversational.
             - ABSOLUTELY FORBIDDEN: Do not say "I'm here to help", "Goodbye", "Take care", or use generic customer service pleasantries. 
             - Be kind, but do not glaze: if the user asks whether something is correct, say yes/no and correct it if needed.
+            - Once user intent is clear, answer directly with concrete steps or details.
+            - Ask a clarifying question only if required details are missing; never ask the same clarification twice.
+            - If the user confirms with phrases like "yes", "go ahead", or "exactly", start the explanation immediately.
             - If policy says no interruption, only speak when the user yields (asks a question or requests a response).
             - If policy says slow pacing, use short sentences and a slower cadence. This is CRITICAL.
             - If policy says fast pacing, speak quickly and get straight to the point.
@@ -570,38 +646,45 @@ class VoiceAgentOrchestrator:
                     else:
                         agent_reply = "Okay, back to normal speed."
                 else:
-                    # Pass the chat history from unified context for session continuity
-                    current_history = unified_context.get("chat_history", [])
+                    # Prefer actual voice session continuity; fallback to text chat history when empty.
+                    current_history = self._normalize_history_pairs(session_history)
+                    if not current_history:
+                        current_history = self._normalize_history_pairs(unified_context.get("chat_history", []))
                     agent_reply = await self.generate_agent_reply(system_prompt, current_history, last_transcript)
 
-            # 8. Save Interaction if session_id provided
+            # 8. Persist artifacts — fire as background tasks so the reply isn't blocked
             user_transcript_chunk = None
             assistant_transcript_chunk = None
             if session_id:
-                await self.save_interaction(session_id, last_transcript, agent_reply)
+                # Non-blocking: in-memory cache updated instantly; Postgres write is backgrounded
+                asyncio.create_task(self.save_interaction(session_id, last_transcript, agent_reply))
                 if policy_changed:
-                    await self.set_session_policy(session_id, policy)
-                
-                # FACT EXTRACTION (Background)
+                    asyncio.create_task(self.set_session_policy(session_id, policy))
+
+                # FACT EXTRACTION — background, never blocks the reply
                 if agent_reply:
-                    try:
-                        from services_fact_extractor import extract_facts_from_conversation
-                        from db_neo4j import neo4j_session as fresh_neo4j_session
-                        
-                        logger.info(f"Extracting facts from voice interaction in session {session_id}")
-                        # Use a fresh session to avoid "Session closed" errors from previous calls
-                        with fresh_neo4j_session() as fact_session:
-                            await extract_facts_from_conversation(
-                                user_message=last_transcript,
-                                assistant_response=agent_reply,
-                                chat_id=session_id,
-                                user_id=self.user_id,
-                                tenant_id=self.tenant_id,
-                                session=fact_session
-                            )
-                        logger.info(f"Fact extraction completed for session {session_id}")
-                    except Exception as e:
-                        logger.warning(f"Fact extraction failed in voice: {e}")
+                    async def _extract_facts_bg(
+                        _transcript: str = last_transcript,
+                        _reply: str = agent_reply,
+                        _session_id: str = session_id,
+                    ) -> None:
+                        try:
+                            from services_fact_extractor import extract_facts_from_conversation
+                            from db_neo4j import neo4j_session as fresh_neo4j_session
+                            with fresh_neo4j_session() as fact_session:
+                                await extract_facts_from_conversation(
+                                    user_message=_transcript,
+                                    assistant_response=_reply,
+                                    chat_id=_session_id,
+                                    user_id=self.user_id,
+                                    tenant_id=self.tenant_id,
+                                    session=fact_session,
+                                )
+                            logger.info(f"Fact extraction completed for session {_session_id}")
+                        except Exception as e:
+                            logger.warning(f"Fact extraction failed in voice: {e}")
+
+                    asyncio.create_task(_extract_facts_bg())
 
                 # Persist transcript chunks + extracted learning signals as artifacts (additive)
                 try:
@@ -665,7 +748,8 @@ class VoiceAgentOrchestrator:
             return {
                 "agent_response": agent_reply,
                 "should_speak": should_speak,
-                "speech_rate": 0.85 if policy.get("pacing") == "slow" else (1.25 if policy.get("pacing") == "fast" else 1.0),
+                # 1.15x is the sweet spot for learning: noticeably faster without feeling rushed
+                "speech_rate": 0.9 if policy.get("pacing") == "slow" else (1.6 if policy.get("pacing") == "fast" else 1.15),
                 "learning_signals": extracted_signals,
                 "policy": policy,
                 "user_transcript_chunk": user_transcript_chunk,

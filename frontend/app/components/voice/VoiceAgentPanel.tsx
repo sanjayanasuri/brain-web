@@ -30,6 +30,8 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsQueueRef = useRef<string[]>([]);
   const ttsIsPlayingRef = useRef(false);
+  // Guard: drops TTS binary frames that arrive after the user has already interrupted
+  const interruptSentRef = useRef(false);
 
   const [showSettings, setShowSettings] = useState(false);
   const [profile, setProfile] = useState<TutorProfile | null>(null);
@@ -102,6 +104,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
     onProcessingStart: () => {
       setIsProcessing(true);
       if (isSpeaking) {
+        interruptSentRef.current = true;  // Set BEFORE stopStreamedAudio so onTtsAudio drops in-flight frames
         stopStreamedAudio();
         voiceStream.interrupt();
       }
@@ -113,6 +116,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
     },
     onAgentReply: (payload) => {
       setIsProcessing(false);
+      interruptSentRef.current = false;  // New reply arriving — allow TTS frames through again
       const shouldSpeak = payload?.should_speak !== false;
       let reply = shouldSpeak ? String(payload?.agent_response || '') : '';
       if (payload?.is_fog_clearing && reply) {
@@ -144,6 +148,10 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
     },
     onTtsAudio: (audioBuf, meta) => {
       try {
+        // Drop orphaned frames that arrive after the user interrupted
+        if (interruptSentRef.current) {
+          return;
+        }
         const mime = meta?.format === 'mp3' ? 'audio/mpeg' : 'audio/mpeg';
         const url = URL.createObjectURL(new Blob([audioBuf], { type: mime }));
         ttsQueueRef.current.push(url);
@@ -237,6 +245,7 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
     const ok = await ensureVoiceStreamConnected();
     if (!ok) return;
     if (isSpeaking) {
+      interruptSentRef.current = true;  // Set BEFORE stopStreamedAudio so in-flight frames are dropped
       stopStreamedAudio();
       voiceStream.interrupt();
     }

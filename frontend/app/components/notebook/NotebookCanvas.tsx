@@ -28,7 +28,7 @@ interface NotebookCanvasProps {
     initialAnnotations?: string; // JSON string of strokes
     onContentChange?: (content: string) => void;
     onAnnotationsChange?: (annotations: string) => void;
-    paperType?: 'ruled' | 'grid' | 'blank' | 'dotted';
+    paperType?: 'ruled' | 'grid' | 'blank' | 'dotted' | 'dark';
     lectureId?: string;
     tool: ToolType;
     color: string;
@@ -547,6 +547,8 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
                                     onUpdate={(content) => handlePageContentChange(page.id, content)}
                                     onEditorReady={(editor) => handleEditorReady(page.id, editor)}
                                     onFocus={(editor) => onEditorReady?.(editor)}
+                                    paperType={paperType}
+                                    autoFocus={index === 0}
                                     placeholder={
                                         page.pageNumber === 1
                                             ? 'Start typing on the first line...'

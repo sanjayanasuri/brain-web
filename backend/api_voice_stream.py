@@ -156,6 +156,7 @@ async def voice_stream_ws(websocket: WebSocket):
     audio_last_ms: Optional[int] = None
 
     tts_cancelled = False
+    _interrupt_event: asyncio.Event = asyncio.Event()
 
     async def _send_json(obj: Dict[str, Any]) -> None:
         async with send_lock:
@@ -168,24 +169,33 @@ async def voice_stream_ws(websocket: WebSocket):
     async def _handle_interrupt() -> None:
         nonlocal tts_cancelled
         tts_cancelled = True
+        _interrupt_event.set()
+        # Drain the utterance queue so queued items don't process after interrupt
+        while not utterance_q.empty():
+            try:
+                utterance_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
         await _send_json({"type": "interrupted"})
 
     async def _run_tts_stream(*, text: str, voice_id: Optional[str], speech_rate: float) -> None:
         nonlocal tts_cancelled
         tts_cancelled = False
+        _interrupt_event.clear()  # Reset per-stream so each reply starts clean
 
         openai_voice = map_tutor_voice_id_to_openai_voice(voice_id)
         instructions = tts_instructions_for_voice_id(voice_id)
 
-        # Map speech rate to TTS speed (bounded)
-        speed = max(0.75, min(1.25, float(speech_rate or 1.0)))
+        # Raised ceiling from 1.25 → 2.0; comfortable floor stays at 0.85
+        speed = max(0.85, min(2.0, float(speech_rate or 1.0)))
 
-        segments = split_sentences(text, max_chars=240)
+        # Shorter segments (160 chars) start audio sooner; queue handles sequential playback
+        segments = split_sentences(text, max_chars=160)
         if not segments:
             return
 
         for idx, seg in enumerate(segments, start=1):
-            if tts_cancelled:
+            if tts_cancelled or _interrupt_event.is_set():
                 break
             await _send_json(
                 {
@@ -197,19 +207,32 @@ async def voice_stream_ws(websocket: WebSocket):
                 }
             )
             try:
-                audio_bytes = await asyncio.to_thread(
-                    synthesize_speech_bytes,
-                    seg,
-                    voice=openai_voice,
-                    speed=speed,
-                    response_format="mp3",
-                    instructions=instructions,
+                # Race synthesis against an interrupt so we don't block mid-segment
+                synth_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        synthesize_speech_bytes,
+                        seg,
+                        voice=openai_voice,
+                        speed=speed,
+                        response_format="mp3",
+                        instructions=instructions,
+                    )
                 )
+                interrupt_wait = asyncio.create_task(_interrupt_event.wait())
+                done, pending = await asyncio.wait(
+                    {synth_task, interrupt_wait}, return_when=asyncio.FIRST_COMPLETED
+                )
+                for p in pending:
+                    p.cancel()
+                if _interrupt_event.is_set():
+                    tts_cancelled = True
+                    break
+                audio_bytes = synth_task.result()
             except Exception as e:
                 await _send_json({"type": "tts_error", "message": str(e)[:300], "seq": idx})
                 break
 
-            if tts_cancelled:
+            if tts_cancelled or _interrupt_event.is_set():
                 break
             if audio_bytes:
                 await _send_bytes(audio_bytes)
@@ -581,6 +604,7 @@ async def voice_stream_ws(websocket: WebSocket):
                             client_end_ms=int(ce) if ce is not None else None,
                         )
                 elif mtype == "interrupt":
+                    _interrupt_event.set()  # Signal immediately; _handle_interrupt will also set it
                     await _handle_interrupt()
                 elif mtype == "ping":
                     await _send_json({"type": "pong"})

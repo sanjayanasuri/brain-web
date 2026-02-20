@@ -4,9 +4,11 @@ import React from 'react';
 import { RuledPaper } from './RuledPaper';
 import { InkLayer, type Stroke, type ToolType } from './InkLayer';
 
+type PaperType = 'ruled' | 'grid' | 'blank' | 'dotted' | 'dark';
+
 interface NotebookPageProps {
     pageNumber: number;
-    paperType?: 'ruled' | 'grid' | 'blank' | 'dotted';
+    paperType?: PaperType;
     children: React.ReactNode;
     showPageNumber?: boolean;
     strokes: Stroke[];
@@ -17,6 +19,14 @@ interface NotebookPageProps {
     readOnly?: boolean;
     onPencilActive?: () => void;
 }
+
+const PAGE_BG: Record<PaperType, string> = {
+    ruled: '#fefdfb',
+    blank: '#ffffff',
+    grid: '#ffffff',
+    dotted: '#ffffff',
+    dark: '#1a1a1e',
+};
 
 export function NotebookPage({
     pageNumber,
@@ -35,6 +45,8 @@ export function NotebookPage({
     const PAGE_HEIGHT = 1056; // 11" at 96 DPI
 
     const [isPenActive, setIsPenActive] = React.useState(false);
+    const isDark = paperType === 'dark';
+    const pageNumColor = isDark ? '#555' : '#999';
 
     return (
         <div
@@ -44,8 +56,10 @@ export function NotebookPage({
                 width: `${PAGE_WIDTH}px`,
                 height: `${PAGE_HEIGHT}px`,
                 margin: '0 auto',
-                background: '#fefdfb',
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1), 0 8px 24px rgba(0, 0, 0, 0.08)',
+                background: PAGE_BG[paperType] ?? '#fefdfb',
+                boxShadow: isDark
+                    ? '0 2px 8px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.3)'
+                    : '0 2px 8px rgba(0,0,0,0.1), 0 8px 24px rgba(0,0,0,0.08)',
                 borderRadius: '2px',
                 overflow: 'hidden',
             }}
@@ -97,7 +111,7 @@ export function NotebookPage({
                         left: '50%',
                         transform: 'translateX(-50%)',
                         fontSize: '11px',
-                        color: '#999',
+                        color: pageNumColor,
                         fontFamily: 'Georgia, serif',
                         pointerEvents: 'none',
                         zIndex: 2,
