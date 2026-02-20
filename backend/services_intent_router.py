@@ -6,8 +6,11 @@ This ensures better intent detection for natural language queries.
 """
 from typing import Dict, List, Tuple, Optional
 from models import Intent, IntentResult
+import logging
 import re
 from pydantic import BaseModel
+
+logger = logging.getLogger("brain_web")
 
 # Intent priority order (higher priority first) - used for fallback only
 INTENT_PRIORITY = {
@@ -102,24 +105,13 @@ def classify_intent(query: str, use_llm_fallback: bool = True) -> IntentResult:
 
 def _llm_classify_intent(query: str) -> Optional[IntentResult]:
     """
-    Use LLM to classify intent (AI-first approach).
-    
-    Args:
-        query: User query
-    
-    Returns:
-        IntentResult if successful, None if LLM fails
+    Use LLM to classify intent. Falls back gracefully to None so
+    _keyword_classify_intent() can take over.
     """
     try:
-        from openai import OpenAI
-        from config import OPENAI_API_KEY
+        from services_model_router import model_router, TASK_CHAT_FAST
         import json
-        
-        if not OPENAI_API_KEY:
-            return None
-        
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
+
         prompt = f"""Classify this query into exactly one of these intents: {', '.join(ALL_INTENTS)}
 
 Query: "{query}"
@@ -141,38 +133,35 @@ Return ONLY a JSON object:
   "confidence": 0.0-1.0,
   "reasoning": "brief explanation"
 }}"""
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+
+        raw = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[
                 {"role": "system", "content": "You are an intent classifier. Return only valid JSON."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             temperature=0.2,
             max_tokens=200,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
-        result_text = response.choices[0].message.content.strip()
-        result = json.loads(result_text)
-        
+
+        result = json.loads(raw or "{}")
         intent_str = result.get("intent", "").upper()
         confidence = float(result.get("confidence", 0.7))
         reasoning = result.get("reasoning", "LLM classification")
-        
-        # Validate intent
+
         if intent_str in ALL_INTENTS:
             return IntentResult(
                 intent=intent_str,
                 confidence=confidence,
-                reasoning=f"AI-first classification: {reasoning}"
+                reasoning=f"AI-first classification: {reasoning}",
             )
         else:
-            print(f"[Intent Router] LLM returned invalid intent '{intent_str}'")
+            logger.debug(f"[intent_router] LLM returned unknown intent '{intent_str}' — falling back")
             return None
-    
+
     except Exception as e:
-        print(f"[Intent Router] LLM classification failed: {e}")
+        logger.debug(f"[intent_router] LLM classification failed: {e}")
         return None
 
 

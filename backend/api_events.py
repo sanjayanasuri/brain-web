@@ -131,8 +131,11 @@ def create_activity_event(
     Create an activity event. Fast, non-blocking. Failures are ignored.
     """
     try:
-        # Get user_id (demo-safe: use "demo" if no auth)
-        user_id = getattr(request.state, "user_id", None) or "demo"
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            # Activity events are user-scoped; reject unauthenticated writes
+            from fastapi import HTTPException
+            raise HTTPException(status_code=401, detail="Authentication required to log activity.")
         
         # Generate event ID
         event_id = str(uuid.uuid4())
@@ -199,8 +202,10 @@ def get_recent_activity_events(
     Get recent activity events, sorted by created_at desc.
     """
     try:
-        # Get user_id (demo-safe)
-        user_id = getattr(request.state, "user_id", None) or "demo"
+        # Unauthenticated callers get an empty list — never expose other users' data
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            return []
         
         # Build query with optional filters
         query = """
@@ -577,8 +582,10 @@ def start_session(
     Returns session_id for tracking artifacts and activity.
     """
     try:
-        # Get user_id (demo-safe)
-        user_id = getattr(request.state, "user_id", None) or "demo"
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=401, detail="Authentication required to start a session.")
         
         # Generate session ID
         session_id = str(uuid.uuid4())
@@ -632,8 +639,10 @@ def stop_session(
     Stop an active research/browsing session.
     """
     try:
-        # Get user_id (demo-safe)
-        user_id = getattr(request.state, "user_id", None) or "demo"
+        user_id = getattr(request.state, "user_id", None)
+        if not user_id:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=401, detail="Authentication required to stop a session.")
         
         stopped_at = datetime.utcnow().isoformat() + "Z"
         

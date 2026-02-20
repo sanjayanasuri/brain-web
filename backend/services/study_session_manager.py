@@ -5,9 +5,12 @@ Handles session lifecycle, task generation, and attempt submission.
 """
 
 import uuid
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 import random
+
+logger = logging.getLogger("brain_web")
 
 try:
     import psycopg2
@@ -109,7 +112,7 @@ def start_session(
     
     # Generate initial task
     try:
-        print(f"[StudySession] Generating initial task for session {session_id}")
+        logger.info(f"[study_session] Generating initial task for session {session_id}")
         initial_task = _generate_next_task(
             session_id=session_id,
             user_id=user_id,
@@ -121,9 +124,7 @@ def start_session(
             neo4j_session=neo4j_session
         )
     except Exception as e:
-        print(f"[StudySession] Error generating initial task: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"[study_session] Error generating initial task: {e}", exc_info=True)
         raise
     
     # Build mode state
@@ -322,23 +323,17 @@ def submit_attempt(
             pool.putconn(conn)
             
     except Exception as e:
-        print(f"[Study] Warning: Failed to submit attempt to DB: {e}. Returning mock response.")
-        # Mock evaluation for fallback
+        logger.warning(f"[study_session] submit_attempt DB write failed: {e}. Returning fallback response.", exc_info=True)
+        # Fallback evaluation so the UI never hard-crashes
         from models.study import EvaluationResult
-        import traceback
-        traceback.print_exc()
-        
         evaluation = EvaluationResult(
             score_json={"accuracy": 1.0, "completeness": 1.0, "relevance": 1.0},
             composite_score=1.0,
             feedback_text="Excellent work! (System is in offline/fallback mode)",
             gap_concepts=[]
         )
-        # Mock session update 
         session_update = {"mode_inertia": 0.5, "current_mode": "explain"}
-        # Mock inertia delta
         new_inertia = 0.5
-        pass
     
     # Build suggested next task
     suggested_next = None
@@ -496,14 +491,32 @@ def _generate_next_task(
         # Fallback to default if difficulty engine unavailable
         pass
     
-    # Generate task with adaptive difficulty
+    # Generate task with adaptive difficulty.
+    # Derive real term/concept from context pack to avoid generic placeholder prompts.
+    term = "the key term"
+    concept = "this concept"
+    if context_pack.concepts:
+        # Use the first concept name from the context; fall back gracefully if missing
+        first = context_pack.concepts[0]
+        if hasattr(first, "name") and first.name:
+            term = first.name
+            concept = first.name
+        elif isinstance(first, str) and first:
+            term = first
+            concept = first
+    elif context_pack.excerpts:
+        # No concept nodes — derive a short label from the first excerpt (≤40 chars)
+        raw = (context_pack.excerpts[0] or "").strip()
+        term = raw[:40].rstrip() or term
+        concept = term
+
     task_spec = generate_task(
         session_id=session_id,
         task_type=next_task_type,
         context_pack=context_pack,
-        difficulty=difficulty,  # NEW: Adaptive difficulty
-        term="the key term",  # TODO: Extract from context
-        concept="this concept"  # TODO: Extract from topic_id
+        difficulty=difficulty,
+        term=term,
+        concept=concept,
     )
     
     # Save task to database
