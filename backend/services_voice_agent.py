@@ -620,10 +620,16 @@ Transcript:
                 try:
                     from services_memory_orchestrator import get_unified_context, get_active_lecture_id
 
+                    # Use the voice session_id if provided, otherwise a stable
+                    # per-user voice thread so all voice turns accumulate in one
+                    # chat history that other surfaces can see.
+                    # "voice_default" was shared across ALL users — bug.
+                    voice_chat_id = session_id or f"voice_{self.user_id}"
+
                     unified_context = get_unified_context(
                         user_id=self.user_id,
                         tenant_id=self.tenant_id,
-                        chat_id=session_id or "voice_default",
+                        chat_id=voice_chat_id,
                         query=last_transcript,
                         session=neo_session,
                         active_lecture_id=graph_id,
@@ -631,6 +637,7 @@ Transcript:
                         include_lecture_context=True,
                         include_user_facts=True,
                         include_study_context=True,
+                        include_recent_topics=True,  # pull in Explorer/Lecture Studio context
                     )
                     logger.info(
                         f"Voice session {session_id} loaded unified context: "

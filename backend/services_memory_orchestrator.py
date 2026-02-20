@@ -45,7 +45,8 @@ def get_unified_context(
     include_chat_history: bool = True,
     include_lecture_context: bool = True,
     include_user_facts: bool = True,
-    include_study_context: bool = True
+    include_study_context: bool = True,
+    include_recent_topics: bool = True,  # NEW: cross-surface awareness
 ) -> Dict[str, Any]:
     """
     Orchestrate all three memory tiers into unified context.
@@ -73,7 +74,8 @@ def get_unified_context(
         "user_facts": "",
         "lecture_context": "",
         "chat_history": [],
-        "study_context": {}
+        "study_context": {},
+        "recent_topics": "",  # cross-surface ambient context
     }
     
     # 1. Long-term memory: User facts from Neo4j
@@ -141,7 +143,23 @@ def get_unified_context(
             logger.debug("Loaded learning state (difficulty, gaps, performance)")
         except Exception as e:
             logger.warning(f"Failed to load study context: {e}")
-    
+
+    # 5. Cross-surface recent topics — what the user was discussing on OTHER screens.
+    #    Excluded: the current chat_id so we don't double-count the current convo.
+    if include_recent_topics:
+        try:
+            recent = get_recent_cross_surface_topics(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                exclude_chat_id=chat_id,
+                limit=6,
+            )
+            if recent:
+                context["recent_topics"] = recent
+                logger.debug(f"Loaded {len(recent.splitlines())} cross-surface topic lines")
+        except Exception as e:
+            logger.warning(f"Failed to load cross-surface topics: {e}")
+
     return context
 
 
@@ -214,6 +232,72 @@ def get_study_context(user_id: str, tenant_id: str) -> Dict[str, Any]:
         pool.putconn(conn)
 
 
+def get_recent_cross_surface_topics(
+    user_id: str,
+    tenant_id: str,
+    exclude_chat_id: str,
+    limit: int = 6,
+) -> str:
+    """
+    Fetch the most recent user messages across ALL of the user's chat sessions
+    (not just the current one), to give every surface ambient awareness of what
+    was discussed elsewhere.
+
+    Returns a short plain-text summary like:
+        "Recent topics from your other conversations:
+        - [Explorer chat] What is backpropagation?
+        - [Lecture Studio] How does attention work in transformers?"
+
+    Excluded: the current chat_id so we don't double-count the active convo.
+    Excluded: assistant messages (only user questions are taken as topic signals).
+    """
+    pool = _get_pg_pool()
+    if not pool:
+        return ""
+
+    conn = pool.getconn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT content, chat_id, created_at
+                FROM chat_messages
+                WHERE user_id = %s
+                  AND tenant_id = %s
+                  AND chat_id != %s
+                  AND role = 'user'
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (user_id, tenant_id, exclude_chat_id, limit),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"[memory_orchestrator] cross-surface topic fetch failed: {e}")
+        return ""
+    finally:
+        pool.putconn(conn)
+
+    if not rows:
+        return ""
+
+    lines = []
+    for row in rows:
+        content = (row["content"] or "").strip()
+        if not content:
+            continue
+        # Truncate long messages to a topic-length snippet
+        snippet = content[:120].rstrip()
+        if len(content) > 120:
+            snippet += "..."
+        lines.append(f"- {snippet}")
+
+    if not lines:
+        return ""
+
+    return "Recent topics from your other conversations:\n" + "\n".join(lines)
+
+
 def format_lecture_context(lecture_blocks: List[Dict]) -> str:
     """
     Format lecture blocks into readable context.
@@ -264,7 +348,7 @@ def build_system_prompt_with_memory(
         Enhanced system prompt with memory context
     """
     if include_sections is None:
-        include_sections = ["user_facts", "lecture_context", "study_context"]
+        include_sections = ["user_facts", "lecture_context", "study_context", "recent_topics"]
     
     memory_sections = []
     
@@ -280,6 +364,14 @@ def build_system_prompt_with_memory(
         memory_sections.append(f"""
 ## Current Study Material
 {context["lecture_context"]}
+""")
+
+    # Add cross-surface recent topics
+    if "recent_topics" in include_sections and context.get("recent_topics"):
+        memory_sections.append(f"""
+## Recent Activity (other conversations)
+{context["recent_topics"]}
+Use this as ambient awareness only — do not repeat or summarise these back to the user unless directly relevant.
 """)
     
     # Add study context (Adaptive Learning)
@@ -299,6 +391,7 @@ def build_system_prompt_with_memory(
 4. **Scaffolding**: If they have many 'Identified Gaps', be more supportive and provide hints.
 """
         memory_sections.append(study_instructions)
+
     
     # Combine
     if memory_sections:

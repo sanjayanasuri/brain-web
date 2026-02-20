@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { getCurrentSessionId } from '../../lib/chatSessions';
 
 interface AIChatSidebarProps {
   lectureId?: string | null;
@@ -20,6 +21,17 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
 
   const graphId = searchParams?.get('graph_id') || undefined;
   const branchId = searchParams?.get('branch_id') || undefined;
+
+  // Use a stable, lecture-scoped chat_id so this conversation is saved to
+  // Postgres and shows up in cross-surface context for voice + Explorer chat.
+  // Format: lecture_{lectureId} — scoped per lecture so each lecture has its
+  // own thread, but the voice agent and other surfaces can still see it.
+  const chatId = useMemo(() => {
+    if (lectureId) return `lecture_${lectureId}`;
+    // Fallback: share the user's current main session so at least the voice
+    // agent picks up what was discussed here.
+    return getCurrentSessionId() || `lecture_anon_${Date.now()}`;
+  }, [lectureId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -41,12 +53,13 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               message: text,
-              image: image, // Optional visual context
-              context_text: context?.blockText, // Full block text for tutor context
+              image: image,
+              context_text: context?.blockText,
               mode: 'graphrag',
               graph_id: graphId,
               branch_id: branchId,
               lecture_id: lectureId,
+              chat_id: chatId,   // ← persist to chat history
               focus_concept_id: undefined,
               response_prefs: {
                 mode: 'compact',
@@ -89,6 +102,7 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
           graph_id: graphId,
           branch_id: branchId,
           lecture_id: lectureId,
+          chat_id: chatId,   // ← persist to chat history
           focus_concept_id: undefined,
           response_prefs: {
             mode: 'compact',
