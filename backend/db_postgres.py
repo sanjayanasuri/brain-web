@@ -93,6 +93,39 @@ def init_postgres_db():
             metadata JSONB DEFAULT '{}'::jsonb
         );
         """,
+        "CREATE INDEX IF NOT EXISTS idx_study_sessions_user ON study_sessions(user_id, started_at DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_study_sessions_tenant ON study_sessions(tenant_id, started_at DESC);",
+
+        # Study Tasks Table
+        """
+        CREATE TABLE IF NOT EXISTS study_tasks (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            session_id UUID REFERENCES study_sessions(id) ON DELETE CASCADE,
+            task_type VARCHAR(50) NOT NULL,
+            prompt TEXT NOT NULL,
+            rubric_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            context_pack_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            compatible_modes JSONB NOT NULL DEFAULT '[]'::jsonb,
+            disruption_cost FLOAT DEFAULT 0.3,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_study_tasks_session ON study_tasks(session_id, created_at);",
+
+        # Study Attempts Table
+        """
+        CREATE TABLE IF NOT EXISTS study_attempts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            task_id UUID REFERENCES study_tasks(id) ON DELETE CASCADE,
+            response_text TEXT NOT NULL,
+            score_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            composite_score FLOAT NOT NULL DEFAULT 0.0,
+            feedback_text TEXT,
+            gap_concepts JSONB DEFAULT '[]'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_study_attempts_task ON study_attempts(task_id, created_at);"
         
         # Voice Sessions Table
         """
@@ -109,6 +142,46 @@ def init_postgres_db():
             token_usage_estimate INTEGER DEFAULT 0
         );
         """,
+        "CREATE INDEX IF NOT EXISTS idx_voice_sessions_user ON voice_sessions(user_id, started_at DESC);",
+
+        # Voice Transcript Chunks Table
+        """
+        CREATE TABLE IF NOT EXISTS voice_transcript_chunks (
+            id TEXT PRIMARY KEY,
+            voice_session_id TEXT NOT NULL,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id VARCHAR(255) NOT NULL,
+            graph_id VARCHAR(255) NOT NULL,
+            branch_id VARCHAR(255) NOT NULL,
+            role VARCHAR(32) NOT NULL,
+            content TEXT NOT NULL,
+            start_ms INTEGER,
+            end_ms INTEGER,
+            anchor_id TEXT,
+            anchor_json TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_session ON voice_transcript_chunks(voice_session_id, start_ms, created_at);",
+        "CREATE INDEX IF NOT EXISTS idx_voice_transcript_chunks_user_graph ON voice_transcript_chunks(user_id, graph_id, branch_id, created_at DESC);",
+
+        # Voice Learning Signals Table
+        """
+        CREATE TABLE IF NOT EXISTS voice_learning_signals (
+            id TEXT PRIMARY KEY,
+            voice_session_id TEXT NOT NULL,
+            chunk_id TEXT,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id VARCHAR(255) NOT NULL,
+            graph_id VARCHAR(255) NOT NULL,
+            branch_id VARCHAR(255) NOT NULL,
+            kind VARCHAR(64) NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_voice_learning_signals_session ON voice_learning_signals(voice_session_id, created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_voice_learning_signals_kind ON voice_learning_signals(kind);"
         
         # Usage Logs Table (Required for voice sessions)
         """
