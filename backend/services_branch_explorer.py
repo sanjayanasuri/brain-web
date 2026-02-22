@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+from contextvars import ContextVar, Token
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -15,10 +16,35 @@ logger = logging.getLogger("brain_web")
 DEFAULT_GRAPH_ID = "default"
 DEFAULT_BRANCH_ID = "main"
 
+_REQUEST_GRAPH_USER_ID: ContextVar[Optional[str]] = ContextVar("bw_request_graph_user_id", default=None)
+_REQUEST_GRAPH_TENANT_ID: ContextVar[Optional[str]] = ContextVar("bw_request_graph_tenant_id", default=None)
+
 # Best-effort schema init (constraints/migrations). We keep this here because
 # this module is already the "graph/branch context" entry point used by most
 # graph operations.
 _SCHEMA_INITIALIZED = False
+
+
+def set_request_graph_identity(user_id: Optional[str], tenant_id: Optional[str]) -> Tuple[Token, Token]:
+    """
+    Set request-scoped graph identity for downstream service calls that do not
+    explicitly pass user_id/tenant_id.
+    """
+    user_token = _REQUEST_GRAPH_USER_ID.set(str(user_id).strip() if user_id else None)
+    tenant_token = _REQUEST_GRAPH_TENANT_ID.set(str(tenant_id).strip() if tenant_id else None)
+    return user_token, tenant_token
+
+
+def reset_request_graph_identity(tokens: Tuple[Token, Token]) -> None:
+    """Reset request-scoped graph identity."""
+    user_token, tenant_token = tokens
+    _REQUEST_GRAPH_USER_ID.reset(user_token)
+    _REQUEST_GRAPH_TENANT_ID.reset(tenant_token)
+
+
+def get_request_graph_identity() -> Tuple[Optional[str], Optional[str]]:
+    """Get request-scoped graph identity (user_id, tenant_id)."""
+    return _REQUEST_GRAPH_USER_ID.get(), _REQUEST_GRAPH_TENANT_ID.get()
 
 
 def ensure_schema_constraints(session: Session) -> None:
@@ -246,6 +272,18 @@ def ensure_graphspace_exists(
         name: Optional graph name
         tenant_id: Optional tenant identifier for multi-tenant isolation
     """
+    if tenant_id:
+        tenant_check = session.run(
+            """
+            MATCH (g:GraphSpace {graph_id: $graph_id})
+            RETURN g.tenant_id AS tenant_id
+            LIMIT 1
+            """,
+            graph_id=graph_id,
+        ).single()
+        if tenant_check and tenant_check.get("tenant_id") not in (None, tenant_id):
+            raise ValueError("Graph belongs to a different tenant")
+
     query = """
     MERGE (g:GraphSpace {graph_id: $graph_id})
     ON CREATE SET g.name = COALESCE($name, $graph_id),
@@ -311,18 +349,73 @@ def ensure_default_context(session: Session) -> Tuple[str, str]:
     return DEFAULT_GRAPH_ID, DEFAULT_BRANCH_ID
 
 
-def _get_user_learning_prefs(session: Session) -> Dict[str, Any]:
+def _sanitize_identity(value: str) -> str:
+    cleaned = "".join(ch if (ch.isalnum() or ch in "-_.") else "_" for ch in value)
+    return cleaned[:96] if cleaned else "default"
+
+
+def _resolve_graph_identity(
+    *,
+    user_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    req_user_id = _REQUEST_GRAPH_USER_ID.get()
+    req_tenant_id = _REQUEST_GRAPH_TENANT_ID.get()
+
+    resolved_user_id = (str(user_id).strip() if user_id else str(req_user_id).strip() if req_user_id else None)
+    resolved_tenant_id = (str(tenant_id).strip() if tenant_id else str(req_tenant_id).strip() if req_tenant_id else None)
+
+    return resolved_user_id or None, resolved_tenant_id or None
+
+
+def _graph_context_profile_id(user_id: Optional[str], tenant_id: Optional[str]) -> str:
+    if user_id and tenant_id:
+        return f"graphctx:{_sanitize_identity(tenant_id)}:{_sanitize_identity(user_id)}"
+    if tenant_id:
+        return f"graphctx:{_sanitize_identity(tenant_id)}:__tenant__"
+    if user_id:
+        return f"graphctx:__user__:{_sanitize_identity(user_id)}"
+    return "graphctx:default:default"
+
+
+def _tenant_default_graph_id(tenant_id: Optional[str]) -> str:
+    if not tenant_id:
+        return DEFAULT_GRAPH_ID
+    return f"{DEFAULT_GRAPH_ID}_{_sanitize_identity(tenant_id)[:16]}"
+
+
+def _get_user_learning_prefs(
+    session: Session,
+    *,
+    user_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    resolved_user_id, resolved_tenant_id = _resolve_graph_identity(user_id=user_id, tenant_id=tenant_id)
+    profile_id = _graph_context_profile_id(resolved_user_id, resolved_tenant_id)
+
     query = """
-    MERGE (u:UserProfile {id: 'default'})
+    MERGE (u:UserProfile {id: $profile_id})
     ON CREATE SET u.name = 'Sanjay',
                   u.background = [],
                   u.interests = [],
                   u.weak_spots = [],
+                  u.user_id = $user_id,
+                  u.tenant_id = $tenant_id,
+                  u.context_kind = 'graph_context',
                   u.learning_preferences = $empty_json
+    ON MATCH SET u.user_id = COALESCE(u.user_id, $user_id),
+                 u.tenant_id = COALESCE(u.tenant_id, $tenant_id),
+                 u.context_kind = COALESCE(u.context_kind, 'graph_context')
     RETURN u.learning_preferences AS learning_preferences
     """
     empty_json = json.dumps({})
-    rec = session.run(query, empty_json=empty_json).single()
+    rec = session.run(
+        query,
+        profile_id=profile_id,
+        user_id=resolved_user_id,
+        tenant_id=resolved_tenant_id,
+        empty_json=empty_json,
+    ).single()
     lp = rec["learning_preferences"] if rec else "{}"
 
     if isinstance(lp, str):
@@ -335,16 +428,38 @@ def _get_user_learning_prefs(session: Session) -> Dict[str, Any]:
     return {}
 
 
-def _set_user_learning_prefs(session: Session, prefs: Dict[str, Any]) -> None:
+def _set_user_learning_prefs(
+    session: Session,
+    prefs: Dict[str, Any],
+    *,
+    user_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> None:
+    resolved_user_id, resolved_tenant_id = _resolve_graph_identity(user_id=user_id, tenant_id=tenant_id)
+    profile_id = _graph_context_profile_id(resolved_user_id, resolved_tenant_id)
+
     query = """
-    MERGE (u:UserProfile {id: 'default'})
-    SET u.learning_preferences = $learning_preferences
+    MERGE (u:UserProfile {id: $profile_id})
+    SET u.learning_preferences = $learning_preferences,
+        u.user_id = COALESCE(u.user_id, $user_id),
+        u.tenant_id = COALESCE(u.tenant_id, $tenant_id),
+        u.context_kind = COALESCE(u.context_kind, 'graph_context')
     RETURN u
     """
-    session.run(query, learning_preferences=json.dumps(prefs)).consume()
+    session.run(
+        query,
+        profile_id=profile_id,
+        learning_preferences=json.dumps(prefs),
+        user_id=resolved_user_id,
+        tenant_id=resolved_tenant_id,
+    ).consume()
 
 
-def get_active_graph_context(session: Session, tenant_id: Optional[str] = None) -> Tuple[str, str]:
+def get_active_graph_context(
+    session: Session,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Tuple[str, str]:
     """
     Returns (graph_id, branch_id). Ensures defaults exist.
     
@@ -353,55 +468,99 @@ def get_active_graph_context(session: Session, tenant_id: Optional[str] = None) 
         tenant_id: Optional tenant_id for multi-tenant isolation. If provided,
                    ensures graph belongs to this tenant.
     """
-    ensure_default_context(session)
+    resolved_user_id, resolved_tenant_id = _resolve_graph_identity(user_id=user_id, tenant_id=tenant_id)
 
-    prefs = _get_user_learning_prefs(session)
-    graph_id = prefs.get("active_graph_id") or DEFAULT_GRAPH_ID
+    ensure_default_context(session)
+    default_graph_id = _tenant_default_graph_id(resolved_tenant_id)
+    if resolved_tenant_id:
+        ensure_graphspace_exists(session, default_graph_id, name="Default", tenant_id=resolved_tenant_id)
+        ensure_branch_exists(session, default_graph_id, DEFAULT_BRANCH_ID, name="Main")
+
+    prefs = _get_user_learning_prefs(session, user_id=resolved_user_id, tenant_id=resolved_tenant_id)
+    graph_id = prefs.get("active_graph_id") or default_graph_id
     branch_id = prefs.get("active_branch_id") or DEFAULT_BRANCH_ID
 
-    # If tenant_id is provided, verify the graph belongs to this tenant
-    if tenant_id:
-        # Verify graph exists and belongs to tenant
+    # If tenant_id is provided, verify the graph belongs to this tenant.
+    if resolved_tenant_id:
         query = """
         MATCH (g:GraphSpace {graph_id: $graph_id})
-        WHERE g.tenant_id IS NULL OR g.tenant_id = $tenant_id
+        WHERE g.tenant_id = $tenant_id
         RETURN g
         """
-        rec = session.run(query, graph_id=graph_id, tenant_id=tenant_id).single()
+        rec = session.run(query, graph_id=graph_id, tenant_id=resolved_tenant_id).single()
         if not rec:
             # Graph doesn't exist or doesn't belong to tenant, use default
-            graph_id = DEFAULT_GRAPH_ID
+            graph_id = default_graph_id
             branch_id = DEFAULT_BRANCH_ID
 
-    ensure_graphspace_exists(session, graph_id, tenant_id=tenant_id)
+    ensure_graphspace_exists(session, graph_id, tenant_id=resolved_tenant_id)
     ensure_branch_exists(session, graph_id, branch_id)
 
     return graph_id, branch_id
 
 
-def set_active_graph(session: Session, graph_id: str) -> Tuple[str, str]:
+def set_active_graph(
+    session: Session,
+    graph_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Tuple[str, str]:
     ensure_schema_constraints(session)
-    ensure_graphspace_exists(session, graph_id)
+    resolved_user_id, resolved_tenant_id = _resolve_graph_identity(user_id=user_id, tenant_id=tenant_id)
+
+    if resolved_tenant_id:
+        rec = session.run(
+            """
+            MATCH (g:GraphSpace {graph_id: $graph_id})
+            WHERE g.tenant_id = $tenant_id
+            RETURN g
+            """,
+            graph_id=graph_id,
+            tenant_id=resolved_tenant_id,
+        ).single()
+        if not rec:
+            raise ValueError("Graph not found in tenant scope")
+    else:
+        ensure_graphspace_exists(session, graph_id)
+
     # When switching graphs, default to its main branch.
     ensure_branch_exists(session, graph_id, DEFAULT_BRANCH_ID, name="Main")
 
-    prefs = _get_user_learning_prefs(session)
+    prefs = _get_user_learning_prefs(session, user_id=resolved_user_id, tenant_id=resolved_tenant_id)
     prefs["active_graph_id"] = graph_id
     prefs["active_branch_id"] = DEFAULT_BRANCH_ID
-    _set_user_learning_prefs(session, prefs)
+    _set_user_learning_prefs(
+        session,
+        prefs,
+        user_id=resolved_user_id,
+        tenant_id=resolved_tenant_id,
+    )
 
     return graph_id, DEFAULT_BRANCH_ID
 
 
-def set_active_branch(session: Session, branch_id: str) -> Tuple[str, str]:
-    graph_id, _ = get_active_graph_context(session)
+def set_active_branch(
+    session: Session,
+    branch_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Tuple[str, str]:
+    resolved_user_id, resolved_tenant_id = _resolve_graph_identity(user_id=user_id, tenant_id=tenant_id)
+    graph_id, _ = get_active_graph_context(session, tenant_id=resolved_tenant_id, user_id=resolved_user_id)
     ensure_schema_constraints(session)
     ensure_branch_exists(session, graph_id, branch_id)
 
-    prefs = _get_user_learning_prefs(session)
+    prefs = _get_user_learning_prefs(session, user_id=resolved_user_id, tenant_id=resolved_tenant_id)
     prefs["active_graph_id"] = graph_id
     prefs["active_branch_id"] = branch_id
-    _set_user_learning_prefs(session, prefs)
+    _set_user_learning_prefs(
+        session,
+        prefs,
+        user_id=resolved_user_id,
+        tenant_id=resolved_tenant_id,
+    )
 
     return graph_id, branch_id
 
@@ -417,12 +576,14 @@ def list_graphs(session: Session, tenant_id: Optional[str] = None) -> List[Dict[
                    If None, returns all graphs (for backward compatibility).
     """
     ensure_default_context(session)
+    if tenant_id:
+        ensure_graphspace_exists(session, _tenant_default_graph_id(tenant_id), name="Default", tenant_id=tenant_id)
     
     # Build WHERE clause for tenant filtering
     where_clause = ""
     params = {}
     if tenant_id:
-        where_clause = "WHERE (g.tenant_id IS NULL OR g.tenant_id = $tenant_id)"
+        where_clause = "WHERE g.tenant_id = $tenant_id"
         params["tenant_id"] = tenant_id
     
     query = f"""
@@ -430,7 +591,7 @@ def list_graphs(session: Session, tenant_id: Optional[str] = None) -> List[Dict[
     {where_clause}
     OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
     OPTIONAL MATCH (s:Concept)-[r]->(t:Concept)
-    WHERE r.graph_id = g.graph_id
+    WHERE s.graph_id = g.graph_id AND t.graph_id = g.graph_id
     WITH g,
          count(DISTINCT c) AS node_count,
          count(DISTINCT r) AS edge_count
@@ -532,15 +693,29 @@ def create_graph(
     }
 
 
-def rename_graph(session: Session, graph_id: str, name: str) -> Dict[str, Any]:
+def rename_graph(
+    session: Session,
+    graph_id: str,
+    name: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
     ensure_schema_constraints(session)
-    query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    tenant_where = "WHERE g.tenant_id = $tenant_id" if tenant_id else ""
+    query = f"""
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    {tenant_where}
     SET g.name = $name,
         g.updated_at = $now
     RETURN g
     """
-    rec = session.run(query, graph_id=graph_id, name=name, now=_now_iso()).single()
+    rec = session.run(
+        query,
+        graph_id=graph_id,
+        tenant_id=tenant_id,
+        name=name,
+        now=_now_iso(),
+    ).single()
     if not rec:
         raise ValueError("Graph not found")
     g = rec["g"]
@@ -549,28 +724,39 @@ def rename_graph(session: Session, graph_id: str, name: str) -> Dict[str, Any]:
         "name": g.get("name"),
         "created_at": g.get("created_at"),
         "updated_at": g.get("updated_at"),
+        "tenant_id": g.get("tenant_id"),
     }
 
 
-def delete_graph(session: Session, graph_id: str) -> None:
+def delete_graph(
+    session: Session,
+    graph_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> None:
     ensure_schema_constraints(session)
-    if graph_id == DEFAULT_GRAPH_ID:
+    if graph_id == DEFAULT_GRAPH_ID or graph_id.startswith(f"{DEFAULT_GRAPH_ID}_"):
         raise ValueError("Cannot delete default graph")
 
-    query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    tenant_where = "WHERE g.tenant_id = $tenant_id" if tenant_id else ""
+    query = f"""
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    {tenant_where}
     OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
     DETACH DELETE c
     WITH g
-    OPTIONAL MATCH (b:Branch {graph_id: $graph_id})
+    OPTIONAL MATCH (b:Branch {{graph_id: $graph_id}})
     DETACH DELETE b
     WITH g
-    OPTIONAL MATCH (s:Snapshot {graph_id: $graph_id})
+    OPTIONAL MATCH (s:Snapshot {{graph_id: $graph_id}})
     DETACH DELETE s
     WITH g
     DETACH DELETE g
     """
-    session.run(query, graph_id=graph_id).consume()
+    result = session.run(query, graph_id=graph_id, tenant_id=tenant_id)
+    summary = result.consume()
+    if summary.counters.nodes_deleted == 0:
+        raise ValueError("Graph not found")
 
 
 _SCOPING_INITIALIZED = False

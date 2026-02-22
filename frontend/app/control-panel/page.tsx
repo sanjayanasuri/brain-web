@@ -45,9 +45,9 @@ export default function ControlPanel() {
   const templateOptions = useMemo(() => {
     const templates = new Map<string, string>();
     graphs.forEach((graph) => {
-      const id = graph.template_id || 'blank';
-      const label = graph.template_label || (id === 'blank' ? 'Blank canvas' : id);
-      templates.set(id, label);
+      if (graph.template_id && graph.template_label) {
+        templates.set(graph.template_id, graph.template_label);
+      }
     });
     return Array.from(templates.entries());
   }, [graphs]);
@@ -200,18 +200,15 @@ export default function ControlPanel() {
 
             <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
               {filteredGraphs.map((graph, index) => {
-                const templateLabel = graph.template_label || (graph.template_id ? graph.template_id : 'Blank canvas');
+                const templateLabel = graph.template_label || null;
                 const templateTags = graph.template_tags || [];
                 const sizeLabel = `${graph.node_count || 0} nodes · ${graph.edge_count || 0} edges`;
                 const isActive = graph.graph_id === activeGraphId;
                 return (
                   <div key={graph.graph_id} className="control-panel__card" style={{ animationDelay: `${index * 40}ms` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-                      <div>
-                        <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--ink)' }}>
-                          {graph.name || 'Untitled graph'}
-                        </div>
-                        <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{graph.graph_id}</div>
+                      <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--ink)' }}>
+                        {graph.name || 'Untitled graph'}
                       </div>
                       {isActive && (
                         <div style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', background: 'var(--panel)', border: '1px solid var(--border)', color: 'var(--accent)', fontWeight: 600 }}>
@@ -219,26 +216,30 @@ export default function ControlPanel() {
                         </div>
                       )}
                     </div>
-                    <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                      <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', background: 'var(--panel)', border: '1px solid var(--border)', color: 'var(--accent)', fontWeight: 600 }}>
-                        {templateLabel}
-                      </span>
-                      {templateTags.slice(0, 2).map((tag) => (
-                        <span
-                          key={tag}
-                          style={{
-                            fontSize: '11px',
-                            padding: '4px 8px',
-                            borderRadius: '999px',
-                            backgroundColor: '#f8fafc',
-                            color: 'var(--muted)',
-                            border: '1px solid var(--border)',
-                          }}
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
+                    {(templateLabel || templateTags.length > 0) && (
+                      <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {templateLabel && (
+                          <span style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '999px', background: 'var(--panel)', border: '1px solid var(--border)', color: 'var(--accent)', fontWeight: 600 }}>
+                            {templateLabel}
+                          </span>
+                        )}
+                        {templateTags.slice(0, 2).map((tag) => (
+                          <span
+                            key={tag}
+                            style={{
+                              fontSize: '11px',
+                              padding: '4px 8px',
+                              borderRadius: '999px',
+                              backgroundColor: '#f8fafc',
+                              color: 'var(--muted)',
+                              border: '1px solid var(--border)',
+                            }}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--muted)', minHeight: '40px' }}>
                       {graph.intent || graph.template_description || 'No intent captured yet.'}
                     </div>
@@ -264,7 +265,7 @@ export default function ControlPanel() {
                           cursor: 'pointer',
                         }}
                       >
-                        Open workspace
+                        Open
                       </button>
                       <Link
                         href={`/graphs/${graph.graph_id}`}
@@ -277,7 +278,7 @@ export default function ControlPanel() {
                           textDecoration: 'none',
                         }}
                       >
-                        View details
+                        Details
                       </Link>
                     </div>
                   </div>
