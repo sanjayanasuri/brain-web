@@ -1,0 +1,105 @@
+name: Deploy to Hetzner (GHCR Immutable)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: hetzner-deploy-ghcr
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  GHCR_NAMESPACE: ${{ github.repository_owner }}
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_KEY != '' && secrets.GHCR_PULL_USERNAME != '' && secrets.GHCR_PULL_TOKEN != '' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image names
+        run: |
+          echo "BACKEND_IMAGE=${REGISTRY}/${GHCR_NAMESPACE}/brain-web-backend" >> "$GITHUB_ENV"
+          echo "FRONTEND_IMAGE=${REGISTRY}/${GHCR_NAMESPACE}/brain-web-frontend" >> "$GITHUB_ENV"
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ env.IMAGE_TAG }}
+            ${{ env.BACKEND_IMAGE }}:latest
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL || 'https://demo.sanjayanasuri.com/api' }}
+            NEXT_PUBLIC_SENTRY_DSN=${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
+            NEXT_PUBLIC_SENTRY_ENVIRONMENT=production
+            NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=${{ vars.NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
+            SENTRY_DSN=${{ secrets.SENTRY_DSN_FRONTEND_SERVER || secrets.SENTRY_DSN }}
+            SENTRY_DSN_FRONTEND_SERVER=${{ secrets.SENTRY_DSN_FRONTEND_SERVER || secrets.SENTRY_DSN }}
+            SENTRY_DSN_FRONTEND_EDGE=${{ secrets.SENTRY_DSN_FRONTEND_EDGE || secrets.SENTRY_DSN_FRONTEND_SERVER || secrets.SENTRY_DSN }}
+            SENTRY_ENVIRONMENT=production
+            SENTRY_TRACES_SAMPLE_RATE=${{ vars.SENTRY_TRACES_SAMPLE_RATE || '0.05' }}
+            SENTRY_ORG=${{ vars.SENTRY_ORG || 'sanjay-anasuri' }}
+            SENTRY_PROJECT=${{ vars.SENTRY_PROJECT || 'javascript-nextjs' }}
+            SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ env.IMAGE_TAG }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+
+      - name: Deploy images on Hetzner
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            cd ~/brain-web
+            GHCR_PULL_USERNAME='${{ secrets.GHCR_PULL_USERNAME }}' \
+            GHCR_PULL_TOKEN='${{ secrets.GHCR_PULL_TOKEN }}' \
+            GHCR_NAMESPACE='${{ github.repository_owner }}' \
+            IMAGE_TAG='${{ github.sha }}' \
+            ./scripts/deploy-ghcr.sh
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            cd ~/brain-web
+            docker compose -f docker-compose.yml -f docker-compose.ghcr.yml ps
+            curl -fL http://localhost:8000/health || curl -fL http://localhost:8000/api/health
+
+  skipped-no-secrets:
+    runs-on: ubuntu-latest
+    if: ${{ !(secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_KEY != '' && secrets.GHCR_PULL_USERNAME != '' && secrets.GHCR_PULL_TOKEN != '') }}
+    steps:
+      - run: |
+          echo "GHCR immutable deploy workflow skipped: missing required secrets."
+          echo "Required secrets: HETZNER_HOST, HETZNER_USER, HETZNER_SSH_KEY, GHCR_PULL_USERNAME, GHCR_PULL_TOKEN"

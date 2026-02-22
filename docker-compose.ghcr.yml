@@ -1,0 +1,8 @@
+services:
+  backend:
+    image: ghcr.io/${GHCR_NAMESPACE:-sanjayanasuri}/brain-web-backend:${IMAGE_TAG:-latest}
+    pull_policy: always
+
+  frontend:
+    image: ghcr.io/${GHCR_NAMESPACE:-sanjayanasuri}/brain-web-frontend:${IMAGE_TAG:-latest}
+    pull_policy: always
