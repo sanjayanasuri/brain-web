@@ -354,9 +354,9 @@ def extract_segments_and_analogies_with_llm(
     # Build the user prompt
     concept_hint = ""
     if available_concepts:
-        concept_hint = f"\n\nIMPORTANT: When listing covered_concepts, use EXACT names from this list (case-insensitive match):\n{', '.join(available_concepts[:50])}"
-        if len(available_concepts) > 50:
-            concept_hint += f"\n(and {len(available_concepts) - 50} more concepts...)"
+        concept_hint = f"\n\nIMPORTANT: When listing covered_concepts, use EXACT names from this list (case-insensitive match):\n{', '.join(available_concepts[:200])}"
+        if len(available_concepts) > 200:
+            concept_hint += f"\n(and {len(available_concepts) - 200} more concepts...)"
         concept_hint += "\nIf a concept is mentioned but not in this list, still include it but it may not link properly."
 
     user_prompt = f"""Lecture Title: {lecture_title}
@@ -810,7 +810,8 @@ def run_lecture_extraction_engine(
                 c.lecture_sources = $lecture_sources,
                 c.created_by = COALESCE(c.created_by, $created_by),
                 c.last_updated_by = $last_updated_by,
-                c.last_updated_by_run_id = $last_updated_by_run_id
+                c.last_updated_by_run_id = $last_updated_by_run_id,
+                c.aliases = REDUCE(s = COALESCE(c.aliases, []), x IN $new_aliases | CASE WHEN x IN s THEN s ELSE s + x END)
             RETURN c.node_id AS node_id,
                    c.name AS name,
                    c.domain AS domain,
@@ -833,7 +834,8 @@ def run_lecture_extraction_engine(
                 lecture_sources=current_sources,
                 created_by=created_by,
                 last_updated_by=last_updated_by,
-                last_updated_by_run_id=run_id
+                last_updated_by_run_id=run_id,
+                new_aliases=extracted_node.aliases or []
             )
             record = result.single()
             if record:
@@ -866,6 +868,7 @@ def run_lecture_extraction_engine(
                 type=extracted_node.type or "concept",
                 description=extracted_node.description,
                 tags=extracted_node.tags or [],
+                aliases=extracted_node.aliases or [],
                 lecture_key=lecture_id,  # For backward compatibility
                 lecture_sources=[lecture_id],
                 created_by=lecture_id,
@@ -1328,6 +1331,26 @@ def run_segments_and_analogies_engine(
                         tenant_id=tenant_id,
                     )
                     continue
+                else:
+                    # Check aliases in nodes_created/nodes_updated
+                    for nc in nodes_created:
+                        if normalized_concept_name in [normalize_name(a) for a in (nc.aliases or [])]:
+                            found_concept = nc
+                            break
+                    if not found_concept:
+                        for nu in nodes_updated:
+                            if normalized_concept_name in [normalize_name(a) for a in (nu.aliases or [])]:
+                                found_concept = nu
+                                break
+                    if found_concept:
+                        covered_concept_models.append(found_concept)
+                        link_segment_to_concept(
+                            session=session,
+                            segment_id=segment_id,
+                            concept_id=found_concept.node_id,
+                            tenant_id=tenant_id,
+                        )
+                        continue
             
             # Fallback: try to find existing concept by name in database (without domain restriction first)
             existing_concept = find_concept_by_name_and_domain(

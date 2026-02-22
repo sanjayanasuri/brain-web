@@ -337,6 +337,7 @@ def create_concept(session: Session, payload: ConceptCreate, tenant_id: Optional
         "c.created_by = $created_by",
         "c.last_updated_by = $last_updated_by",
         "c.on_branches = [$branch_id]",
+        "c.aliases = $aliases",
     ]
     
     # Add run_id tracking only on CREATE (don't overwrite existing created_by_run_id)
@@ -392,6 +393,7 @@ def create_concept(session: Session, payload: ConceptCreate, tenant_id: Optional
         "lecture_sources": lecture_sources,
         "created_by": created_by,
         "last_updated_by": last_updated_by,
+        "aliases": payload.aliases or [],
         "graph_id": graph_id,
         "branch_id": branch_id,
     }
