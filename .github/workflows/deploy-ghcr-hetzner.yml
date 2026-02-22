@@ -22,7 +22,6 @@ env:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    if: ${{ secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_KEY != '' && secrets.GHCR_PULL_USERNAME != '' && secrets.GHCR_PULL_TOKEN != '' }}
 
     steps:
       - name: Checkout code
@@ -95,11 +94,3 @@ jobs:
             cd ~/brain-web
             docker compose -f docker-compose.yml -f docker-compose.ghcr.yml ps
             curl -fL http://localhost:8000/health || curl -fL http://localhost:8000/api/health
-
-  skipped-no-secrets:
-    runs-on: ubuntu-latest
-    if: ${{ !(secrets.HETZNER_HOST != '' && secrets.HETZNER_USER != '' && secrets.HETZNER_SSH_KEY != '' && secrets.GHCR_PULL_USERNAME != '' && secrets.GHCR_PULL_TOKEN != '') }}
-    steps:
-      - run: |
-          echo "GHCR immutable deploy workflow skipped: missing required secrets."
-          echo "Required secrets: HETZNER_HOST, HETZNER_USER, HETZNER_SSH_KEY, GHCR_PULL_USERNAME, GHCR_PULL_TOKEN"
