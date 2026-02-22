@@ -36,6 +36,26 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 # For future AI integration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Explicit feedback classifier fallback (cheap model; only for ambiguous feedback notes).
+ENABLE_FEEDBACK_CLASSIFIER_FALLBACK = os.getenv(
+    "ENABLE_FEEDBACK_CLASSIFIER_FALLBACK", "true"
+).lower() in ("true", "1", "yes")
+FEEDBACK_CLASSIFIER_MIN_CONFIDENCE = float(
+    os.getenv("FEEDBACK_CLASSIFIER_MIN_CONFIDENCE", "0.62")
+)
+
+# Voice learning-signal extraction fallback:
+# keep deterministic heuristics as primary; use cheap LLM parsing for missed phrasings.
+ENABLE_VOICE_SIGNAL_LLM_FALLBACK = os.getenv(
+    "ENABLE_VOICE_SIGNAL_LLM_FALLBACK", "true"
+).lower() in ("true", "1", "yes")
+VOICE_SIGNAL_LLM_MIN_CONFIDENCE = float(
+    os.getenv("VOICE_SIGNAL_LLM_MIN_CONFIDENCE", "0.62")
+)
+VOICE_SIGNAL_LLM_MAX_WORDS = int(
+    os.getenv("VOICE_SIGNAL_LLM_MAX_WORDS", "28")
+)
+
 # Supermemory AI integration
 SUPERMEMORY_API_KEY = os.getenv("SUPERMEMORY_API_KEY")
 

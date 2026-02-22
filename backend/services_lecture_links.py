@@ -198,26 +198,19 @@ def _parse_json_response(raw: str) -> Dict[str, Any]:
 
 
 def _call_llm(prompt: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        import openai
-    except ImportError as e:
-        raise RuntimeError("OpenAI library not installed") from e
+    from services_model_router import model_router, TASK_EXTRACT
+    if not model_router.client:
+        raise RuntimeError("OpenAI client not configured (check OPENAI_API_KEY)")
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OpenAI API key not configured")
-
-    client = openai.OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=os.getenv("LECTURE_LINK_MODEL", "gpt-4o-mini"),
+    content = model_router.completion(
+        task_type=TASK_EXTRACT,
         messages=[
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
         ],
         temperature=0.2,
         max_tokens=1400,
-    )
-    content = response.choices[0].message.content or "{}"
+    ) or "{}"
     return _parse_json_response(content)
 
 

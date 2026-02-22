@@ -7,228 +7,192 @@ Handles:
 - Concept extraction from uploaded files
 """
 
+import json
+import logging
 from typing import Optional
-from openai import OpenAI
 import base64
 import os
-from config import OPENAI_API_KEY
 
-# Initialize OpenAI client (reuse pattern from services_lecture_ingestion.py)
-client = None
-if OPENAI_API_KEY:
-    cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-    if cleaned_key and cleaned_key.startswith('sk-'):
-        try:
-            client = OpenAI(api_key=cleaned_key)
-        except Exception as e:
-            print(f"ERROR: Failed to initialize OpenAI client for resource AI: {e}")
-            client = None
-    else:
-        client = None
-else:
-    client = None
+from services_model_router import model_router, TASK_EXTRACT, TASK_SUMMARIZE
+
+logger = logging.getLogger("brain_web")
 
 
 def generate_image_caption(image_path: str, image_bytes: Optional[bytes] = None) -> Optional[str]:
     """
     Generate a caption for an image using GPT-4 Vision.
-    
+
     Args:
         image_path: Path to image file (for local storage) or storage identifier
         image_bytes: Optional image bytes (for S3/storage abstraction)
-    
+
     Returns None if OpenAI client is not available or if the API call fails.
     """
-    if not client:
+    if not model_router.client:
         return None
-    
+
     try:
         # Read image data
         if image_bytes:
             image_data = base64.b64encode(image_bytes).decode('utf-8')
-            # Try to determine format from path or default to jpeg
-            ext = os.path.splitext(image_path)[1].lower() if image_path else '.jpg'
         else:
-            # Fallback to reading from file path
             with open(image_path, "rb") as image_file:
                 image_data = base64.b64encode(image_file.read()).decode('utf-8')
-            ext = os.path.splitext(image_path)[1].lower()
-        
+
         # Determine image format from file extension
-        ext = os.path.splitext(image_path)[1].lower()
-        if ext in ['.jpg', '.jpeg']:
-            image_format = 'image/jpeg'
-        elif ext == '.png':
-            image_format = 'image/png'
-        elif ext == '.gif':
-            image_format = 'image/gif'
-        elif ext == '.webp':
-            image_format = 'image/webp'
-        else:
-            image_format = 'image/jpeg'  # default
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Using gpt-4o-mini for cost efficiency
+        ext = os.path.splitext(image_path)[1].lower() if image_path else '.jpg'
+        image_format_map = {
+            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+            '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+        }
+        image_format = image_format_map.get(ext, 'image/jpeg')
+
+        caption = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "text",
-                            "text": "Describe this image in 1-2 sentences. Focus on what concepts, diagrams, or information it contains that would be useful for a knowledge graph."
+                            "text": "Describe this image in 1-2 sentences. Focus on what concepts, diagrams, or information it contains that would be useful for a knowledge graph.",
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{image_format};base64,{image_data}"
-                            }
-                        }
-                    ]
+                            "image_url": {"url": f"data:{image_format};base64,{image_data}"},
+                        },
+                    ],
                 }
             ],
             max_tokens=200,
             temperature=0.3,
         )
-        
-        caption = response.choices[0].message.content
         return caption.strip() if caption else None
-        
+
     except Exception as e:
-        print(f"Error generating image caption: {e}")
+        logger.error(f"Error generating image caption: {e}")
         return None
 
 
 def extract_pdf_text(pdf_path: str, pdf_bytes: Optional[bytes] = None) -> Optional[str]:
     """
     Extract text from a PDF file.
-    
+
     Args:
         pdf_path: Path to PDF file (for local storage) or storage identifier
         pdf_bytes: Optional PDF bytes (for S3/storage abstraction)
-    
+
     Returns None if extraction fails.
     """
     try:
         import PyPDF2
         import io
-        
+
         if pdf_bytes:
-            # Use bytes directly
             pdf_file = io.BytesIO(pdf_bytes)
             pdf_reader = PyPDF2.PdfReader(pdf_file)
         else:
-            # Fallback to reading from file path
             with open(pdf_path, 'rb') as file:
                 pdf_reader = PyPDF2.PdfReader(file)
-        
+
         text_parts = []
-        
-        # Extract text from each page
         for page_num, page in enumerate(pdf_reader.pages):
             try:
                 text = page.extract_text()
                 if text:
                     text_parts.append(text)
             except Exception as e:
-                print(f"Error extracting text from page {page_num + 1}: {e}")
+                logger.warning(f"Error extracting text from page {page_num + 1}: {e}")
                 continue
-        
+
         full_text = "\n\n".join(text_parts)
         return full_text if full_text.strip() else None
-        
+
     except ImportError:
-        print("PyPDF2 not installed. Install with: pip install PyPDF2")
+        logger.error("PyPDF2 not installed. Install with: pip install PyPDF2")
         return None
     except Exception as e:
-        print(f"Error extracting PDF text: {e}")
+        logger.error(f"Error extracting PDF text: {e}")
         return None
 
 
 def summarize_pdf_text(text: str) -> Optional[str]:
     """
     Generate a summary/caption for PDF text using LLM.
-    
+
     Returns None if OpenAI client is not available or if the API call fails.
     """
-    if not client:
+    if not model_router.client:
         return None
-    
+
     try:
-        # Truncate text if too long (GPT-4o-mini has token limits)
-        max_chars = 8000  # Roughly 2000 tokens
+        max_chars = 8000
         if len(text) > max_chars:
             text = text[:max_chars] + "..."
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+
+        summary = model_router.completion(
+            task_type=TASK_SUMMARIZE,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that summarizes documents. Create a concise 1-2 sentence summary focusing on key concepts and information that would be useful for a knowledge graph."
+                    "content": "You are a helpful assistant that summarizes documents. Create a concise 1-2 sentence summary focusing on key concepts and information that would be useful for a knowledge graph.",
                 },
                 {
                     "role": "user",
-                    "content": f"Summarize this document:\n\n{text}"
-                }
+                    "content": f"Summarize this document:\n\n{text}",
+                },
             ],
             max_tokens=200,
             temperature=0.3,
         )
-        
-        summary = response.choices[0].message.content
         return summary.strip() if summary else None
-        
+
     except Exception as e:
-        print(f"Error summarizing PDF text: {e}")
+        logger.error(f"Error summarizing PDF text: {e}")
         return None
 
 
 def extract_concepts_from_text(text: str) -> Optional[list]:
     """
     Extract key concepts mentioned in text using LLM.
-    
+
     Returns a list of concept names, or None if extraction fails.
     This can be used to suggest which concepts to link the resource to.
     """
-    if not client:
+    if not model_router.client:
         return None
-    
+
     try:
-        # Truncate text if too long
         max_chars = 4000
         if len(text) > max_chars:
             text = text[:max_chars] + "..."
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+
+        raw = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that extracts key concepts from text. Return a JSON array of concept names (strings) that are mentioned in the text. Focus on technical concepts, tools, frameworks, or important ideas."
+                    "content": 'You are a helpful assistant that extracts key concepts from text. Return a JSON array of concept names (strings) that are mentioned in the text. Focus on technical concepts, tools, frameworks, or important ideas.',
                 },
                 {
                     "role": "user",
-                    "content": f"Extract key concepts from this text:\n\n{text}\n\nReturn only a JSON array of concept names, e.g. [\"Docker\", \"Microservices\", \"API Gateway\"]"
-                }
+                    "content": f'Extract key concepts from this text:\n\n{text}\n\nReturn only a JSON array of concept names, e.g. ["Docker", "Microservices", "API Gateway"]',
+                },
             ],
             max_tokens=300,
             temperature=0.2,
         )
-        
-        import json
-        concepts_str = response.choices[0].message.content.strip()
-        # Try to parse JSON from the response
-        concepts_str = concepts_str.strip()
+
+        concepts_str = (raw or "").strip()
         if concepts_str.startswith('```'):
-            # Remove markdown code blocks
             concepts_str = concepts_str.split('```')[1]
             if concepts_str.startswith('json'):
                 concepts_str = concepts_str[4:]
         concepts_str = concepts_str.strip()
-        
+
         concepts = json.loads(concepts_str)
         return concepts if isinstance(concepts, list) else None
-        
+
     except Exception as e:
-        print(f"Error extracting concepts from text: {e}")
+        logger.error(f"Error extracting concepts from text: {e}")
         return None

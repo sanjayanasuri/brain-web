@@ -11,6 +11,7 @@ import { listGraphs, type GraphSummary } from '../../api-client';
 import { useOptimizedNavigation, routePrefetchers, quickNav, useNavigationShortcuts, optimizedStorage } from '../../lib/navigationUtils';
 import { useEnhancedNavigation } from '../../lib/navigationHelpers';
 import { clearChatStateIfAvailable, closeMobileSidebarIfAvailable, registerMobileSidebarCloseFunction } from '../../lib/globalNavigationState';
+import { getUserProfile, getUIPreferences, updateUIPreferences as saveUIPreferences } from '../../api/preferences';
 
 
 interface SessionDrawerProps {
@@ -116,29 +117,15 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
 
         // Load user profile
         try {
-          const profileRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/preferences/user-profile`, {
-            headers: {
-              'Authorization': `Bearer ${localStorage.getItem('brain-web-token') || ''}`
-            }
-          });
-          if (profileRes.ok) {
-            const profileData = await profileRes.json();
-            setUserProfile(profileData);
-          }
+          const profileData = await getUserProfile();
+          setUserProfile(profileData);
         } catch (e) {
           console.warn('Failed to load user profile:', e);
         }
         // Load UI preferences
         try {
-          const uiRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/preferences/ui`, {
-            headers: {
-              'Authorization': `Bearer ${localStorage.getItem('brain-web-token') || ''}`
-            }
-          });
-          if (uiRes.ok) {
-            const uiData = await uiRes.json();
-            setUIPreferences(uiData);
-          }
+          const uiData = await getUIPreferences();
+          setUIPreferences(uiData);
         } catch (e) {
           console.warn('Failed to load UI preferences:', e);
         }
@@ -155,14 +142,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const handleUpdateUIPreferences = async (newPrefs: any) => {
     setUIPreferences(newPrefs);
     try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/preferences/ui`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('brain-web-token') || ''}`
-        },
-        body: JSON.stringify(newPrefs)
-      });
+      await saveUIPreferences(newPrefs);
     } catch (e) {
       console.error('Failed to save UI preferences:', e);
     }
@@ -394,6 +374,14 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
               >
                 <span style={{ fontWeight: pathname === '/lecture-studio' ? '600' : '400' }}>Studio</span>
               </Link>
+              <Link
+                href="/freeform-canvas"
+                onClick={() => setIsMobileSidebarOpen(false)}
+                className={`nav-link ${pathname === '/freeform-canvas' ? 'active' : ''}`}
+                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '8px', textDecoration: 'none', color: 'var(--ink)' }}
+              >
+                <span style={{ fontWeight: pathname === '/freeform-canvas' ? '600' : '400' }}>Freeform</span>
+              </Link>
             </div>
           </div>
         </div>
@@ -483,6 +471,23 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
         >
           U
         </Link>
+        <Link
+          href="/freeform-canvas"
+          style={{
+            padding: '10px',
+            borderRadius: '10px',
+            color: pathname === '/freeform-canvas' ? 'var(--accent)' : 'var(--muted)',
+            fontSize: '22px',
+            textDecoration: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: pathname === '/freeform-canvas' ? 'var(--surface)' : 'transparent',
+          }}
+          title="Freeform"
+        >
+          F
+        </Link>
       </div>
     );
   }
@@ -541,6 +546,18 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
           >
             <span>Studio</span>
           </Link>
+          <Link
+            href="/freeform-canvas"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '10px',
+              textDecoration: 'none', color: pathname === '/freeform-canvas' ? 'var(--accent)' : 'var(--ink)',
+              background: pathname === '/freeform-canvas' ? 'var(--surface)' : 'transparent',
+              fontWeight: pathname === '/freeform-canvas' ? '600' : '400',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <span>Freeform</span>
+          </Link>
         </div>
       </div>
 
@@ -571,4 +588,3 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     </div>
   );
 }
-

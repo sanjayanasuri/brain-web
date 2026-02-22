@@ -464,40 +464,83 @@ export interface FocusArea {
 export interface UserProfile {
     id: string;
     name: string;
-    background: string[];
-    interests: string[];
-    weak_spots: string[];
+    email?: string | null;
+    signup_date?: string | null;
+
+    // Explicit User-Provided Info
+    learning_goals: string;
+    domain_background: string;
+    learning_style?: string;
+
+    // Inferred Data
+    inferred_knowledge_tags: Record<string, string>;
+    weak_areas: string[];
+
+    // State & Preferences
     learning_preferences: Record<string, any>;
+    ui_preferences: Record<string, any>;
+    interests: string[];
 }
 
-export type AudienceMode = 'default' | 'eli5' | 'ceo_pitch' | 'recruiter_interview' | 'technical';
+// ---------------------------------------------------------------------------
+// Tutor Profile types
+// ---------------------------------------------------------------------------
+
+/** How vocabulary-dense and technically complex explanations are. */
+export type ComprehensionLevel = 'beginner' | 'intermediate' | 'advanced' | 'expert';
+
+/** Overall communication register for responses. */
+export type Tone = 'casual' | 'balanced' | 'formal' | 'encouraging';
+
+/** How fast the tutor advances through material. */
+export type Pacing = 'slow' | 'moderate' | 'fast';
+
+/** Conversational structure / who leads the dialogue. */
+export type TurnTaking = 'socratic' | 'lecture' | 'dialogic' | 'on_demand';
+
+/** Preferred response density / length. */
+export type ResponseLength = 'concise' | 'balanced' | 'detailed';
+
+/** Voice-specific verbosity (overrides response_length in TTS mode). */
+export type VoiceSpeechDensity = 'sparse' | 'normal' | 'dense';
+
+// Legacy types kept for backward compatibility
 export type ResponseMode = 'compact' | 'hint' | 'normal' | 'deep';
 export type AskQuestionPolicy = 'never' | 'at_most_one' | 'ok';
-export type Pacing = 'slow' | 'normal' | 'fast';
-export type TurnTaking = 'normal' | 'no_interrupt';
-export type VoiceId = 'neutral' | 'friendly' | 'direct' | 'playful';
 
 export interface TutorProfile {
     version: string;
-    audience_mode: AudienceMode;
-    response_mode: ResponseMode;
-    ask_question_policy: AskQuestionPolicy;
-    end_with_next_step: boolean;
+
+    // Free-form override — takes precedence over all structured fields
+    custom_instructions?: string | null;
+
+    // Core shared settings
+    comprehension_level: ComprehensionLevel;
+    tone: Tone;
     pacing: Pacing;
     turn_taking: TurnTaking;
+    response_length: ResponseLength;
+
+    // Voice-mode overrides
+    voice_tone_override?: Tone | null;
+    voice_speech_density?: VoiceSpeechDensity | null;
+
+    // Behavioral flags
     no_glazing: boolean;
-    voice_id: VoiceId;
+    end_with_next_step: boolean;
 }
 
 export interface TutorProfilePatch {
-    audience_mode?: AudienceMode;
-    response_mode?: ResponseMode;
-    ask_question_policy?: AskQuestionPolicy;
-    end_with_next_step?: boolean;
+    custom_instructions?: string | null;
+    comprehension_level?: ComprehensionLevel;
+    tone?: Tone;
     pacing?: Pacing;
     turn_taking?: TurnTaking;
+    response_length?: ResponseLength;
+    voice_tone_override?: Tone | null;
+    voice_speech_density?: VoiceSpeechDensity | null;
     no_glazing?: boolean;
-    voice_id?: VoiceId;
+    end_with_next_step?: boolean;
 }
 
 export interface ReminderPreferences {

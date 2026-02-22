@@ -3,29 +3,17 @@ Service for drafting follow-up lectures using LLM and teaching style.
 """
 import json
 import re
+import logging
 from typing import List, Dict, Any, Optional
 from neo4j import Session
-from openai import OpenAI
-from config import OPENAI_API_KEY
+from services_model_router import model_router, TASK_SYNTHESIS
 
 from services_graph import get_concept_by_name, get_neighbors_with_relationships, _normalize_concept_from_db
 from services_lectures import get_lecture_by_id
 from models import LectureSegment, Concept, Analogy
 
-# Initialize OpenAI client
-client = None
-if OPENAI_API_KEY:
-    cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-    if cleaned_key and cleaned_key.startswith('sk-'):
-        try:
-            client = OpenAI(api_key=cleaned_key)
-        except Exception as e:
-            print(f"ERROR: Failed to initialize OpenAI client for lecture draft: {e}")
-            client = None
-    else:
-        client = None
-else:
-    print("WARNING: OPENAI_API_KEY not found - lecture drafting will not work")
+logger = logging.getLogger("brain_web")
+TASK_SYNTHESIZE = TASK_SYNTHESIS
 
 
 def draft_next_lecture(
@@ -46,8 +34,9 @@ def draft_next_lecture(
     Returns:
         Dict with outline, sections, and suggested_analogies
     """
-    if not client:
-        raise ValueError("OpenAI client not initialized. Check OPENAI_API_KEY.")
+    if not model_router.client:
+        raise ValueError("OpenAI client not initialised. Check OPENAI_API_KEY.")
+
     
     # Get teaching style
     # Use default teaching style since the extractor service was removed
@@ -156,23 +145,18 @@ Return ONLY valid JSON matching this schema:
 Do not include any text before or after the JSON."""
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        content = model_router.completion(
+            task_type=TASK_SYNTHESIZE,
             messages=[
                 {
                     "role": "system",
                     "content": "You are a helpful teaching assistant that drafts lecture outlines matching the user's exact teaching style.",
                 },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
+                {"role": "user", "content": prompt},
             ],
             temperature=0.7,
             max_tokens=1200,
         )
-        
-        content = response.choices[0].message.content
         # Try to extract JSON from response
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
@@ -191,8 +175,8 @@ Do not include any text before or after the JSON."""
         return result
         
     except json.JSONDecodeError as e:
-        print(f"ERROR: Failed to parse LLM response as JSON: {e}")
-        print(f"Response content: {content[:500]}")
+        logger.error(f"Failed to parse LLM response as JSON: {e}")
+
         # Return a fallback structure
         return {
             "outline": [
@@ -210,5 +194,5 @@ Do not include any text before or after the JSON."""
             "suggested_analogies": [],
         }
     except Exception as e:
-        print(f"ERROR: Failed to draft lecture: {e}")
+        logger.error(f"Failed to draft lecture: {e}")
         raise ValueError(f"Failed to draft lecture: {str(e)}")

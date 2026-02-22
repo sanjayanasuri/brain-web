@@ -273,6 +273,36 @@ function LectureStudioPageInner() {
 
             <div style={{ display: 'flex', gap: '12px' }}>
               <button
+                onClick={() => router.push('/freeform-canvas')}
+                style={{
+                  padding: '12px 24px',
+                  background: 'var(--surface)',
+                  color: 'var(--ink)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '14px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: 'var(--shadow)',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-1px)';
+                  e.currentTarget.style.background = 'var(--panel)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.background = 'var(--surface)';
+                }}
+              >
+                <span aria-hidden>🎨</span>
+                Freeform Canvas
+              </button>
+
+              <button
                 onClick={() => router.push('/lecture-editor')}
                 style={{
                   padding: '12px 24px',

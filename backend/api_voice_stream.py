@@ -23,6 +23,11 @@ from cache_utils import get_cached, invalidate_cache, set_cached
 from db_neo4j import neo4j_session
 from services_tutor_profile import get_tutor_profile as get_tutor_profile_service
 from services_voice_agent import VoiceAgentOrchestrator
+from services_voice_style_profile import (
+    get_adaptive_vad_config_for_user,
+    observe_voice_interrupt,
+    observe_voice_turn,
+)
 from services_stt import transcribe_wav_bytes, transcribe_webm_bytes, wav_bytes_from_pcm16
 from services_tts import (
     map_tutor_voice_id_to_openai_voice,
@@ -290,6 +295,25 @@ async def voice_stream_ws(websocket: WebSocket):
         await _send_json({"type": "transcript", "text": transcript, "final": True})
         if not transcript:
             return
+
+        # Learn per-user speaking style from this utterance (best effort, non-blocking).
+        try:
+            span_ms: Optional[int] = None
+            if isinstance(start_ms, int) and isinstance(end_ms, int) and end_ms > start_ms:
+                span_ms = int(end_ms - start_ms)
+            asyncio.create_task(
+                asyncio.to_thread(
+                    observe_voice_turn,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    transcript=transcript,
+                    speech_ms=span_ms,
+                    utterance_span_ms=span_ms,
+                )
+            )
+        except Exception:
+            pass
+
         if pipeline != "agent":
             return
 
@@ -361,6 +385,23 @@ async def voice_stream_ws(websocket: WebSocket):
         await _send_json({"type": "transcript", "text": transcript, "final": True})
         if not transcript:
             return
+
+        # Learn per-user speaking style from this utterance (best effort, non-blocking).
+        try:
+            span_ms = max(1, int(utt.end_epoch_ms) - int(utt.start_epoch_ms))
+            asyncio.create_task(
+                asyncio.to_thread(
+                    observe_voice_turn,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    transcript=transcript,
+                    speech_ms=int(utt.speech_ms),
+                    utterance_span_ms=int(span_ms),
+                )
+            )
+        except Exception:
+            pass
+
         if pipeline != "agent":
             return
 
@@ -588,6 +629,29 @@ async def voice_stream_ws(websocket: WebSocket):
                     if str(obj.get("vad_mode") or "").strip().lower() == "server":
                         vad_mode = "server"
                         vad_config = VadConfig.from_dict(obj.get("vad_config") if isinstance(obj.get("vad_config"), dict) else None)
+                        # Apply per-account adaptive VAD overrides when enough data exists.
+                        try:
+                            learned_vad = await asyncio.to_thread(
+                                get_adaptive_vad_config_for_user,
+                                user_id=user_id,
+                                tenant_id=tenant_id,
+                            )
+                            if learned_vad:
+                                merged = {
+                                    "sample_rate_hz": vad_config.sample_rate_hz,
+                                    "frame_ms": vad_config.frame_ms,
+                                    "speech_threshold": vad_config.speech_threshold,
+                                    "end_silence_ms": vad_config.end_silence_ms,
+                                    "min_speech_ms": vad_config.min_speech_ms,
+                                    "pre_roll_ms": vad_config.pre_roll_ms,
+                                    "max_utterance_ms": vad_config.max_utterance_ms,
+                                    "engine": vad_config.engine,
+                                    "silero_model_path": vad_config.silero_model_path,
+                                }
+                                merged.update(learned_vad)
+                                vad_config = VadConfig.from_dict(merged)
+                        except Exception:
+                            pass
                         # Ensure background worker/decoder is started once we have a session.
                     if pipeline == "agent" and not session_id:
                         try:
@@ -642,6 +706,13 @@ async def voice_stream_ws(websocket: WebSocket):
                             client_end_ms=int(ce) if ce is not None else None,
                         )
                 elif mtype == "interrupt":
+                    # Learn barge-in tendency (best effort).
+                    try:
+                        asyncio.create_task(
+                            asyncio.to_thread(observe_voice_interrupt, user_id=user_id, tenant_id=tenant_id)
+                        )
+                    except Exception:
+                        pass
                     _interrupt_event.set()  # Signal immediately; _handle_interrupt will also set it
                     await _handle_interrupt()
                 elif mtype == "ping":

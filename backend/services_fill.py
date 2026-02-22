@@ -163,9 +163,10 @@ def generate_mermaid_diagram(topic: str) -> Tuple[str, List[str]]:
         return _fallback_mermaid(topic), ["OPENAI_API_KEY not configured; generated a diagram skeleton."]
 
     try:
-        from openai import OpenAI
+        from services_model_router import model_router, TASK_EXTRACT
+        if not model_router.client:
+            return _fallback_mermaid(topic), ["OPENAI_API_KEY not configured; generated a diagram skeleton."]
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
         prompt = f"""Create a Mermaid flowchart that explains: {topic}
 
 Requirements:
@@ -174,8 +175,8 @@ Requirements:
 - Keep nodes short (<= 8 words).
 - Include 6-12 nodes max.
 """
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+        text = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {"role": "system", "content": "You generate Mermaid diagrams. Output only Mermaid code."},
                 {"role": "user", "content": prompt},
@@ -183,7 +184,7 @@ Requirements:
             temperature=0.2,
             max_tokens=500,
         )
-        text = (resp.choices[0].message.content or "").strip()
+        text = (text or "").strip()
         # Strip accidental fences
         if text.startswith("```"):
             text = re.sub(r"^```[a-zA-Z]*\n?", "", text).strip()

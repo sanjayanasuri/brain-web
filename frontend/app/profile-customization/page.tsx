@@ -28,6 +28,18 @@ import { getLastSession } from '../lib/sessionState';
 const GRAPH_PREFETCH_LIMITS = { nodes: 200, edges: 400 };
 const GRAPH_PREFETCH_STALE_MS = 60 * 1000;
 
+type TutorProfileCompat = TutorProfile & {
+  voice_id?: string | null;
+  audience_mode?: string | null;
+  response_mode?: string | null;
+  ask_question_policy?: string | null;
+};
+
+type UserProfileCompat = UserProfile & {
+  background?: string[] | null;
+  weak_spots?: string[] | null;
+};
+
 export default function ControlPanelPage() {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(true);
@@ -36,8 +48,8 @@ export default function ControlPanelPage() {
   const [styleWrapper, setStyleWrapper] =
     useState<ResponseStyleProfileWrapper | null>(null);
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [tutorProfile, setTutorProfileState] = useState<TutorProfile | null>(
+  const [userProfile, setUserProfile] = useState<UserProfileCompat | null>(null);
+  const [tutorProfile, setTutorProfileState] = useState<TutorProfileCompat | null>(
     null,
   );
 
@@ -296,7 +308,7 @@ export default function ControlPanelPage() {
                   Voice tone
                   <select
                     className="chat-input"
-                    value={tutorProfile.voice_id}
+                    value={tutorProfile.voice_id ?? 'neutral'}
                     onChange={e =>
                       setTutorProfileState(prev =>
                         prev ? { ...prev, voice_id: e.target.value as any } : prev,
@@ -314,7 +326,7 @@ export default function ControlPanelPage() {
                   Audience mode
                   <select
                     className="chat-input"
-                    value={tutorProfile.audience_mode}
+                    value={tutorProfile.audience_mode ?? 'default'}
                     onChange={e =>
                       setTutorProfileState(prev =>
                         prev ? { ...prev, audience_mode: e.target.value as any } : prev,
@@ -334,7 +346,7 @@ export default function ControlPanelPage() {
                     Response depth
                     <select
                       className="chat-input"
-                      value={tutorProfile.response_mode}
+                      value={tutorProfile.response_mode ?? 'normal'}
                       onChange={e =>
                         setTutorProfileState(prev =>
                           prev ? { ...prev, response_mode: e.target.value as any } : prev,
@@ -351,7 +363,7 @@ export default function ControlPanelPage() {
                     Ask-question policy
                     <select
                       className="chat-input"
-                      value={tutorProfile.ask_question_policy}
+                      value={tutorProfile.ask_question_policy ?? 'ok'}
                       onChange={e =>
                         setTutorProfileState(prev =>
                           prev ? { ...prev, ask_question_policy: e.target.value as any } : prev,
@@ -600,7 +612,7 @@ export default function ControlPanelPage() {
                   Background (comma-separated)
                   <input
                     className="chat-input"
-                    value={listToString(userProfile.background)}
+                    value={listToString(userProfile.background ?? [])}
                     onChange={e =>
                       setUserProfile(prev =>
                         prev
@@ -634,7 +646,7 @@ export default function ControlPanelPage() {
                   Weak spots (comma-separated)
                   <input
                     className="chat-input"
-                    value={listToString(userProfile.weak_spots)}
+                    value={listToString(userProfile.weak_spots ?? [])}
                     onChange={e =>
                       setUserProfile(prev =>
                         prev

@@ -7,8 +7,7 @@ optimal study plans.
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from neo4j import Session
-from openai import OpenAI
-from config import OPENAI_API_KEY
+from services_model_router import model_router, TASK_RECOMMEND
 from services_study_analytics import StudyRecommendation, UpcomingExam
 from services_branch_explorer import get_active_graph_context, ensure_graph_scoping_initialized
 from services_graph import get_concept_by_id, get_concept_by_name
@@ -19,21 +18,6 @@ import logging
 
 logger = logging.getLogger("brain_web")
 
-# Initialize OpenAI client
-client = None
-if OPENAI_API_KEY:
-    cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-    if cleaned_key and cleaned_key.startswith('sk-'):
-        try:
-            client = OpenAI(api_key=cleaned_key)
-            print(f"✓ OpenAI client initialized for study recommendations")
-        except Exception as e:
-            print(f"ERROR: Failed to initialize OpenAI client for study recommendations: {e}")
-            client = None
-    else:
-        client = None
-else:
-    print("WARNING: OPENAI_API_KEY not found - LLM recommendations will not work")
 
 
 def generate_study_plan_with_llm(
@@ -56,8 +40,9 @@ def generate_study_plan_with_llm(
     Returns:
         List of StudyRecommendation objects
     """
-    if not client:
+    if not model_router.client:
         return []
+
     
     ensure_graph_scoping_initialized(session)
     if not graph_id or not branch_id:
@@ -159,23 +144,23 @@ Return ONLY valid JSON matching this schema:
 Focus on actionable, prioritized recommendations. Do not include any text before or after the JSON."""
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        raw = model_router.completion(
+            task_type=TASK_RECOMMEND,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an expert study planning assistant that creates personalized, prioritized study recommendations based on exam deadlines, study patterns, and knowledge gaps."
+                    "content": "You are an expert study planning assistant that creates personalized, prioritized study recommendations based on exam deadlines, study patterns, and knowledge gaps.",
                 },
                 {
                     "role": "user",
-                    "content": prompt
-                }
+                    "content": prompt,
+                },
             ],
             temperature=0.3,
             max_tokens=1500,
         )
-        
-        content = response.choices[0].message.content.strip()
+
+        content = (raw or "").strip()
         
         # Extract JSON
         json_match = re.search(r'\{.*\}', content, re.DOTALL)

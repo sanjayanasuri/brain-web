@@ -13,7 +13,7 @@ from services_graph import (
     get_all_concepts,
 )
 from services_resources import get_resources_for_concept
-from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
+from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context, get_request_graph_identity
 from services_logging import log_graphrag_event
 
 
@@ -766,6 +766,23 @@ def retrieve_graphrag_context(
     
     # Relevant Concept Details section
     if concepts:
+        req_user_id, req_tenant_id = get_request_graph_identity()
+        tenant_id_for_resources = str(req_tenant_id).strip() if req_tenant_id else None
+        user_id_for_resources = str(req_user_id).strip() if req_user_id else None
+        if not tenant_id_for_resources:
+            graph_ctx_id, _ = get_active_graph_context(session)
+            tenant_rec = session.run(
+                """
+                MATCH (g:GraphSpace {graph_id: $graph_id})
+                RETURN g.tenant_id AS tenant_id
+                LIMIT 1
+                """,
+                graph_id=graph_ctx_id,
+            ).single()
+            tenant_id_for_resources = str(tenant_rec.get("tenant_id")).strip() if tenant_rec and tenant_rec.get("tenant_id") else "default"
+        if not user_id_for_resources:
+            user_id_for_resources = "system"
+
         context_parts.append("## Relevant Concept Details")
         for concept in concepts[:25]:  # Cap at 25
             context_parts.append(f"\n{concept['name']}")
@@ -776,7 +793,12 @@ def retrieve_graphrag_context(
             
             # Include resources attached to this concept
             try:
-                resources = get_resources_for_concept(session, concept["node_id"])
+                resources = get_resources_for_concept(
+                    session,
+                    concept["node_id"],
+                    tenant_id=tenant_id_for_resources,
+                    user_id=user_id_for_resources,
+                )
                 if resources:
                     for resource in resources[:2]:
                         if resource.caption:

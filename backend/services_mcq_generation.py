@@ -11,7 +11,7 @@ from neo4j import Session
 from services_web_search import search_and_fetch
 from prompts_mcq import MCQ_GENERATION_PROMPT
 from models.study import TaskSpec, ContextPack, Excerpt
-from services_task_processor import _get_llm_client
+from services_model_router import model_router, TASK_EXTRACT
 
 logger = logging.getLogger("brain_web")
 
@@ -90,28 +90,26 @@ async def generate_mcq_for_topic(
         
         full_context_text += f"\n--- Source: {title} ---\n{content}\n"
 
-    # 3. Call LLM to Generate MCQ
-    client = _get_llm_client()
-    if not client:
+    if not model_router.client:
         raise Exception("OpenAI client not configured. Cannot generate MCQ.")
-        
+
     prompt = MCQ_GENERATION_PROMPT.format(
         context=full_context_text[:12000], # Cap context for token limits
         topic=topic
     )
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini", # Use mini for fast generation
+        raw = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {"role": "system", "content": "You are a specialized MCQ generation engine. Return only JSON."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             response_format={"type": "json_object"},
             temperature=0.7,
         )
-        
-        mcq_data = json.loads(response.choices[0].message.content)
+
+        mcq_data = json.loads(raw)
         
         # 4. Construct TaskSpec
         task_id = f"TASK_MCQ_{uuid.uuid4().hex[:8].upper()}"

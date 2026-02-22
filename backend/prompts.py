@@ -20,6 +20,7 @@ For each concept, create a node with:
 - type: e.g. "concept", "tool", "framework", "protocol", "pattern", "example"
 - examples: concrete instances or tools, if mentioned
 - tags: 2–5 simple tags to help group related concepts
+- aliases: 1-3 synonyms, acronyms (e.g., "RHEL" for "Red Hat Enterprise Linux"), or common variations
 
 2. Identify relationships between concepts and express them as directed edges:
 - source_name: name of the source concept
@@ -43,7 +44,7 @@ For each concept, create a node with:
 - Assign every extracted Concept to its most specific Subtopic.
 - This helps build a "Table of Contents" for the knowledge graph.
 
-Focus on meaningful, reusable concepts. Do not create a node for every random word. Group ideas when reasonable.
+Focus on meaningful, technical concepts, organizations, and specific tools mentioned. Even for short texts, identify the core subjects and their attributes. Do not create a node for generic filler words, but prioritize technical precision for entities described. Group ideas when reasonable but keep distinct technical components separate.
 
 Return ONLY valid JSON matching the following schema:
 {
@@ -55,7 +56,8 @@ Return ONLY valid JSON matching the following schema:
       "domain": string (optional),
       "type": string (optional, default "concept"),
       "examples": [string] (optional),
-      "tags": [string] (optional)
+      "tags": [string] (optional),
+      "aliases": [string] (optional)
     }
   ],
   "links": [

@@ -27,14 +27,26 @@ from cache_utils import get_cached, set_cached, invalidate_cache_pattern
 router = APIRouter(prefix="/graphs", tags=["graphs"])
 
 
+def _require_graph_identity(request: Request) -> tuple[str, str]:
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+    return str(user_id), str(tenant_id)
+
+
 @router.get("/", response_model=GraphListResponse)
 def list_graphs_endpoint(
     request: Request,
     session=Depends(get_neo4j_session),
 ):
-    tenant_id = getattr(request.state, "tenant_id", None)
+    user_id, tenant_id = _require_graph_identity(request)
     graphs = list_graphs(session, tenant_id=tenant_id)
-    active_graph_id, active_branch_id = get_active_graph_context(session, tenant_id=tenant_id)
+    active_graph_id, active_branch_id = get_active_graph_context(
+        session,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     return {
         "graphs": graphs,
         "active_graph_id": active_graph_id,
@@ -49,7 +61,7 @@ def create_graph_endpoint(
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    tenant_id = getattr(request.state, "tenant_id", None)
+    user_id, tenant_id = _require_graph_identity(request)
     g = create_graph(
         session,
         payload.name,
@@ -60,7 +72,12 @@ def create_graph_endpoint(
         intent=payload.intent,
         tenant_id=tenant_id,
     )
-    active_graph_id, active_branch_id = set_active_graph(session, g["graph_id"])
+    active_graph_id, active_branch_id = set_active_graph(
+        session,
+        g["graph_id"],
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     return {
         "active_graph_id": active_graph_id,
         "active_branch_id": active_branch_id,
@@ -76,7 +93,13 @@ def select_graph_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        active_graph_id, active_branch_id = set_active_graph(session, graph_id)
+        user_id, tenant_id = _require_graph_identity(request)
+        active_graph_id, active_branch_id = set_active_graph(
+            session,
+            graph_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         return {
             "active_graph_id": active_graph_id,
             "active_branch_id": active_branch_id,
@@ -95,8 +118,13 @@ def rename_graph_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        g = rename_graph(session, graph_id, payload.name)
-        active_graph_id, active_branch_id = get_active_graph_context(session)
+        user_id, tenant_id = _require_graph_identity(request)
+        g = rename_graph(session, graph_id, payload.name, tenant_id=tenant_id)
+        active_graph_id, active_branch_id = get_active_graph_context(
+            session,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         return {
             "active_graph_id": active_graph_id,
             "active_branch_id": active_branch_id,
@@ -114,7 +142,8 @@ def delete_graph_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        delete_graph(session, graph_id)
+        _, tenant_id = _require_graph_identity(request)
+        delete_graph(session, graph_id, tenant_id=tenant_id)
         return {"status": "ok"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -137,18 +166,25 @@ def get_graph_overview_endpoint(
     Returns a sampled subset of the graph for fast initial loading.
     Cached for 2 minutes to improve performance.
     """
+    user_id, tenant_id = _require_graph_identity(request)
     # Try cache first (cache key includes all parameters)
-    cache_key = ("graph_overview", graph_id, limit_nodes, limit_edges, include_proposed)
+    cache_key = ("graph_overview", tenant_id, graph_id, limit_nodes, limit_edges, include_proposed)
     cached_result = get_cached(*cache_key, ttl_seconds=120)
     if cached_result is not None:
         return cached_result
     
     try:
         # Set the active graph context
-        set_active_graph(session, graph_id)
+        set_active_graph(session, graph_id, tenant_id=tenant_id, user_id=user_id)
         ensure_graph_scoping_initialized(session)
         
-        result = get_graph_overview(session, limit_nodes=limit_nodes, limit_edges=limit_edges, include_proposed=include_proposed)
+        result = get_graph_overview(
+            session,
+            limit_nodes=limit_nodes,
+            limit_edges=limit_edges,
+            include_proposed=include_proposed,
+            tenant_id=tenant_id,
+        )
         response = {
             "nodes": result["nodes"],
             "edges": result["edges"],
@@ -158,7 +194,11 @@ def get_graph_overview_endpoint(
         # Log for debugging if no nodes found
         if len(response["nodes"]) == 0:
             import sys
-            graph_id_actual, branch_id_actual = get_active_graph_context(session)
+            graph_id_actual, branch_id_actual = get_active_graph_context(
+                session,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
             print(f"[DEBUG] Graph {graph_id} overview returned 0 nodes (active context: graph_id={graph_id_actual}, branch_id={branch_id_actual})", file=sys.stderr)
             # DO NOT CACHE empty results to avoid sticking in a bad state if data is loading/ingesting
         else:
@@ -187,24 +227,30 @@ def get_graph_neighbors_endpoint(
     Returns the center node and its neighbors with relationships.
     Cached for 1 minute to improve performance.
     """
+    user_id, tenant_id = _require_graph_identity(request)
     # Try cache first
-    cache_key = ("graph_neighbors", graph_id, concept_id, hops, limit, include_proposed)
+    cache_key = ("graph_neighbors", tenant_id, graph_id, concept_id, hops, limit, include_proposed)
     cached_result = get_cached(*cache_key, ttl_seconds=60)
     if cached_result is not None:
         return cached_result
     
     try:
         # Set the active graph context
-        set_active_graph(session, graph_id)
+        set_active_graph(session, graph_id, tenant_id=tenant_id, user_id=user_id)
         ensure_graph_scoping_initialized(session)
         
         # Get the center node
-        center = get_concept_by_id(session, concept_id)
+        center = get_concept_by_id(session, concept_id, tenant_id=tenant_id)
         if not center:
             raise HTTPException(status_code=404, detail=f"Concept {concept_id} not found")
         
         # Get neighbors (only 1-hop for now)
-        neighbors_with_rels = get_neighbors_with_relationships(session, concept_id, include_proposed=include_proposed)
+        neighbors_with_rels = get_neighbors_with_relationships(
+            session,
+            concept_id,
+            include_proposed=include_proposed,
+            tenant_id=tenant_id,
+        )
         
         # Limit results
         if limit > 0:
@@ -255,6 +301,7 @@ def get_graph_neighbors_endpoint(
 @router.get("/{graph_id}/concepts")
 def list_graph_concepts_endpoint(
     graph_id: str,
+    request: Request,
     query: Optional[str] = Query(None, description="Search query for concept name"),
     domain: Optional[str] = Query(None, description="Filter by domain"),
     type: Optional[str] = Query(None, description="Filter by type"),
@@ -268,18 +315,23 @@ def list_graph_concepts_endpoint(
     
     Returns a paginated list of concepts with optional filters and sorting.
     """
-    cache_key = ("graphs", "concepts", graph_id, query, domain, type, sort, limit, offset)
+    user_id, tenant_id = _require_graph_identity(request)
+    cache_key = ("graphs", "concepts", tenant_id, graph_id, query, domain, type, sort, limit, offset)
     cached = get_cached(*cache_key)
     if cached:
         return cached
         
     try:
         # Set the active graph context
-        set_active_graph(session, graph_id)
+        set_active_graph(session, graph_id, tenant_id=tenant_id, user_id=user_id)
         ensure_graph_scoping_initialized(session)
         
         # Get the active graph context (should match graph_id after set_active_graph)
-        graph_id_ctx, branch_id = get_active_graph_context(session)
+        graph_id_ctx, branch_id = get_active_graph_context(
+            session,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         # Use the context graph_id to ensure consistency (in case set_active_graph adjusted it)
         # If they don't match, log it but continue with the context graph_id
         if graph_id_ctx != graph_id:

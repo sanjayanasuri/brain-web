@@ -5,7 +5,8 @@ Used for study sessions, usage tracking, and event synchronization.
 import atexit
 import logging
 import threading
-from typing import Optional
+from contextvars import ContextVar, Token
+from typing import Optional, Tuple
 
 import psycopg2
 import psycopg2.pool
@@ -28,6 +29,43 @@ _pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
 _POOL_MIN = 2
 _POOL_MAX = 20
+
+_REQUEST_DB_USER_ID: ContextVar[Optional[str]] = ContextVar("bw_request_db_user_id", default=None)
+_REQUEST_DB_TENANT_ID: ContextVar[Optional[str]] = ContextVar("bw_request_db_tenant_id", default=None)
+
+
+def set_request_db_identity(user_id: Optional[str], tenant_id: Optional[str]) -> Tuple[Token, Token]:
+    """Set request-scoped DB identity used for RLS session settings."""
+    user_token = _REQUEST_DB_USER_ID.set(str(user_id).strip() if user_id else None)
+    tenant_token = _REQUEST_DB_TENANT_ID.set(str(tenant_id).strip() if tenant_id else None)
+    return user_token, tenant_token
+
+
+def reset_request_db_identity(tokens: Tuple[Token, Token]) -> None:
+    """Reset request-scoped DB identity."""
+    user_token, tenant_token = tokens
+    _REQUEST_DB_USER_ID.reset(user_token)
+    _REQUEST_DB_TENANT_ID.reset(tenant_token)
+
+
+def get_request_db_identity() -> Tuple[Optional[str], Optional[str]]:
+    """Get request-scoped (user_id, tenant_id) for DB operations."""
+    return _REQUEST_DB_USER_ID.get(), _REQUEST_DB_TENANT_ID.get()
+
+
+def apply_rls_session_settings(cur, *, user_id: Optional[str] = None, tenant_id: Optional[str] = None) -> None:
+    """
+    Apply per-transaction session settings consumed by RLS policies.
+    Uses set_config(..., true) so the values are transaction-local.
+    """
+    req_user_id, req_tenant_id = get_request_db_identity()
+    resolved_user_id = str(user_id).strip() if user_id else (str(req_user_id).strip() if req_user_id else None)
+    resolved_tenant_id = str(tenant_id).strip() if tenant_id else (str(req_tenant_id).strip() if req_tenant_id else None)
+
+    if resolved_tenant_id:
+        cur.execute("SELECT set_config('app.tenant_id', %s, true)", (resolved_tenant_id,))
+    if resolved_user_id:
+        cur.execute("SELECT set_config('app.user_id', %s, true)", (resolved_user_id,))
 
 
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
@@ -89,6 +127,7 @@ def execute_query(
     error = False
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            apply_rls_session_settings(cur)
             cur.execute(query, params)
             result = cur.fetchall() if fetch else None
             if commit or not fetch:
@@ -122,7 +161,7 @@ def init_postgres_db():
         """
         CREATE TABLE IF NOT EXISTS users (
             user_id UUID PRIMARY KEY,
-            tenant_id UUID NOT NULL,
+            tenant_id TEXT NOT NULL,
             email VARCHAR(255) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
             full_name VARCHAR(255),
@@ -133,13 +172,32 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);",
         "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);",
+        """
+        CREATE TABLE IF NOT EXISTS tenants (
+            tenant_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            metadata JSONB DEFAULT '{}'::jsonb
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS tenant_memberships (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id TEXT NOT NULL REFERENCES tenants(tenant_id) ON DELETE CASCADE,
+            user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member', 'viewer')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (tenant_id, user_id)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_tenant_memberships_user ON tenant_memberships(user_id);",
 
         # Study Sessions Table
         """
         CREATE TABLE IF NOT EXISTS study_sessions (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id VARCHAR(255) NOT NULL,
-            tenant_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
             graph_id VARCHAR(255),
             branch_id VARCHAR(255),
             topic_id TEXT,
@@ -191,7 +249,7 @@ def init_postgres_db():
         CREATE TABLE IF NOT EXISTS voice_sessions (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id VARCHAR(255) NOT NULL,
-            tenant_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
             graph_id VARCHAR(255) NOT NULL,
             branch_id VARCHAR(255) NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -209,7 +267,7 @@ def init_postgres_db():
             id TEXT PRIMARY KEY,
             voice_session_id TEXT NOT NULL,
             user_id VARCHAR(255) NOT NULL,
-            tenant_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
             graph_id VARCHAR(255) NOT NULL,
             branch_id VARCHAR(255) NOT NULL,
             role VARCHAR(32) NOT NULL,
@@ -231,7 +289,7 @@ def init_postgres_db():
             voice_session_id TEXT NOT NULL,
             chunk_id TEXT,
             user_id VARCHAR(255) NOT NULL,
-            tenant_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
             graph_id VARCHAR(255) NOT NULL,
             branch_id VARCHAR(255) NOT NULL,
             kind VARCHAR(64) NOT NULL,
@@ -247,7 +305,7 @@ def init_postgres_db():
         CREATE TABLE IF NOT EXISTS usage_logs (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id VARCHAR(255) NOT NULL,
-            tenant_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
             action_type VARCHAR(50) NOT NULL,
             quantity FLOAT NOT NULL,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -261,6 +319,7 @@ def init_postgres_db():
         CREATE TABLE IF NOT EXISTS memory_sync_events (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT,
             source VARCHAR(50) NOT NULL,
             memory_id VARCHAR(255),
             content_preview TEXT NOT NULL,
@@ -269,6 +328,7 @@ def init_postgres_db():
         );
         """,
         "CREATE INDEX IF NOT EXISTS idx_memory_sync_user ON memory_sync_events(user_id, timestamp DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_memory_sync_tenant ON memory_sync_events(tenant_id, timestamp DESC);",
 
         # Chat Messages Table
         """
@@ -276,7 +336,7 @@ def init_postgres_db():
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             chat_id TEXT NOT NULL,
             user_id VARCHAR(255) NOT NULL,
-            tenant_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
             role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
             content TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -284,6 +344,82 @@ def init_postgres_db():
         );
         """,
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, created_at ASC);",
+        # --- tenant_id type standardization (legacy mixed UUID/VARCHAR -> TEXT) ---
+        "ALTER TABLE IF EXISTS users ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS study_sessions ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS voice_sessions ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS voice_transcript_chunks ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS voice_learning_signals ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS usage_logs ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS chat_messages ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "ALTER TABLE IF EXISTS memory_sync_events ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
+        "DROP POLICY IF EXISTS users_tenant_isolation ON users;",
+        "ALTER TABLE IF EXISTS users DISABLE ROW LEVEL SECURITY;",
+        # --- RLS enable ---
+        "ALTER TABLE IF EXISTS tenants ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS tenant_memberships ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS study_sessions ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS voice_sessions ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS voice_transcript_chunks ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS voice_learning_signals ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS usage_logs ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS chat_messages ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS memory_sync_events ENABLE ROW LEVEL SECURITY;",
+        # --- RLS policies (tenant scoped) ---
+        "DROP POLICY IF EXISTS tenants_tenant_isolation ON tenants;",
+        """
+        CREATE POLICY tenants_tenant_isolation ON tenants
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS tenant_memberships_tenant_isolation ON tenant_memberships;",
+        """
+        CREATE POLICY tenant_memberships_tenant_isolation ON tenant_memberships
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS study_sessions_tenant_isolation ON study_sessions;",
+        """
+        CREATE POLICY study_sessions_tenant_isolation ON study_sessions
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS voice_sessions_tenant_isolation ON voice_sessions;",
+        """
+        CREATE POLICY voice_sessions_tenant_isolation ON voice_sessions
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS voice_transcript_chunks_tenant_isolation ON voice_transcript_chunks;",
+        """
+        CREATE POLICY voice_transcript_chunks_tenant_isolation ON voice_transcript_chunks
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS voice_learning_signals_tenant_isolation ON voice_learning_signals;",
+        """
+        CREATE POLICY voice_learning_signals_tenant_isolation ON voice_learning_signals
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS usage_logs_tenant_isolation ON usage_logs;",
+        """
+        CREATE POLICY usage_logs_tenant_isolation ON usage_logs
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS chat_messages_tenant_isolation ON chat_messages;",
+        """
+        CREATE POLICY chat_messages_tenant_isolation ON chat_messages
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+        "DROP POLICY IF EXISTS memory_sync_events_tenant_isolation ON memory_sync_events;",
+        """
+        CREATE POLICY memory_sync_events_tenant_isolation ON memory_sync_events
+        USING (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
     ]
 
     # Use a raw direct connection for schema init (pool may not exist yet)

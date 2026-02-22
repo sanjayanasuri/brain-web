@@ -13,8 +13,10 @@ import json
 @pytest.fixture
 def auth_headers():
     """Create mock auth headers for authenticated requests."""
+    from auth import create_token
+    token = create_token("test-user", "test-tenant")
     return {
-        "Authorization": "Bearer test-token",
+        "Authorization": f"Bearer {token}",
         "x-tenant-id": "test-tenant",
     }
 
@@ -37,19 +39,19 @@ class TestConceptsEndpoints:
     def test_search_concepts(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test concept search endpoint."""
         response = client.get("/concepts/search?q=test", headers=auth_headers)
-        # Should return 200 or 401 if auth is required
-        assert response.status_code in [200, 401]
+        # Stricter tenant isolation can return 403 for authenticated-but-forbidden requests.
+        assert response.status_code in [200, 401, 403]
     
     def test_get_all_concepts(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get all concepts endpoint."""
         # There's no GET /concepts/ endpoint, use search instead
         response = client.get("/concepts/search?q=test", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
     
     def test_get_concept_by_id(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get concept by ID endpoint."""
         response = client.get("/concepts/N001", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
+        assert response.status_code in [200, 404, 401, 403]
     
     def test_create_concept(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test create concept endpoint."""
@@ -60,7 +62,7 @@ class TestConceptsEndpoints:
             "description": "A test concept"
         }
         response = client.post("/concepts/", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 201, 401, 422]
+        assert response.status_code in [200, 201, 401, 403, 422]
 
 
 class TestLecturesEndpoints:
@@ -69,12 +71,12 @@ class TestLecturesEndpoints:
     def test_list_lectures(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list lectures endpoint."""
         response = client.get("/lectures/", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
     
     def test_get_lecture_by_id(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get lecture by ID endpoint."""
         response = client.get("/lectures/L001", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
+        assert response.status_code in [200, 404, 401, 403]
     
     def test_ingest_lecture(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test lecture ingestion endpoint."""
@@ -84,7 +86,7 @@ class TestLecturesEndpoints:
             "domain": "Testing"
         }
         response = client.post("/lectures/ingest", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 201, 401, 422]
+        assert response.status_code in [200, 201, 401, 403, 422]
 
 
 class TestAIEndpoints:
@@ -97,7 +99,7 @@ class TestAIEndpoints:
             "mode": "chat"
         }
         response = client.post("/ai/chat", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 401, 422]
+        assert response.status_code in [200, 401, 403, 422]
     
     def test_ai_retrieve(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test AI retrieve endpoint."""
@@ -106,7 +108,7 @@ class TestAIEndpoints:
             "detail_level": "summary"
         }
         response = client.post("/ai/retrieve", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 401, 422]
+        assert response.status_code in [200, 401, 403, 422]
 
 
 class TestRetrievalEndpoints:
@@ -119,7 +121,7 @@ class TestRetrievalEndpoints:
             "detail_level": "summary"
         }
         response = client.post("/ai/retrieve", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 401, 422]
+        assert response.status_code in [200, 401, 403, 422]
 
 
 class TestGraphsEndpoints:
@@ -128,12 +130,12 @@ class TestGraphsEndpoints:
     def test_list_graphs(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list graphs endpoint."""
         response = client.get("/graphs/", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
     
     def test_get_graph(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get graph endpoint."""
         response = client.get("/graphs/default/overview", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
+        assert response.status_code in [200, 404, 401, 403]
 
 
 class TestBranchesEndpoints:
@@ -142,12 +144,12 @@ class TestBranchesEndpoints:
     def test_list_branches(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list branches endpoint."""
         response = client.get("/branches/", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
     
     def test_get_branch(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get branch endpoint."""
         response = client.get("/branches/main", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
+        assert response.status_code in [200, 404, 401, 403]
 
 
 class TestResourcesEndpoints:
@@ -156,12 +158,12 @@ class TestResourcesEndpoints:
     def test_list_resources(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list resources endpoint."""
         response = client.get("/resources/search", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403, 422]
     
     def test_get_resource(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get resource endpoint."""
         response = client.get("/resources/R001", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
+        assert response.status_code in [200, 404, 401, 403]
 
 
 class TestEventsEndpoints:
@@ -183,13 +185,13 @@ class TestPreferencesEndpoints:
     def test_get_preferences(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get preferences endpoint."""
         response = client.get("/preferences/response-style", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
     
     def test_update_preferences(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test update preferences endpoint."""
         payload = {"response_style": {"tone": "friendly", "detail_level": "medium"}}
         response = client.post("/preferences/response-style", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 201, 401, 422]
+        assert response.status_code in [200, 201, 401, 403, 422]
 
 
 class TestReviewEndpoints:
@@ -198,7 +200,7 @@ class TestReviewEndpoints:
     def test_list_review_items(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list review items endpoint."""
         response = client.get("/review/relationships?graph_id=default", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestGapsEndpoints:
@@ -207,7 +209,7 @@ class TestGapsEndpoints:
     def test_list_gaps(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list gaps endpoint."""
         response = client.get("/gaps/overview", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestSnapshotsEndpoints:
@@ -216,7 +218,7 @@ class TestSnapshotsEndpoints:
     def test_list_snapshots(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list snapshots endpoint."""
         response = client.get("/snapshots/", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestSignalsEndpoints:
@@ -225,7 +227,7 @@ class TestSignalsEndpoints:
     def test_list_signals(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list signals endpoint."""
         response = client.get("/signals/", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestVoiceEndpoints:
@@ -238,7 +240,7 @@ class TestVoiceEndpoints:
             "transcript": "test transcript"
         }
         response = client.post("/voice/capture", json=payload, headers=auth_headers)
-        assert response.status_code in [200, 201, 401, 422]
+        assert response.status_code in [200, 201, 401, 403, 422]
 
 
 class TestPathsEndpoints:
@@ -247,7 +249,7 @@ class TestPathsEndpoints:
     def test_list_paths(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list paths endpoint."""
         response = client.get("/paths/suggested?graph_id=default", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestQualityEndpoints:
@@ -256,7 +258,7 @@ class TestQualityEndpoints:
     def test_get_concept_quality(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get concept quality endpoint."""
         response = client.get("/quality/concept/N001", headers=auth_headers)
-        assert response.status_code in [200, 404, 401]
+        assert response.status_code in [200, 404, 401, 403]
 
 
 class TestDashboardEndpoints:
@@ -265,7 +267,7 @@ class TestDashboardEndpoints:
     def test_get_dashboard(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test get dashboard endpoint."""
         response = client.get("/dashboard/study-analytics", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestExamsEndpoints:
@@ -274,7 +276,7 @@ class TestExamsEndpoints:
     def test_list_exams(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list exams endpoint."""
         response = client.get("/exams/", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestWorkflowsEndpoints:
@@ -283,7 +285,7 @@ class TestWorkflowsEndpoints:
     def test_list_workflows(self, client: TestClient, auth_headers: Dict[str, str]):
         """Test list workflows endpoint."""
         response = client.get("/workflows/status", headers=auth_headers)
-        assert response.status_code in [200, 401]
+        assert response.status_code in [200, 401, 403]
 
 
 class TestAdminEndpoints:

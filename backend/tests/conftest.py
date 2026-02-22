@@ -291,9 +291,9 @@ def mock_openai_client(monkeypatch):
     mock_response.choices[0].message = MagicMock()
     mock_response.choices[0].message.content = '{"lecture_title": "Test", "nodes": [], "links": []}'
     mock_client.chat.completions.create.return_value = mock_response
-    
+
     # Patch the client
-    with patch('services_lecture_ingestion.client', mock_client), patch('services_lecture_draft.client', mock_client):
+    with patch('services_model_router.model_router.client', mock_client):
         yield mock_client
 
 

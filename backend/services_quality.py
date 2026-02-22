@@ -10,9 +10,32 @@ Computes:
 from typing import Dict, Any, Optional, List
 from neo4j import Session
 from datetime import datetime, timedelta
-from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
+from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context, get_request_graph_identity
 from services_resources import get_resources_for_concept
 from services_graph import get_neighbors_with_relationships, get_proposed_relationships
+
+
+def _resolve_quality_identity(session: Session) -> tuple[str, str]:
+    user_id, tenant_id = get_request_graph_identity()
+    if user_id and tenant_id:
+        return str(user_id), str(tenant_id)
+
+    fallback_tenant = None
+    try:
+        graph_id, _ = get_active_graph_context(session)
+        rec = session.run(
+            """
+            MATCH (g:GraphSpace {graph_id: $graph_id})
+            RETURN g.tenant_id AS tenant_id
+            LIMIT 1
+            """,
+            graph_id=graph_id,
+        ).single()
+        fallback_tenant = rec.get("tenant_id") if rec else None
+    except Exception:
+        fallback_tenant = None
+
+    return str(user_id or "system"), str(tenant_id or fallback_tenant or "default")
 
 
 def compute_concept_coverage(
@@ -48,12 +71,13 @@ def compute_concept_coverage(
         }
     """
     ensure_graph_scoping_initialized(session)
+    user_id, tenant_id = _resolve_quality_identity(session)
     if graph_id:
         # Use provided graph_id
         graph_id_ctx = graph_id
         branch_id = "main"  # Default branch
     else:
-        graph_id_ctx, branch_id = get_active_graph_context(session)
+        graph_id_ctx, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
     
     # Get concept
     query = """
@@ -78,11 +102,22 @@ def compute_concept_coverage(
     has_description = bool(record["description"] and len(record["description"].strip()) > 0)
     
     # Count evidence (resources)
-    resources = get_resources_for_concept(session, concept_id, include_archived=False)
+    resources = get_resources_for_concept(
+        session,
+        concept_id,
+        include_archived=False,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     evidence_count = len(resources)
     
     # Count degree (connections)
-    neighbors = get_neighbors_with_relationships(session, concept_id, include_proposed="all")
+    neighbors = get_neighbors_with_relationships(
+        session,
+        concept_id,
+        include_proposed="all",
+        tenant_id=tenant_id,
+    )
     degree = len(neighbors)
     
     # Count reviewed vs total relationships
@@ -157,7 +192,14 @@ def compute_evidence_freshness(
             "newest_evidence_at": Optional[str] (ISO format)
         }
     """
-    resources = get_resources_for_concept(session, concept_id, include_archived=False)
+    user_id, tenant_id = _resolve_quality_identity(session)
+    resources = get_resources_for_concept(
+        session,
+        concept_id,
+        include_archived=False,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     
     if not resources:
         return {
@@ -277,7 +319,13 @@ def compute_graph_health(
     
     for record in concepts:
         node_id = record["node_id"]
-        resources = get_resources_for_concept(session, node_id, include_archived=False)
+        resources = get_resources_for_concept(
+            session,
+            node_id,
+            include_archived=False,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         
         if len(resources) == 0:
             no_evidence_count += 1
@@ -370,14 +418,12 @@ def compute_narrative_metrics(
         return {}
     
     ensure_graph_scoping_initialized(session)
+    user_id, tenant_id = _resolve_quality_identity(session)
     if graph_id:
         graph_id_ctx = graph_id
         branch_id = "main"
     else:
-        graph_id_ctx, branch_id = get_active_graph_context(session)
-    
-    # Get user_id (demo-safe)
-    user_id = "demo"  # Could be passed as parameter if needed
+        graph_id_ctx, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
     
     results = {}
     now = datetime.now()
@@ -425,7 +471,13 @@ def compute_narrative_metrics(
                 pass
         
         # Get newest evidence timestamp
-        resources = get_resources_for_concept(session, concept_id, include_archived=False)
+        resources = get_resources_for_concept(
+            session,
+            concept_id,
+            include_archived=False,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         newest_evidence_ts = None
         for resource in resources:
             created_at = resource.created_at
@@ -464,7 +516,12 @@ def compute_narrative_metrics(
             recency_weight = 0.0
         
         # Get degree and evidence count for mention frequency
-        neighbors = get_neighbors_with_relationships(session, concept_id, include_proposed="all")
+        neighbors = get_neighbors_with_relationships(
+            session,
+            concept_id,
+            include_proposed="all",
+            tenant_id=tenant_id,
+        )
         degree = len(neighbors)
         evidence_count = len(resources)
         
@@ -509,4 +566,4 @@ def compute_narrative_metrics(
         }
     
     return results
-
+    user_id, tenant_id = _resolve_quality_identity(session)

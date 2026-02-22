@@ -72,6 +72,8 @@ def get_unified_context(
     """
     context = {
         "user_facts": "",
+        "user_identity": {}, # Goals, Background
+        "tutor_persona": {}, # Personality parameters
         "lecture_context": "",
         "chat_history": [],
         "study_context": {},
@@ -138,11 +140,27 @@ def get_unified_context(
     # 4. Learning State: Study context from Postgres
     if include_study_context:
         try:
+            from services_graph import get_user_profile
+            from services_tutor_profile import get_tutor_profile
+            
+            # Fetch Profiles
+            user_profile = get_user_profile(session, user_id=user_id)
+            tutor_profile = get_tutor_profile(session, user_id=user_id)
+
+            context["user_identity"] = {
+                "name": user_profile.name,
+                "learning_goals": user_profile.learning_goals,
+                "domain_background": user_profile.domain_background,
+                "weak_areas": user_profile.weak_areas,
+                "mastered_concepts": list(user_profile.inferred_knowledge_tags.keys())
+            }
+            context["tutor_persona"] = tutor_profile.model_dump()
+            
             study_data = get_study_context(user_id, tenant_id)
             context["study_context"] = study_data
-            logger.debug("Loaded learning state (difficulty, gaps, performance)")
+            logger.debug("Loaded learning state + profiles (v2)")
         except Exception as e:
-            logger.warning(f"Failed to load study context: {e}")
+            logger.warning(f"Failed to load study context or profiles: {e}")
 
     # 5. Cross-surface recent topics — what the user was discussing on OTHER screens.
     #    Excluded: the current chat_id so we don't double-count the current convo.
@@ -393,9 +411,37 @@ Use this as ambient awareness only — do not repeat or summarise these back to 
         memory_sections.append(study_instructions)
 
     
+    # Add Learner Identity
+    if context.get("user_identity"):
+        ui = context["user_identity"]
+        identity_sections = []
+        if ui.get("learning_goals"): identity_sections.append(f"- Goals: {ui['learning_goals']}")
+        if ui.get("domain_background"): identity_sections.append(f"- Background: {ui['domain_background']}")
+        if ui.get("mastered_concepts"): identity_sections.append(f"- Mastered: {', '.join(ui['mastered_concepts'])}")
+        
+        if identity_sections:
+            memory_sections.append("## Learner Identity\n" + "\n".join(identity_sections))
+
+    # Add Tutor Persona v2
+    if context.get("tutor_persona"):
+        tp = context["tutor_persona"]
+        if tp.get("custom_instructions"):
+            memory_sections.append(f"## AI Tutor Persona (Custom Overwrite)\n{tp['custom_instructions']}")
+        else:
+            persona_desc = "\n".join([
+                f"- Comprehension: {tp.get('comprehension_level', 'intermediate')}",
+                f"- Tone: {tp.get('tone', 'balanced')}",
+                f"- Pacing: {tp.get('pacing', 'moderate')}",
+                f"- Turn-taking: {tp.get('turn_taking', 'dialogic')}",
+                f"- Verbosity: {tp.get('response_length', 'balanced')}",
+                f"- Behavior: {'Direct feedback, no glaze' if tp.get('no_glazing') else 'Supportive guide'}",
+            ])
+            memory_sections.append(f"## AI Tutor Persona\n{persona_desc}")
+    
     # Combine
     if memory_sections:
         memory_context = "\n".join(memory_sections)
+        # Ensure base_prompt doesn't already contain these sections or handle merging
         return f"{base_prompt}\n\n{memory_context}"
     
     return base_prompt

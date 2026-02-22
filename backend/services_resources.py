@@ -56,19 +56,21 @@ def create_resource(
     source: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
     ingestion_run_id: Optional[str] = None,
+    tenant_id: str,
+    user_id: str,
 ) -> Resource:
     """
     Create a Resource node scoped to the active graph + branch.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
 
     resource_id = f"R{uuid4().hex[:8].upper()}"
     created_at = datetime.utcnow().isoformat()
     metadata_json = json.dumps(metadata) if metadata else None
 
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     CREATE (r:{RESOURCE_LABEL} {{
         resource_id: $resource_id,
         graph_id: $graph_id,
@@ -92,6 +94,7 @@ def create_resource(
         query,
         graph_id=graph_id,
         branch_id=branch_id,
+        tenant_id=tenant_id,
         resource_id=resource_id,
         kind=kind,
         url=url,
@@ -123,19 +126,26 @@ def create_resource(
     )
 
 
-def get_resource_by_id(session: Session, resource_id: str, include_archived: bool = False) -> Optional[Resource]:
+def get_resource_by_id(
+    session: Session,
+    resource_id: str,
+    include_archived: bool = False,
+    *,
+    tenant_id: str,
+    user_id: str,
+) -> Optional[Resource]:
     """
     Fetch a Resource by id in the active graph + branch.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
 
     archived_clause = ""
     if not include_archived:
         archived_clause = "AND COALESCE(r.archived, false) = false"
 
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MATCH (r:{RESOURCE_LABEL} {{resource_id: $resource_id, graph_id: $graph_id}})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(r.on_branches, [])
     {archived_clause}
@@ -146,6 +156,7 @@ def get_resource_by_id(session: Session, resource_id: str, include_archived: boo
         query,
         graph_id=graph_id,
         branch_id=branch_id,
+        tenant_id=tenant_id,
         resource_id=resource_id,
     ).single()
 
@@ -172,15 +183,17 @@ def link_resource_to_concept(
     *,
     concept_id: str,
     resource_id: str,
+    tenant_id: str,
+    user_id: str,
 ) -> None:
     """
     Create a HAS_RESOURCE relationship between a Concept and Resource in the active graph + branch.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
 
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MERGE (c:Concept {{node_id: $concept_id, graph_id: $graph_id}})
     MERGE (c)-[:BELONGS_TO]->(g)
     MATCH (r:{RESOURCE_LABEL} {{resource_id: $resource_id, graph_id: $graph_id}})-[:BELONGS_TO]->(g)
@@ -201,6 +214,7 @@ def link_resource_to_concept(
         query,
         graph_id=graph_id,
         branch_id=branch_id,
+        tenant_id=tenant_id,
         concept_id=concept_id,
         resource_id=resource_id,
     ).consume()
@@ -210,19 +224,22 @@ def get_resources_for_concept(
     session: Session,
     concept_id: str,
     include_archived: bool = False,
+    *,
+    tenant_id: str,
+    user_id: str,
 ) -> List[Resource]:
     """
     Return all resources attached to a concept in the active graph + branch.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
 
     archived_clause = ""
     if not include_archived:
         archived_clause = "AND COALESCE(r.archived, false) = false"
 
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MATCH (c:Concept {{node_id: $concept_id, graph_id: $graph_id}})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
     MATCH (c)-[rel:HAS_RESOURCE]->(r:{RESOURCE_LABEL} {{graph_id: $graph_id}})-[:BELONGS_TO]->(g)
@@ -235,7 +252,13 @@ def get_resources_for_concept(
     """
 
     out: List[Resource] = []
-    for rec in session.run(query, graph_id=graph_id, branch_id=branch_id, concept_id=concept_id):
+    for rec in session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        concept_id=concept_id,
+        tenant_id=tenant_id,
+    ):
         node = rec["r"]
         out.append(
             Resource(
@@ -259,6 +282,9 @@ def search_resources(
     query: str,
     limit: int = 20,
     include_archived: bool = False,
+    *,
+    tenant_id: str,
+    user_id: str,
 ) -> List[Resource]:
     """
     Search resources in the active graph + branch by title or caption.
@@ -268,7 +294,7 @@ def search_resources(
     - Scopes strictly by r.graph_id and r.on_branches.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
 
     archived_clause = ""
     if not include_archived:
@@ -279,7 +305,7 @@ def search_resources(
         return []
 
     cypher = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MATCH (r:{RESOURCE_LABEL} {{graph_id: $graph_id}})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(r.on_branches, [])
       {archived_clause}
@@ -294,7 +320,14 @@ def search_resources(
     """
 
     out: List[Resource] = []
-    for rec in session.run(cypher, graph_id=graph_id, branch_id=branch_id, q=q, limit=limit):
+    for rec in session.run(
+        cypher,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        tenant_id=tenant_id,
+        q=q,
+        limit=limit,
+    ):
         node = rec["r"]
         out.append(
             Resource(

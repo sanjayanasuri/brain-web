@@ -3,6 +3,7 @@ Deterministic retrieval plans for each intent type.
 """
 from typing import List, Dict, Any, Optional, Tuple
 from neo4j import Session
+import json
 import re
 from datetime import datetime, timedelta
 from services_retrieval_helpers import (
@@ -18,6 +19,132 @@ from services_search import semantic_search_nodes
 from services_graph import get_neighbors_with_relationships
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 from models import RetrievalResult, RetrievalTraceStep, Intent
+
+_COMPARE_TARGET_MIN_CONFIDENCE = 0.65
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _clean_compare_target(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r'^[\"\'`]+|[\"\'`]+$', "", text).strip()
+    text = text.strip(" \t\n\r.,;:!?")
+    return re.sub(r"\s+", " ", text)
+
+
+def _dedupe_targets(targets: List[Any]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for target in targets:
+        cleaned = _clean_compare_target(target)
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cleaned)
+        if len(out) >= 2:
+            break
+    return out
+
+
+def _extract_compare_targets_llm(query: str) -> List[str]:
+    """
+    Cheap LLM extraction for COMPARE intent target parsing.
+    Returns [] when unavailable, low-confidence, or non-compare phrasing.
+    """
+    text = str(query or "").strip()
+    if not text:
+        return []
+
+    try:
+        from services_model_router import model_router, TASK_EXTRACT
+
+        if not model_router.client:
+            return []
+
+        prompt = (
+            "Extract the two entities/topics being compared in the query.\n"
+            "Return strict JSON with keys:\n"
+            "- target_a: string or null\n"
+            "- target_b: string or null\n"
+            "- is_compare: boolean\n"
+            "- confidence: number between 0 and 1\n"
+            "Rules:\n"
+            "- If query is not a comparison request, set is_compare=false and targets=null.\n"
+            "- Do not invent entities.\n"
+            "- Keep targets concise and normalized.\n"
+        )
+
+        raw = model_router.completion(
+            task_type=TASK_EXTRACT,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps({"query": text})},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0,
+            max_tokens=120,
+        )
+
+        parsed = json.loads(raw or "{}")
+        if parsed.get("is_compare") is False:
+            return []
+        confidence = _safe_float(parsed.get("confidence"), 0.0)
+        if confidence < _COMPARE_TARGET_MIN_CONFIDENCE:
+            return []
+
+        return _dedupe_targets([parsed.get("target_a"), parsed.get("target_b")])
+    except Exception:
+        return []
+
+
+def _extract_compare_targets_regex(query: str) -> List[str]:
+    """
+    Deterministic parser for common compare phrasings.
+    """
+    text = str(query or "").strip()
+    if not text:
+        return []
+
+    patterns = [
+        r"(.+?)\s+(?:vs|versus)\s+(.+)",
+        r"\bcompare\s+(.+?)\s+(?:and|to|with)\s+(.+)",
+        r"\bdifference\s+between\s+(.+?)\s+and\s+(.+)",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.I)
+        if not match:
+            continue
+        return _dedupe_targets([match.group(1), match.group(2)])
+
+    return []
+
+
+def _identify_compare_targets(query: str, session: Session) -> Tuple[List[str], str]:
+    """
+    Target extraction order: LLM (cheap) -> regex parser -> semantic fallback.
+    """
+    llm_targets = _extract_compare_targets_llm(query)
+    if len(llm_targets) >= 2:
+        return llm_targets[:2], "llm"
+
+    regex_targets = _extract_compare_targets_regex(query)
+    if len(regex_targets) >= 2:
+        return regex_targets[:2], "regex"
+
+    results = semantic_search_nodes(query, session, limit=2)
+    semantic_targets = _dedupe_targets([r["node"].name for r in results[:2]])
+    return semantic_targets, "semantic"
 
 
 def run_plan(
@@ -434,25 +561,9 @@ def plan_compare(
     
     # Step 1: Identify two targets
     trace.append(RetrievalTraceStep(step="identify_targets", params={}, counts={}))
-    
-    # Try parse from "X vs Y" or "compare X and Y"
-    targets = []
-    query_lower = query.lower()
-    
-    # Pattern: "X vs Y" or "X versus Y"
-    vs_match = re.search(r'(.+?)\s+(?:vs|versus)\s+(.+)', query_lower)
-    if vs_match:
-        targets = [vs_match.group(1).strip(), vs_match.group(2).strip()]
-    else:
-        # Pattern: "compare X and Y"
-        compare_match = re.search(r'compare\s+(.+?)\s+and\s+(.+)', query_lower)
-        if compare_match:
-            targets = [compare_match.group(1).strip(), compare_match.group(2).strip()]
-        else:
-            # Fallback: semantic search for top 2 concepts
-            results = semantic_search_nodes(query, session, limit=2)
-            targets = [r["node"].name for r in results[:2]]
-    
+
+    targets, target_method = _identify_compare_targets(query, session)
+    trace[-1].params = {"method": target_method}
     trace[-1].counts = {"targets": len(targets)}
     
     if len(targets) < 2:

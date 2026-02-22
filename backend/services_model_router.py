@@ -7,17 +7,23 @@ from config import OPENAI_API_KEY
 logger = logging.getLogger("brain_web")
 
 # ---------------------------------------------------------------------------
-# Task type constants — import these everywhere instead of raw strings
+# Task type constants — import these everywhere, never use raw strings
 # ---------------------------------------------------------------------------
-TASK_CHAT_FAST = "chat_fast"    # Low-latency, cheaper model
-TASK_CHAT_SMART = "chat_smart"  # Capable model for complex reasoning
-TASK_REASONING = "reasoning"    # Heavy reasoning (o1/o3 when available)
-TASK_VOICE = "voice"            # Ultra-low-latency for real-time voice
-TASK_SYNTHESIS = "synthesis"    # Session/topic synthesis, fog-clearing
+TASK_CHAT_FAST   = "chat_fast"    # Low-latency, cheaper model
+TASK_CHAT_SMART  = "chat_smart"   # Capable model for complex reasoning
+TASK_REASONING   = "reasoning"    # Heavy reasoning (o1/o3 when available)
+TASK_VOICE       = "voice"        # Ultra-low-latency for real-time voice
+TASK_SYNTHESIS   = "synthesis"    # Session/topic synthesis, fog-clearing
+# Backward-compat alias used by older call sites.
+TASK_SYNTHESIZE  = TASK_SYNTHESIS
+TASK_EXTRACT     = "extract"      # Concept/entity extraction from text
+TASK_SUMMARIZE   = "summarize"    # Summarization tasks
+TASK_SEARCH      = "search"       # Web search synthesis / re-ranking
+TASK_RECOMMEND   = "recommend"    # Recommendation and gap analysis
 
 # ---------------------------------------------------------------------------
-# Model mapping — all overridable via env vars, zero need to redeploy to
-# swap a model version.
+# Model mapping — every model is overridable via an env var.
+# Swap models without touching code or redeploying.
 # ---------------------------------------------------------------------------
 DEFAULT_MODELS: Dict[str, str] = {
     TASK_CHAT_FAST:  os.getenv("MODEL_CHAT_FAST",  "gpt-4o-mini"),
@@ -25,9 +31,13 @@ DEFAULT_MODELS: Dict[str, str] = {
     TASK_REASONING:  os.getenv("MODEL_REASONING",  "gpt-4o"),      # swap to o3-mini when ready
     TASK_VOICE:      os.getenv("MODEL_VOICE",      "gpt-4o-mini"),  # latency-critical
     TASK_SYNTHESIS:  os.getenv("MODEL_SYNTHESIS",  "gpt-4o"),
+    TASK_EXTRACT:    os.getenv("MODEL_EXTRACT",    "gpt-4o"),       # more precise for graph extraction
+    TASK_SUMMARIZE:  os.getenv("MODEL_SUMMARIZE",  "gpt-4o-mini"),
+    TASK_SEARCH:     os.getenv("MODEL_SEARCH",     "gpt-4o-mini"),
+    TASK_RECOMMEND:  os.getenv("MODEL_RECOMMEND",  "gpt-4o-mini"),
 }
 
-# Fallback model used if a task type has no entry in DEFAULT_MODELS
+# Fallback used if an unknown task type is passed
 _FALLBACK_MODEL = os.getenv("MODEL_FALLBACK", "gpt-4o-mini")
 
 
@@ -36,9 +46,14 @@ class ModelRouter:
         self.api_key = OPENAI_API_KEY
         self.client: Optional[OpenAI] = None
         if self.api_key:
-            self.client = OpenAI(api_key=self.api_key.strip().strip('"').strip("'"))
-        else:
-            logger.warning("[model_router] OPENAI_API_KEY not set — inference calls will fail.")
+            cleaned = self.api_key.strip().strip('"').strip("'")
+            if cleaned and cleaned.startswith("sk-"):
+                try:
+                    self.client = OpenAI(api_key=cleaned)
+                except Exception as e:
+                    logger.error(f"[model_router] Failed to init OpenAI client: {e}")
+        if not self.client:
+            logger.warning("[model_router] OPENAI_API_KEY not set or invalid — inference calls will fail.")
 
     def get_model_for_task(self, task_type: str, user_tier: str = "free") -> str:
         """

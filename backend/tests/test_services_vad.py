@@ -103,3 +103,54 @@ def test_vad_segmenter_force_ends_long_utterance():
     assert len(out) >= 1
     assert out[0].speech_ms >= 100
 
+
+def test_vad_segmenter_emits_stable_speech_start_once():
+    cfg = VadConfig(
+        sample_rate_hz=16000,
+        frame_ms=20,
+        speech_threshold=0.5,
+        end_silence_ms=300,
+        min_speech_ms=100,
+        pre_roll_ms=0,
+        max_utterance_ms=5000,
+        engine="energy",
+    )
+    detector = EnergySpeechDetector(gain=20.0)
+    seg = VadUtteranceSegmenter(detector, cfg)
+
+    frame_samples = int(cfg.sample_rate_hz * cfg.frame_ms / 1000)
+    speech = _pcm_frame(frame_samples=frame_samples, amp=6000)
+
+    start_events = []
+    for _ in range(8):
+        seg.process_pcm16(speech)
+        start_events.append(seg.pop_speech_start_sample())
+
+    emitted = [s for s in start_events if s is not None]
+    assert len(emitted) == 1
+    assert emitted[0] == 0
+
+
+def test_vad_segmenter_ignores_short_noise_for_speech_start():
+    cfg = VadConfig(
+        sample_rate_hz=16000,
+        frame_ms=20,
+        speech_threshold=0.5,
+        end_silence_ms=200,
+        min_speech_ms=100,
+        pre_roll_ms=0,
+        max_utterance_ms=5000,
+        engine="energy",
+    )
+    detector = EnergySpeechDetector(gain=20.0)
+    seg = VadUtteranceSegmenter(detector, cfg)
+
+    frame_samples = int(cfg.sample_rate_hz * cfg.frame_ms / 1000)
+    silence = _pcm_frame(frame_samples=frame_samples, amp=0)
+    speech = _pcm_frame(frame_samples=frame_samples, amp=6000)
+
+    seg.process_pcm16(speech)  # 20ms blip (< min_speech_ms)
+    assert seg.pop_speech_start_sample() is None
+    for _ in range(12):
+        seg.process_pcm16(silence)
+        assert seg.pop_speech_start_sample() is None

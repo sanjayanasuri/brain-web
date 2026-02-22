@@ -103,20 +103,36 @@ def _ensure_schema() -> None:
     _schema_initialized = True
 
 
-def get_voice_session_started_at_ms(*, voice_session_id: str, user_id: str) -> Optional[int]:
+def get_voice_session_started_at_ms(
+    *,
+    voice_session_id: str,
+    user_id: str,
+    tenant_id: Optional[str] = None,
+) -> Optional[int]:
     """
     Fetch voice session started_at in epoch ms (UTC).
     Returns None if the session cannot be found.
     """
-    rows = execute_query(
-        """
-        SELECT started_at
-        FROM voice_sessions
-        WHERE id = %s AND user_id = %s
-        LIMIT 1
-        """,
-        (voice_session_id, user_id),
-    )
+    if tenant_id:
+        rows = execute_query(
+            """
+            SELECT started_at
+            FROM voice_sessions
+            WHERE id = %s AND user_id = %s AND tenant_id = %s
+            LIMIT 1
+            """,
+            (voice_session_id, user_id, tenant_id),
+        )
+    else:
+        rows = execute_query(
+            """
+            SELECT started_at
+            FROM voice_sessions
+            WHERE id = %s AND user_id = %s
+            LIMIT 1
+            """,
+            (voice_session_id, user_id),
+        )
     if not rows:
         return None
     started_at = rows[0].get("started_at")
@@ -220,21 +236,34 @@ def list_voice_transcript_chunks(
     *,
     voice_session_id: str,
     user_id: str,
+    tenant_id: Optional[str] = None,
     limit: int = 500,
 ) -> List[Dict[str, Any]]:
     """List transcript chunks for a voice session."""
     _ensure_schema()
 
-    rows = execute_query(
-        """
-        SELECT id, role, content, start_ms, end_ms, anchor_id, anchor_json, created_at, graph_id, branch_id, tenant_id
-        FROM voice_transcript_chunks
-        WHERE voice_session_id = %s AND user_id = %s
-        ORDER BY start_ms ASC NULLS LAST, created_at ASC
-        LIMIT %s
-        """,
-        (voice_session_id, user_id, limit),
-    )
+    if tenant_id:
+        rows = execute_query(
+            """
+            SELECT id, role, content, start_ms, end_ms, anchor_id, anchor_json, created_at, graph_id, branch_id, tenant_id
+            FROM voice_transcript_chunks
+            WHERE voice_session_id = %s AND user_id = %s AND tenant_id = %s
+            ORDER BY start_ms ASC NULLS LAST, created_at ASC
+            LIMIT %s
+            """,
+            (voice_session_id, user_id, tenant_id, limit),
+        )
+    else:
+        rows = execute_query(
+            """
+            SELECT id, role, content, start_ms, end_ms, anchor_id, anchor_json, created_at, graph_id, branch_id, tenant_id
+            FROM voice_transcript_chunks
+            WHERE voice_session_id = %s AND user_id = %s
+            ORDER BY start_ms ASC NULLS LAST, created_at ASC
+            LIMIT %s
+            """,
+            (voice_session_id, user_id, limit),
+        )
 
     items: List[Dict[str, Any]] = []
     for row in rows or []:
@@ -318,19 +347,32 @@ def list_voice_learning_signals(
     *,
     voice_session_id: str,
     user_id: str,
+    tenant_id: Optional[str] = None,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     _ensure_schema()
-    rows = execute_query(
-        """
-        SELECT id, chunk_id, kind, payload_json, created_at
-        FROM voice_learning_signals
-        WHERE voice_session_id = %s AND user_id = %s
-        ORDER BY created_at DESC
-        LIMIT %s
-        """,
-        (voice_session_id, user_id, limit),
-    )
+    if tenant_id:
+        rows = execute_query(
+            """
+            SELECT id, chunk_id, kind, payload_json, created_at
+            FROM voice_learning_signals
+            WHERE voice_session_id = %s AND user_id = %s AND tenant_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (voice_session_id, user_id, tenant_id, limit),
+        )
+    else:
+        rows = execute_query(
+            """
+            SELECT id, chunk_id, kind, payload_json, created_at
+            FROM voice_learning_signals
+            WHERE voice_session_id = %s AND user_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (voice_session_id, user_id, limit),
+        )
     out: List[Dict[str, Any]] = []
     for row in rows or []:
         payload = {}
@@ -435,6 +477,7 @@ def _excerpt(text: str, max_len: int = 520) -> str:
 def search_voice_transcript_chunks(
     *,
     user_id: str,
+    tenant_id: Optional[str] = None,
     graph_id: str,
     branch_id: str,
     query: str,
@@ -455,18 +498,25 @@ def search_voice_transcript_chunks(
     patterns = [f"%{t}%" for t in terms] if terms else [f"%{q}%"]
     term_where = " OR ".join(["content ILIKE %s"] * len(patterns))
 
+    tenant_where = "AND tenant_id = %s" if tenant_id else ""
+    params: tuple = (
+        (user_id, tenant_id, graph_id, branch_id, *patterns, max(1, min(int(limit), 20)))
+        if tenant_id
+        else (user_id, graph_id, branch_id, *patterns, max(1, min(int(limit), 20)))
+    )
     rows = execute_query(
         f"""
         SELECT id, voice_session_id, role, content, start_ms, end_ms, anchor_json, created_at
         FROM voice_transcript_chunks
         WHERE user_id = %s
+          {tenant_where}
           AND graph_id = %s
           AND branch_id = %s
           AND ({term_where})
         ORDER BY created_at DESC
         LIMIT %s
         """,
-        (user_id, graph_id, branch_id, *patterns, max(1, min(int(limit), 20))),
+        params,
     )
 
     items: List[Dict[str, Any]] = []

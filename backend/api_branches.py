@@ -16,15 +16,27 @@ from services_branch_ai import llm_compare_branches
 router = APIRouter(prefix="/branches", tags=["branches"])
 
 
+def _require_graph_identity(request: Request) -> tuple[str, str]:
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+    return str(user_id), str(tenant_id)
+
+
 @router.get("/")
 def list_branches_endpoint(
     request: Request,
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    tenant_id = getattr(request.state, "tenant_id", None)
-    graph_id, active_branch_id = get_active_graph_context(session, tenant_id=tenant_id)
-    branches = list_branches(session)
+    user_id, tenant_id = _require_graph_identity(request)
+    graph_id, active_branch_id = get_active_graph_context(
+        session,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+    branches = list_branches(session, tenant_id=tenant_id, user_id=user_id)
     return {"graph_id": graph_id, "active_branch_id": active_branch_id, "branches": branches}
 
 
@@ -35,7 +47,8 @@ def create_branch_endpoint(
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    b = create_branch(session, payload.name)
+    user_id, tenant_id = _require_graph_identity(request)
+    b = create_branch(session, payload.name, tenant_id=tenant_id, user_id=user_id)
     return b
 
 
@@ -47,7 +60,13 @@ def select_branch_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        graph_id, active_branch_id = set_active_branch(session, branch_id)
+        user_id, tenant_id = _require_graph_identity(request)
+        graph_id, active_branch_id = set_active_branch(
+            session,
+            branch_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         return {"graph_id": graph_id, "active_branch_id": active_branch_id}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -63,7 +82,15 @@ def fork_from_node_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        return fork_branch_from_node(session, branch_id=branch_id, node_id=node_id, depth=payload.depth)
+        user_id, tenant_id = _require_graph_identity(request)
+        return fork_branch_from_node(
+            session,
+            branch_id=branch_id,
+            node_id=node_id,
+            depth=payload.depth,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -76,7 +103,8 @@ def get_paths_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        return get_branch_graph(session, branch_id)
+        user_id, tenant_id = _require_graph_identity(request)
+        return get_branch_graph(session, branch_id, tenant_id=tenant_id, user_id=user_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -90,7 +118,14 @@ def compare_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        return compare_branches(session, branch_id, other_branch_id)
+        user_id, tenant_id = _require_graph_identity(request)
+        return compare_branches(
+            session,
+            branch_id,
+            other_branch_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -103,8 +138,9 @@ def llm_compare_endpoint(
     session=Depends(get_neo4j_session),
 ):
     try:
-        a = get_branch_graph(session, payload.branch_id)
-        b = get_branch_graph(session, payload.other_branch_id)
+        user_id, tenant_id = _require_graph_identity(request)
+        a = get_branch_graph(session, payload.branch_id, tenant_id=tenant_id, user_id=user_id)
+        b = get_branch_graph(session, payload.other_branch_id, tenant_id=tenant_id, user_id=user_id)
         data = llm_compare_branches(branch_a_graph=a, branch_b_graph=b, question=payload.question)
         return data
     except Exception as e:

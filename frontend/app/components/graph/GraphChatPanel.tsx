@@ -12,6 +12,8 @@ import AttemptInput from '../study/AttemptInput';
 import Feedback from '../study/Feedback';
 import Citations from '../study/Citations';
 import { startStudySession, getNextTask } from '../../api-client-study';
+import { submitFeedback } from '../../api/feedback';
+import StyleFeedbackForm from '../ui/StyleFeedbackForm';
 
 const MinimizeIcon = Minimize2 as any;
 const MaximizeIcon = Maximize2 as any;
@@ -27,6 +29,9 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
     const { state, actions } = useChat();
     const { activeGraphId } = useGraph();
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const [feedbackByMessageId, setFeedbackByMessageId] = useState<Record<string, 1 | -1>>({});
+    const [submittingFeedbackByMessageId, setSubmittingFeedbackByMessageId] = useState<Record<string, boolean>>({});
+    const [feedbackToastByMessageId, setFeedbackToastByMessageId] = useState<Record<string, string>>({});
 
     const {
         session,
@@ -86,6 +91,33 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
             console.error('Failed to get next task:', err);
         } finally {
             setStudyLoading(false);
+        }
+    };
+
+    const handleSubmitMessageFeedback = async (messageId: string, answerId: string, question: string, rating: 1 | -1) => {
+        if (!answerId || submittingFeedbackByMessageId[messageId]) return;
+        setSubmittingFeedbackByMessageId((prev) => ({ ...prev, [messageId]: true }));
+        try {
+            await submitFeedback(
+                answerId,
+                rating,
+                rating > 0 ? 'Helpful answer' : 'Unhelpful answer',
+                question || undefined,
+            );
+            setFeedbackByMessageId((prev) => ({ ...prev, [messageId]: rating }));
+            setFeedbackToastByMessageId((prev) => ({ ...prev, [messageId]: 'Thanks for feedback' }));
+            setTimeout(() => {
+                setFeedbackToastByMessageId((prev) => {
+                    if (!prev[messageId]) return prev;
+                    const next = { ...prev };
+                    delete next[messageId];
+                    return next;
+                });
+            }, 1800);
+        } catch (err) {
+            console.error('Failed to submit message feedback:', err);
+        } finally {
+            setSubmittingFeedbackByMessageId((prev) => ({ ...prev, [messageId]: false }));
         }
     };
 
@@ -307,6 +339,70 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                     position: 'relative'
                                 }}>
                                     <div style={{ whiteSpace: 'pre-wrap' }}>{msg.answer}</div>
+
+                                    {msg.answerId && (
+                                        <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <button
+                                                    onClick={() => handleSubmitMessageFeedback(msg.id, msg.answerId as string, msg.question, 1)}
+                                                    disabled={!!submittingFeedbackByMessageId[msg.id]}
+                                                    style={{
+                                                        padding: '6px 10px',
+                                                        fontSize: '12px',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border)',
+                                                        background: feedbackByMessageId[msg.id] === 1 ? 'rgba(34,197,94,0.12)' : 'var(--surface)',
+                                                        color: 'var(--ink)',
+                                                        cursor: submittingFeedbackByMessageId[msg.id] ? 'not-allowed' : 'pointer',
+                                                        opacity: submittingFeedbackByMessageId[msg.id] ? 0.7 : 1,
+                                                    }}
+                                                >
+                                                    Helpful
+                                                </button>
+                                                <button
+                                                    onClick={() => handleSubmitMessageFeedback(msg.id, msg.answerId as string, msg.question, -1)}
+                                                    disabled={!!submittingFeedbackByMessageId[msg.id]}
+                                                    style={{
+                                                        padding: '6px 10px',
+                                                        fontSize: '12px',
+                                                        borderRadius: '6px',
+                                                        border: '1px solid var(--border)',
+                                                        background: feedbackByMessageId[msg.id] === -1 ? 'rgba(239,68,68,0.12)' : 'var(--surface)',
+                                                        color: 'var(--ink)',
+                                                        cursor: submittingFeedbackByMessageId[msg.id] ? 'not-allowed' : 'pointer',
+                                                        opacity: submittingFeedbackByMessageId[msg.id] ? 0.7 : 1,
+                                                    }}
+                                                >
+                                                    Not helpful
+                                                </button>
+                                            </div>
+
+                                            {feedbackToastByMessageId[msg.id] && (
+                                                <div
+                                                    style={{
+                                                        alignSelf: 'flex-start',
+                                                        marginTop: '-2px',
+                                                        padding: '4px 8px',
+                                                        borderRadius: '999px',
+                                                        border: '1px solid var(--border)',
+                                                        background: 'rgba(34,197,94,0.10)',
+                                                        fontSize: '11px',
+                                                        color: 'var(--ink)',
+                                                    }}
+                                                >
+                                                    {feedbackToastByMessageId[msg.id]}
+                                                </div>
+                                            )}
+
+                                            <div style={{ maxWidth: '100%' }}>
+                                                <StyleFeedbackForm
+                                                    answerId={msg.answerId}
+                                                    question={msg.question || ''}
+                                                    originalResponse={msg.answer || ''}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
 
                                     {/* Actions & Meta */}
                                     {(msg.suggestedActions.length > 0 || msg.retrievalMeta || msg.extractedGraphData || (msg.anchorCitations && msg.anchorCitations.length > 0)) && (

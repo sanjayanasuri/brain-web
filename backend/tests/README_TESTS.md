@@ -171,6 +171,22 @@ pytest tests/test_concepts_api.py::test_get_concept_by_id_success
 pytest -k "test_get_concept"
 ```
 
+### Run Graph Scoping Invariants (live Neo4j)
+```bash
+# Optional dedicated Neo4j test profile
+export NEO4J_TEST_URI=bolt://127.0.0.1:7687
+export NEO4J_TEST_USER=neo4j
+export NEO4J_TEST_PASSWORD=your_password
+export NEO4J_TEST_DATABASE=neo4j
+
+# force-run even when auto-detection would skip
+export RUN_GRAPH_SCOPING_TESTS=true
+
+pytest -q tests/test_graph_scoping_invariants.py -rs
+```
+
+If `RUN_GRAPH_SCOPING_TESTS` is unset, the test auto-runs only when the test Neo4j profile is reachable.
+
 ## Extending Tests
 
 ### Adding Tests for New Endpoints

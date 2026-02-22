@@ -64,62 +64,80 @@ export default function ChatMessagesList({
             padding: '0 24px 120px 24px',
             boxSizing: 'border-box'
         }}>
-            {messages.map((msg) => (
-                <div
-                    key={msg.id}
-                    style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '8px',
-                        alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                        width: '100%'
-                    }}
-                >
-                    {msg.role === 'assistant' ? (
-                        <ChatMessageWithBranches
-                            messageId={msg.id}
-                            content={msg.content}
-                            role={msg.role}
-                            timestamp={msg.timestamp}
-                            actions={msg.actions}
-                            onExplain={handleExplain}
-                            onOpenBranch={handleOpenBranch}
-                            highlightStart={branchContext.getHighlightSpan(msg.id)?.start}
-                            highlightEnd={branchContext.getHighlightSpan(msg.id)?.end}
-                        />
-                    ) : (
-                        <div style={{
+            {messages.map((msg, idx) => {
+                let feedbackQuestion = '';
+                if (msg.role === 'assistant') {
+                    for (let i = idx - 1; i >= 0; i -= 1) {
+                        if (messages[i]?.role === 'user') {
+                            feedbackQuestion = String(messages[i]?.content || '');
+                            break;
+                        }
+                    }
+                }
+                const answerId =
+                    msg.role === 'assistant'
+                        ? (msg.metadata?.answer_id || null)
+                        : null;
+
+                return (
+                    <div
+                        key={msg.id}
+                        style={{
                             display: 'flex',
                             flexDirection: 'column',
-                            alignItems: 'flex-end',
-                            maxWidth: '100%'
-                        }}>
+                            gap: '8px',
+                            alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                            width: '100%'
+                        }}
+                    >
+                        {msg.role === 'assistant' ? (
+                            <ChatMessageWithBranches
+                                messageId={msg.id}
+                                content={msg.content}
+                                role={msg.role}
+                                timestamp={msg.timestamp}
+                                actions={msg.actions}
+                                answerId={answerId}
+                                feedbackQuestion={feedbackQuestion}
+                                onExplain={handleExplain}
+                                onOpenBranch={handleOpenBranch}
+                                highlightStart={branchContext.getHighlightSpan(msg.id)?.start}
+                                highlightEnd={branchContext.getHighlightSpan(msg.id)?.end}
+                            />
+                        ) : (
                             <div style={{
-                                maxWidth: '85%',
-                                padding: '12px 18px',
-                                borderRadius: '18px',
-                                borderBottomRightRadius: '4px',
-                                background: 'var(--accent)',
-                                color: 'white',
-                                fontSize: '15px',
-                                lineHeight: '1.5',
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
-                                boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'flex-end',
+                                maxWidth: '100%'
                             }}>
-                                {msg.content}
+                                <div style={{
+                                    maxWidth: '85%',
+                                    padding: '12px 18px',
+                                    borderRadius: '18px',
+                                    borderBottomRightRadius: '4px',
+                                    background: 'var(--accent)',
+                                    color: 'white',
+                                    fontSize: '15px',
+                                    lineHeight: '1.5',
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.05)'
+                                }}>
+                                    {msg.content}
+                                </div>
+                                <div style={{
+                                    fontSize: '11px',
+                                    color: 'var(--muted)',
+                                    padding: '4px 4px 0 0',
+                                }}>
+                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+                                </div>
                             </div>
-                            <div style={{
-                                fontSize: '11px',
-                                color: 'var(--muted)',
-                                padding: '4px 4px 0 0',
-                            }}>
-                                {new Date(msg.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            ))}
+                        )}
+                    </div>
+                );
+            })}
             {loading && (
                 <div style={{
                     alignSelf: 'flex-start',

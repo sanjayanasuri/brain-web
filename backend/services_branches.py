@@ -13,17 +13,18 @@ def _now_iso() -> str:
     return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
 
 
-def list_branches(session: Session) -> List[Dict[str, Any]]:
-    graph_id, _ = get_active_graph_context(session)
+def list_branches(session: Session, *, tenant_id: str, user_id: str) -> List[Dict[str, Any]]:
+    graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
     ensure_graph_scoping_initialized(session)
 
     query = """
-    MATCH (b:Branch {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
+    MATCH (b:Branch {graph_id: $graph_id})-[:BRANCH_OF]->(g)
     RETURN b
     ORDER BY b.created_at ASC
     """
     out: List[Dict[str, Any]] = []
-    for rec in session.run(query, graph_id=graph_id):
+    for rec in session.run(query, graph_id=graph_id, tenant_id=tenant_id):
         b = rec["b"]
         out.append(
             {
@@ -38,14 +39,14 @@ def list_branches(session: Session) -> List[Dict[str, Any]]:
     return out
 
 
-def create_branch(session: Session, name: str) -> Dict[str, Any]:
-    graph_id, _ = get_active_graph_context(session)
+def create_branch(session: Session, name: str, *, tenant_id: str, user_id: str) -> Dict[str, Any]:
+    graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
     ensure_graph_scoping_initialized(session)
 
     branch_id = f"B{uuid4().hex[:8].upper()}"
 
     query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     CREATE (b:Branch {
       branch_id: $branch_id,
       graph_id: $graph_id,
@@ -57,7 +58,14 @@ def create_branch(session: Session, name: str) -> Dict[str, Any]:
     RETURN b
     """
 
-    rec = session.run(query, graph_id=graph_id, branch_id=branch_id, name=name, now=_now_iso()).single()
+    rec = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        name=name,
+        now=_now_iso(),
+        tenant_id=tenant_id,
+    ).single()
     b = rec["b"]
     return {
         "branch_id": b.get("branch_id"),
@@ -69,12 +77,20 @@ def create_branch(session: Session, name: str) -> Dict[str, Any]:
     }
 
 
-def fork_branch_from_node(session: Session, branch_id: str, node_id: str, depth: int = 2) -> Dict[str, Any]:
+def fork_branch_from_node(
+    session: Session,
+    branch_id: str,
+    node_id: str,
+    depth: int = 2,
+    *,
+    tenant_id: str,
+    user_id: str,
+) -> Dict[str, Any]:
     """Fork by labeling nodes/edges within N hops as belonging to the branch.
 
     This is an MVP implementation: it does not duplicate nodes; it scopes branch views via `on_branches` arrays.
     """
-    graph_id, _ = get_active_graph_context(session)
+    graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
     ensure_graph_scoping_initialized(session)
 
     ensure_branch_exists(session, graph_id, branch_id)
@@ -94,7 +110,7 @@ def fork_branch_from_node(session: Session, branch_id: str, node_id: str, depth:
 
     # Expand from node within the current graph and mark nodes/relationships.
     query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     MATCH (start:Concept {node_id: $node_id})-[:BELONGS_TO]->(g)
     CALL {
       WITH start, g
@@ -121,7 +137,14 @@ def fork_branch_from_node(session: Session, branch_id: str, node_id: str, depth:
     RETURN size(nodes) AS nodes_tagged, size(rels) AS rels_tagged
     """
 
-    rec = session.run(query, graph_id=graph_id, branch_id=branch_id, node_id=node_id, depth=max(0, min(depth, 6))).single()
+    rec = session.run(
+        query,
+        graph_id=graph_id,
+        branch_id=branch_id,
+        node_id=node_id,
+        depth=max(0, min(depth, 6)),
+        tenant_id=tenant_id,
+    ).single()
     return {
         "graph_id": graph_id,
         "branch_id": branch_id,
@@ -132,13 +155,13 @@ def fork_branch_from_node(session: Session, branch_id: str, node_id: str, depth:
     }
 
 
-def get_branch_graph(session: Session, branch_id: str) -> Dict[str, Any]:
-    graph_id, _ = get_active_graph_context(session)
+def get_branch_graph(session: Session, branch_id: str, *, tenant_id: str, user_id: str) -> Dict[str, Any]:
+    graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
     ensure_graph_scoping_initialized(session)
 
     # Nodes
     nodes_query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
     RETURN c.node_id AS node_id,
@@ -158,7 +181,7 @@ def get_branch_graph(session: Session, branch_id: str) -> Dict[str, Any]:
 
     # Links
     links_query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     MATCH (s:Concept)-[:BELONGS_TO]->(g)
     MATCH (t:Concept)-[:BELONGS_TO]->(g)
     MATCH (s)-[r]->(t)
@@ -171,15 +194,28 @@ def get_branch_graph(session: Session, branch_id: str) -> Dict[str, Any]:
            type(r) AS predicate
     """
 
-    nodes = [dict(rec.data()) for rec in session.run(nodes_query, graph_id=graph_id, branch_id=branch_id)]
-    links = [dict(rec.data()) for rec in session.run(links_query, graph_id=graph_id, branch_id=branch_id)]
+    nodes = [
+        dict(rec.data())
+        for rec in session.run(nodes_query, graph_id=graph_id, branch_id=branch_id, tenant_id=tenant_id)
+    ]
+    links = [
+        dict(rec.data())
+        for rec in session.run(links_query, graph_id=graph_id, branch_id=branch_id, tenant_id=tenant_id)
+    ]
 
     return {"graph_id": graph_id, "branch_id": branch_id, "nodes": nodes, "links": links}
 
 
-def compare_branches(session: Session, branch_id: str, other_branch_id: str) -> Dict[str, Any]:
-    a = get_branch_graph(session, branch_id)
-    b = get_branch_graph(session, other_branch_id)
+def compare_branches(
+    session: Session,
+    branch_id: str,
+    other_branch_id: str,
+    *,
+    tenant_id: str,
+    user_id: str,
+) -> Dict[str, Any]:
+    a = get_branch_graph(session, branch_id, tenant_id=tenant_id, user_id=user_id)
+    b = get_branch_graph(session, other_branch_id, tenant_id=tenant_id, user_id=user_id)
 
     a_nodes = {n["node_id"] for n in a["nodes"]}
     b_nodes = {n["node_id"] for n in b["nodes"]}

@@ -62,6 +62,7 @@ from api_signals import router as signals_router
 from api_voice import router as voice_router
 from api_voice_agent import router as voice_agent_router
 from api_voice_stream import router as voice_stream_router
+from api_voice_extension import router as voice_extension_router
 from api_note_images import router as note_images_router
 from api_fill import router as fill_router
 from api_extend import router as extend_router
@@ -85,6 +86,8 @@ from auth import (
     is_public_endpoint,
     require_auth,
 )
+from services_branch_explorer import set_request_graph_identity, reset_request_graph_identity
+from db_postgres import set_request_db_identity, reset_request_db_identity
 from middleware_timeout import TimeoutMiddleware
 from config import REQUEST_TIMEOUT_SECONDS
 
@@ -346,6 +349,7 @@ app.include_router(signals_router)
 app.include_router(voice_router)
 app.include_router(voice_agent_router)
 app.include_router(voice_stream_router)
+app.include_router(voice_extension_router)
 # Phase 3: Extend system
 app.include_router(extend_router)
 # Phase 4: Trails system
@@ -494,47 +498,65 @@ async def auth_middleware(request: Request, call_next):
                 status_code=401,
                 content={"detail": "Authentication required"}
             )
+        if not user_context.get("tenant_id"):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Tenant context missing in authentication token"}
+            )
+        header_tenant_id = request.headers.get("x-tenant-id")
+        if header_tenant_id and str(header_tenant_id) != str(user_context.get("tenant_id")):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Tenant mismatch between token and request header"}
+            )
     
     # Attach user/tenant context to request state
     request.state.user_id = user_context.get("user_id")
-    request.state.tenant_id = user_context.get("tenant_id") or request.headers.get("x-tenant-id")
+    request.state.tenant_id = user_context.get("tenant_id")
     request.state.is_authenticated = user_context.get("is_authenticated", False)
 
-    if demo_settings.demo_mode:
-        try:
-            enforce_demo_mode_request(request, demo_settings, app.state.demo_limiter)
-        except HTTPException as e:
-            return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
-
+    # Propagate request identity to graph-context services for strict per-user scoping.
+    identity_tokens = set_request_graph_identity(request.state.user_id, request.state.tenant_id)
+    db_identity_tokens = set_request_db_identity(request.state.user_id, request.state.tenant_id)
     try:
-        response = await call_next(request)
-    except HTTPException as e:
-        response = JSONResponse(status_code=e.status_code, content={"detail": e.detail})
-    except Exception:
-        # Let exception handlers do sanitization; still record metrics/logs here
-        raise
+        if demo_settings.demo_mode:
+            try:
+                enforce_demo_mode_request(request, demo_settings, app.state.demo_limiter)
+            except HTTPException as e:
+                return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+
+        try:
+            response = await call_next(request)
+        except HTTPException as e:
+            response = JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        except Exception:
+            # Let exception handlers do sanitization; still record metrics/logs here
+            raise
+        finally:
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            status_code = getattr(locals().get("response"), "status_code", 500)
+
+            log_data = {
+                "event": "request",
+                "request_id": request_id,
+                "session_id": session_id,
+                "route": path,
+                "method": request.method,
+                "status": status_code,
+                "latency_ms": latency_ms,
+                "user_id": request.state.user_id if hasattr(request.state, "user_id") else None,
+                "tenant_id": request.state.tenant_id if hasattr(request.state, "tenant_id") else None,
+                "is_authenticated": request.state.is_authenticated if hasattr(request.state, "is_authenticated") else False,
+            }
+            logger.info(json.dumps(log_data, separators=(",", ":"), ensure_ascii=False))
+
+        # Set response headers
+        if isinstance(response, Response):
+            response.headers["x-request-id"] = request_id
+        return response
     finally:
-        latency_ms = int((time.perf_counter() - start) * 1000)
-        status_code = getattr(locals().get("response"), "status_code", 500)
-
-        log_data = {
-            "event": "request",
-            "request_id": request_id,
-            "session_id": session_id,
-            "route": path,
-            "method": request.method,
-            "status": status_code,
-            "latency_ms": latency_ms,
-            "user_id": request.state.user_id if hasattr(request.state, "user_id") else None,
-            "tenant_id": request.state.tenant_id if hasattr(request.state, "tenant_id") else None,
-            "is_authenticated": request.state.is_authenticated if hasattr(request.state, "is_authenticated") else False,
-        }
-        logger.info(json.dumps(log_data, separators=(",", ":"), ensure_ascii=False))
-
-    # Set response headers
-    if isinstance(response, Response):
-        response.headers["x-request-id"] = request_id
-    return response
+        reset_request_db_identity(db_identity_tokens)
+        reset_request_graph_identity(identity_tokens)
 
 # Mount static files for uploaded resources
 # This serves files from the uploaded_resources directory at /static/resources/

@@ -63,20 +63,29 @@ def capture_workflow(
     - URL ingestion
     - File uploads
     """
+    user_id = getattr(fastapi_request.state, "user_id", None)
+    tenant_id = getattr(fastapi_request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+
     ensure_graph_scoping_initialized(session)
-    current_graph_id, current_branch_id = get_active_graph_context(session)
+    current_graph_id, current_branch_id = get_active_graph_context(
+        session,
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+    )
 
     target_graph_id = request.graph_id or current_graph_id
     target_branch_id = request.branch_id or current_branch_id
 
     # Keep active context aligned with the workflow target.
     if target_graph_id != current_graph_id:
-        set_active_graph(session, target_graph_id)
+        set_active_graph(session, target_graph_id, tenant_id=str(tenant_id), user_id=str(user_id))
     # After graph switches, branch may reset to default.
-    if target_branch_id != get_active_graph_context(session)[1]:
-        set_active_branch(session, target_branch_id)
+    if target_branch_id != get_active_graph_context(session, tenant_id=str(tenant_id), user_id=str(user_id))[1]:
+        set_active_branch(session, target_branch_id, tenant_id=str(tenant_id), user_id=str(user_id))
 
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=str(tenant_id), user_id=str(user_id))
     
     result = {}
     next_actions = []
@@ -321,6 +330,8 @@ def capture_workflow(
                             session=session,
                             concept_id=request.attach_concept_id,
                             resource_id=resource_id,
+                            tenant_id=str(tenant_id),
+                            user_id=str(user_id),
                         )
                     except Exception:
                         pass
@@ -394,8 +405,24 @@ def explore_workflow(
     - Community browsing
     - Graph overview
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(
+        session,
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+    )
+    if request.graph_id and request.graph_id != graph_id:
+        set_active_graph(session, request.graph_id, tenant_id=str(tenant_id), user_id=str(user_id))
+        graph_id, branch_id = get_active_graph_context(
+            session,
+            tenant_id=str(tenant_id),
+            user_id=str(user_id),
+        )
     
     result = {}
     next_actions = []
@@ -429,11 +456,15 @@ def explore_workflow(
                 raise HTTPException(status_code=400, detail="concept_id required for concept exploration")
             
             from services_graph import get_concept_by_id, get_neighbors_with_relationships
-            concept = get_concept_by_id(session, request.concept_id)
+            concept = get_concept_by_id(session, request.concept_id, tenant_id=str(tenant_id))
             if not concept:
                 raise HTTPException(status_code=404, detail=f"Concept {request.concept_id} not found")
             
-            neighbors = get_neighbors_with_relationships(session, request.concept_id)
+            neighbors = get_neighbors_with_relationships(
+                session,
+                request.concept_id,
+                tenant_id=str(tenant_id),
+            )
             
             result = {
                 "concept": concept.dict(),
@@ -466,6 +497,7 @@ def explore_workflow(
                 session=session,
                 limit_nodes=request.limit or 50,
                 limit_edges=request.limit or 100,
+                tenant_id=str(tenant_id),
             )
             
             result = {
@@ -529,8 +561,17 @@ async def synthesize_workflow(
     - Concept summaries
     - Claim generation
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(
+        session,
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+    )
     
     result = {}
     next_actions = []
@@ -555,6 +596,8 @@ async def synthesize_workflow(
             class MockRequest:
                 state = type('obj', (object,), {})()
             mock_request = MockRequest()
+            mock_request.state.user_id = str(user_id)
+            mock_request.state.tenant_id = str(tenant_id)
             retrieval_response = retrieve_endpoint(retrieval_req, mock_request, auth, session)
             
             result = {
@@ -679,8 +722,17 @@ def get_workflow_status(
     """
     Get status and capabilities of each workflow.
     """
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id = get_active_graph_context(
+        session,
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+    )
     
     return WorkflowStatusResponse(
         capture={

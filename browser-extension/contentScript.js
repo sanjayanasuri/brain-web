@@ -1,122 +1,93 @@
 /**
  * Content script for extracting readable text from webpages
+ * Enhanced version with better content extraction and metadata
  */
 
-/**
- * Remove navigation, footer, aside, and other non-content elements
- */
-function removeNonContentElements() {
-  const selectors = [
-    'nav',
-    'footer',
-    'aside',
-    'header',
-    '.nav',
-    '.navigation',
-    '.footer',
-    '.sidebar',
-    '.menu',
-    '.advertisement',
-    '.ad',
-    '[role="navigation"]',
-    '[role="banner"]',
-    '[role="contentinfo"]',
-    '[role="complementary"]'
-  ];
-  
-  const elements = [];
-  selectors.forEach(selector => {
-    try {
-      const found = document.querySelectorAll(selector);
-      found.forEach(el => elements.push(el));
-    } catch (e) {
-      // Ignore invalid selectors
-    }
-  });
-  
-  // Clone elements to avoid modifying the original DOM
-  elements.forEach(el => {
-    if (el && el.parentNode) {
-      el.style.display = 'none';
-    }
-  });
-  
-  return elements;
-}
+// --- Content Extraction Logic ---
 
-/**
- * Restore elements that were hidden
- */
-function restoreElements(elements) {
-  elements.forEach(el => {
-    if (el) {
-      el.style.display = '';
-    }
-  });
-}
-
-/**
- * Extract readable text from the page
- * Prefers <article> content, falls back to body text
- */
-function extractText() {
-  // Try to find article element first
-  const article = document.querySelector('article');
-  
-  if (article) {
-    // Use article content
-    return {
-      text: article.innerText || article.textContent || '',
-      title: document.title,
-      url: window.location.href
-    };
-  }
-  
-  // Fall back to body, but try to remove non-content elements
-  const hiddenElements = removeNonContentElements();
-  
-  try {
-    const bodyText = document.body.innerText || document.body.textContent || '';
-    
-    // Restore hidden elements
-    restoreElements(hiddenElements);
-    
-    return {
-      text: bodyText,
-      title: document.title,
-      url: window.location.href
-    };
-  } catch (e) {
-    // Restore hidden elements even on error
-    restoreElements(hiddenElements);
-    throw e;
-  }
-}
-
-/**
- * Clean up text: remove excessive whitespace, normalize
- */
 function cleanText(text) {
-  if (!text) return '';
-  
-  // Replace multiple whitespace with single space
+  if (!text) return "";
   return text
-    .replace(/\s+/g, ' ')
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-// Listen for messages from popup
+function getMeta(name) {
+  const el = document.querySelector(`meta[name="${name}"]`) || document.querySelector(`meta[property="${name}"]`);
+  return el?.getAttribute("content") || null;
+}
+
+function removeNoiseNodes(root) {
+  const selectors = [
+    "script", "style", "noscript", "svg", "canvas",
+    "nav", "header", "footer", "aside",
+    "[role='navigation']", "[role='banner']", "[role='contentinfo']",
+    "[aria-hidden='true']",
+    ".advertisement", ".ads", ".ad", ".promo", ".cookie", ".cookie-banner",
+    ".newsletter", ".subscribe", ".paywall"
+  ];
+  selectors.forEach((s) => root.querySelectorAll(s).forEach((n) => n.remove()));
+}
+
+function scoreNode(el) {
+  const text = (el.innerText || "").trim();
+  const textLen = text.length;
+  if (textLen < 200) return 0;
+
+  const pCount = el.querySelectorAll("p").length;
+  const aTextLen = Array.from(el.querySelectorAll("a"))
+    .map((a) => (a.innerText || "").length)
+    .reduce((acc, v) => acc + v, 0);
+
+  const linkDensity = aTextLen / Math.max(1, textLen);
+  const headingBonus = el.querySelectorAll("h1,h2").length * 50;
+
+  return textLen + pCount * 200 + headingBonus - linkDensity * 1500;
+}
+
+function extractReaderTextFallback() {
+  const article = document.querySelector('article');
+  if (article) return cleanText(article.innerText);
+
+  const clone = document.body.cloneNode(true);
+  removeNoiseNodes(clone);
+
+  const candidates = [];
+  clone.querySelectorAll("main, [role='main']").forEach((el) => candidates.push(el));
+  clone.querySelectorAll("div, section").forEach((el) => {
+    const len = (el.innerText || "").trim().length;
+    if (len >= 500) candidates.push(el);
+  });
+
+  if (candidates.length === 0) return cleanText(clone.innerText || "");
+
+  let best = null;
+  let bestScore = 0;
+  for (const el of candidates) {
+    const s = scoreNode(el);
+    if (s > bestScore) {
+      bestScore = s;
+      best = el;
+    }
+  }
+  return cleanText(best?.innerText || clone.innerText || "");
+}
+
+// --- Message Listener ---
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'extractText') {
     try {
-      const extracted = extractText();
-      const cleaned = cleanText(extracted.text);
-      
+      const text = extractReaderTextFallback();
+
       sendResponse({
         success: true,
-        text: cleaned,
-        title: extracted.title,
-        url: extracted.url,
+        text: text,
+        title: document.title,
+        url: window.location.href,
         lang: document.documentElement.lang || navigator.language
       });
     } catch (error) {
@@ -125,9 +96,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         error: error.message
       });
     }
-    
-    // Return true to indicate we will send a response asynchronously
     return true;
   }
 });
-

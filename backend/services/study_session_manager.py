@@ -29,6 +29,11 @@ except ImportError:
     RealDictCursor = None
 
 from config import POSTGRES_CONNECTION_STRING
+try:
+    from db_postgres import apply_rls_session_settings
+except Exception:  # pragma: no cover
+    def apply_rls_session_settings(cur, *, user_id=None, tenant_id=None):
+        return None
 from models.study import (
     StudySession, TaskSpec, EvaluationResult,
     StartSessionRequest, StartSessionResponse,
@@ -93,6 +98,7 @@ def start_session(
     conn = pool.getconn()
     try:
         with conn.cursor() as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             cur.execute("""
                 INSERT INTO study_sessions (
                     id, user_id, tenant_id, graph_id, branch_id,
@@ -144,7 +150,10 @@ def start_session(
 def get_next_task(
     session_id: str,
     current_mode: Optional[str] = None,
-    neo4j_session: Optional[Neo4jSession] = None
+    neo4j_session: Optional[Neo4jSession] = None,
+    *,
+    user_id: str,
+    tenant_id: str,
 ) -> NextTaskResponse:
     """
     Get the next task for a session.
@@ -163,9 +172,10 @@ def get_next_task(
     conn = pool.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             cur.execute("""
-                SELECT * FROM study_sessions WHERE id = %s
-            """, (session_id,))
+                SELECT * FROM study_sessions WHERE id = %s AND user_id = %s AND tenant_id = %s
+            """, (session_id, user_id, tenant_id))
             session_row = cur.fetchone()
             
             if not session_row:
@@ -176,8 +186,8 @@ def get_next_task(
                 cur.execute("""
                     UPDATE study_sessions
                     SET current_mode = %s
-                    WHERE id = %s
-                """, (current_mode, session_id))
+                    WHERE id = %s AND user_id = %s AND tenant_id = %s
+                """, (current_mode, session_id, user_id, tenant_id))
                 conn.commit()
                 session_row["current_mode"] = current_mode
     finally:
@@ -211,7 +221,10 @@ def get_next_task(
 def submit_attempt(
     task_id: str,
     response_text: str,
-    self_confidence: Optional[float] = None
+    self_confidence: Optional[float] = None,
+    *,
+    user_id: str,
+    tenant_id: str,
 ) -> AttemptResponse:
     """
     Submit and evaluate a task attempt.
@@ -231,9 +244,17 @@ def submit_attempt(
         conn = pool.getconn()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
                 cur.execute("""
-                    SELECT * FROM study_tasks WHERE id = %s
-                """, (task_id,))
+                    SELECT st.*,
+                           ss.user_id AS session_user_id,
+                           ss.tenant_id AS session_tenant_id,
+                           ss.current_mode AS session_current_mode,
+                           ss.mode_inertia AS session_mode_inertia
+                    FROM study_tasks st
+                    JOIN study_sessions ss ON ss.id = st.session_id
+                    WHERE st.id = %s AND ss.user_id = %s AND ss.tenant_id = %s
+                """, (task_id, user_id, tenant_id))
                 task_row = cur.fetchone()
                 
                 if not task_row:
@@ -255,18 +276,12 @@ def submit_attempt(
                 
                 # Get session info for user context
                 session_id = task_row["session_id"]
-                cur.execute("""
-                    SELECT user_id, tenant_id, current_mode, mode_inertia
-                    FROM study_sessions
-                    WHERE id = %s
-                """, (session_id,))
-                
-                session_row = cur.fetchone()
-                if not session_row:
-                    raise ValueError(f"Session not found: {session_id}")
-                
-                user_id = session_row["user_id"]
-                tenant_id = session_row["tenant_id"]
+                session_row = {
+                    "user_id": task_row["session_user_id"],
+                    "tenant_id": task_row["session_tenant_id"],
+                    "current_mode": task_row["session_current_mode"],
+                    "mode_inertia": task_row["session_mode_inertia"],
+                }
                 
                 # Evaluate attempt with user context for concept tracking
                 evaluation = evaluate_attempt(
@@ -304,9 +319,9 @@ def submit_attempt(
                 cur.execute("""
                     UPDATE study_sessions
                     SET mode_inertia = %s
-                    WHERE id = %s
+                    WHERE id = %s AND user_id = %s AND tenant_id = %s
                     RETURNING mode_inertia, current_mode
-                """, (new_inertia, session_id))
+                """, (new_inertia, session_id, user_id, tenant_id))
                 
                 session_update = cur.fetchone()
                 
@@ -365,7 +380,7 @@ def submit_attempt(
     )
 
 
-def end_session(session_id: str) -> SessionSummary:
+def end_session(session_id: str, *, user_id: str, tenant_id: str) -> SessionSummary:
     """
     End a study session and return summary.
     
@@ -380,14 +395,15 @@ def end_session(session_id: str) -> SessionSummary:
     conn = pool.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             # Mark session as ended
             ended_at = datetime.utcnow()
             cur.execute("""
                 UPDATE study_sessions
                 SET ended_at = %s
-                WHERE id = %s
+                WHERE id = %s AND user_id = %s AND tenant_id = %s
                 RETURNING started_at
-            """, (ended_at, session_id))
+            """, (ended_at, session_id, user_id, tenant_id))
             
             session_row = cur.fetchone()
             if not session_row:
@@ -399,9 +415,10 @@ def end_session(session_id: str) -> SessionSummary:
                     COUNT(DISTINCT st.id) as tasks_completed,
                     AVG(sa.composite_score) as avg_score
                 FROM study_tasks st
+                JOIN study_sessions ss ON ss.id = st.session_id
                 LEFT JOIN study_attempts sa ON sa.task_id = st.id
-                WHERE st.session_id = %s
-            """, (session_id,))
+                WHERE st.session_id = %s AND ss.user_id = %s AND ss.tenant_id = %s
+            """, (session_id, user_id, tenant_id))
             
             stats = cur.fetchone()
             
@@ -443,6 +460,7 @@ def _generate_next_task(
     conn = pool.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             cur.execute("""
                 SELECT task_type FROM study_tasks
                 WHERE session_id = %s
@@ -524,6 +542,7 @@ def _generate_next_task(
     conn = pool.getconn()
     try:
         with conn.cursor() as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             import json
             cur.execute("""
                 INSERT INTO study_tasks (
@@ -560,6 +579,7 @@ def _get_user_performance(user_id: str, tenant_id: str) -> Dict[str, float]:
     conn = pool.getconn()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             cur.execute("""
                 SELECT task_type, avg_score
                 FROM user_performance_cache
@@ -600,6 +620,7 @@ def _update_user_performance(
     conn = pool.getconn()
     try:
         with conn.cursor() as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
             # Upsert into cache
             cur.execute("""
                 INSERT INTO user_performance_cache (

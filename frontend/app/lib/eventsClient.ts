@@ -2,6 +2,7 @@
  * Event logging client for backend-backed activity tracking
  * Enables multi-device "Recent activity" and future Sessions
  */
+import { getApiHeaders } from '../api/base';
 
 export type EventType =
   | 'CONCEPT_VIEWED'
@@ -102,9 +103,10 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
  */
 export async function logEvent(event: LogEventParams): Promise<void> {
   try {
+    const headers = await getApiHeaders();
     const response = await fetch(`${API_BASE_URL}/events/activity`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(event),
     });
     
@@ -124,6 +126,7 @@ export async function fetchRecentEvents(
   params: FetchRecentEventsParams = {}
 ): Promise<ActivityEvent[]> {
   try {
+    const headers = await getApiHeaders();
     const queryParams = new URLSearchParams();
     if (params.limit) {
       queryParams.set('limit', params.limit.toString());
@@ -136,7 +139,7 @@ export async function fetchRecentEvents(
     }
     
     const url = `${API_BASE_URL}/events/activity/recent${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
-    const response = await fetch(url);
+    const response = await fetch(url, { headers });
     
     if (!response.ok) {
       console.warn('[EventsClient] Failed to fetch recent events:', response.status);
@@ -158,11 +161,12 @@ export async function fetchRecentSessions(
   limit: number = 10
 ): Promise<SessionSummary[]> {
   try {
+    const headers = await getApiHeaders();
     const queryParams = new URLSearchParams();
     queryParams.set('limit', limit.toString());
     
     const url = `${API_BASE_URL}/sessions/recent?${queryParams.toString()}`;
-    const response = await fetch(url);
+    const response = await fetch(url, { headers });
     
     if (!response.ok) {
       console.warn('[EventsClient] Failed to fetch recent sessions:', response.status);
@@ -176,4 +180,3 @@ export async function fetchRecentSessions(
     return [];
   }
 }
-

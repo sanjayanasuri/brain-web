@@ -11,9 +11,11 @@ import re
 from typing import List, Dict, Any, Optional, Tuple
 from neo4j import Session
 from openai import OpenAI
-from uuid import uuid4
+import logging
 
 from config import OPENAI_API_KEY
+from services_model_router import model_router, TASK_CHAT_SMART, TASK_EXTRACT
+
 from services_branch_explorer import (
     ensure_graph_scoping_initialized,
     get_active_graph_context,
@@ -31,22 +33,9 @@ from services_graph import (
 from services_claims import extract_claims_from_chunk
 from models import Concept, ConceptCreate
 
-# Initialize OpenAI client
-client = None
-if OPENAI_API_KEY:
-    cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-    if cleaned_key and cleaned_key.startswith('sk-'):
-        try:
-            client = OpenAI(api_key=cleaned_key)
-            print(f"✓ OpenAI client initialized for extend system (key length: {len(cleaned_key)})")
-        except Exception as e:
-            print(f"ERROR: Failed to initialize OpenAI client for extend: {e}")
-            client = None
-    else:
-        print("WARNING: OPENAI_API_KEY format invalid (should start with 'sk-')")
-        client = None
-else:
-    print("WARNING: OPENAI_API_KEY not found - extend system will not work")
+from uuid import uuid4
+
+logger = logging.getLogger("brain_web")
 
 
 def get_concept_context(session: Session, graph_id: str, branch_id: str, concept_id: str) -> Dict[str, Any]:
@@ -133,8 +122,9 @@ def suggest_connections(
     
     Returns relationship suggestions without creating any nodes or edges.
     """
-    if not client:
+    if not model_router.client:
         return []
+
     
     # Gather context
     if source_type == "concept":
@@ -209,8 +199,8 @@ User context: {context if context else 'None'}
 Generate 3-5 relationship suggestions. Return JSON array only."""
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        raw = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -218,15 +208,11 @@ Generate 3-5 relationship suggestions. Return JSON array only."""
             temperature=0.3,
             max_tokens=2000,
         )
-        
-        if not response or not response.choices or len(response.choices) == 0:
+
+        if not raw:
             return []
-        
-        message = response.choices[0].message
-        if not message or not message.content:
-            return []
-        
-        content = message.content.strip()
+
+        content = raw.strip()
         # Extract JSON array
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if json_match:
@@ -442,8 +428,9 @@ def controlled_expansion(
     if max_new_nodes > 5:
         return [], [], [f"max_new_nodes cannot exceed 5 (got {max_new_nodes})"]
     
-    if not client:
+    if not model_router.client:
         return [], [], ["OpenAI client not available"]
+
     
     errors = []
     created_concepts = []
@@ -494,8 +481,8 @@ User context: {context if context else 'None'}
 Generate up to {max_new_nodes} candidate concepts. Return JSON array only."""
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        raw = model_router.completion(
+            task_type=TASK_CHAT_SMART,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -503,15 +490,11 @@ Generate up to {max_new_nodes} candidate concepts. Return JSON array only."""
             temperature=0.4,
             max_tokens=2000,
         )
-        
-        if not response or not response.choices or len(response.choices) == 0:
+
+        if not raw:
             return [], [], ["LLM returned empty response"]
-        
-        message = response.choices[0].message
-        if not message or not message.content:
-            return [], [], ["LLM returned no content"]
-        
-        content = message.content.strip()
+
+        content = raw.strip()
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if json_match:
             content = json_match.group(0)

@@ -513,13 +513,14 @@ export async function searchConcepts(
     results: Concept[];
     count: number;
 }> {
+    const headers = await getApiHeaders();
     const params = new URLSearchParams();
     params.set('q', query);
     if (graphId) {
         params.set('graph_id', graphId);
     }
     params.set('limit', limit.toString());
-    const response = await fetch(`${API_BASE_URL}/concepts/search?${params.toString()}`);
+    const response = await fetch(`${API_BASE_URL}/concepts/search?${params.toString()}`, { headers });
     if (!response.ok) {
         throw new Error(`Failed to search concepts: ${response.statusText}`);
     }

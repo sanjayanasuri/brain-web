@@ -6,7 +6,6 @@ import GlassCard from '../ui/GlassCard';
 import Button from '../ui/Button';
 import { VoiceSession } from '../../types/voice';
 import { startVoiceSession, stopVoiceSession, getTutorProfile, setTutorProfile, type TutorProfile } from '../../api-client';
-import { AUDIENCE_MODES, VOICE_IDS } from '../study/TutorProfileSettings';
 import { Settings, X } from 'lucide-react';
 
 interface VoiceAgentPanelProps {
@@ -101,13 +100,15 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
   }, []);
 
   const voiceStream = useVoiceStream({
+    onSpeechStart: () => {
+      if (!isSpeaking) return;
+      // Barge-in: user started speaking while assistant was talking.
+      interruptSentRef.current = true;  // Set BEFORE stopStreamedAudio so onTtsAudio drops in-flight frames
+      stopStreamedAudio();
+      voiceStream.interrupt();
+    },
     onProcessingStart: () => {
       setIsProcessing(true);
-      if (isSpeaking) {
-        interruptSentRef.current = true;  // Set BEFORE stopStreamedAudio so onTtsAudio drops in-flight frames
-        stopStreamedAudio();
-        voiceStream.interrupt();
-      }
     },
     onTranscript: (text) => {
       const t = (text || '').trim();
@@ -289,29 +290,80 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
       </div>
 
       {showSettings && profile && (
-        <div className="settings-overlay">
-          <div className="settings-header">
-            <h4>Voice Settings</h4>
+        <div className="settings-overlay !p-4 !w-64 max-h-[80vh] overflow-y-auto">
+          <div className="settings-header border-b border-gray-100 pb-2 mb-3">
+            <h4 className="font-bold text-sm">Persona Engine</h4>
             <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={14} /></button>
           </div>
 
-          <div className="setting-row">
-            <label>Audience</label>
-            <select
-              value={profile.audience_mode}
-              onChange={(e) => handleUpdateProfile({ audience_mode: e.target.value as any })}
-            >
-              {AUDIENCE_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </select>
-          </div>
-          <div className="setting-row">
-            <label>Tone</label>
-            <select
-              value={profile.voice_id}
-              onChange={(e) => handleUpdateProfile({ voice_id: e.target.value as any })}
-            >
-              {VOICE_IDS.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
-            </select>
+          <div className="space-y-4">
+            <div className="setting-row flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Level</label>
+              <select
+                className="w-full text-xs bg-gray-50 border-gray-200 rounded-md"
+                value={profile.comprehension_level}
+                onChange={(e) => handleUpdateProfile({ comprehension_level: e.target.value as any })}
+              >
+                <option value="beginner">Beginner</option>
+                <option value="intermediate">Intermediate</option>
+                <option value="advanced">Advanced</option>
+                <option value="expert">Expert</option>
+              </select>
+            </div>
+
+            <div className="setting-row flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Tone</label>
+              <select
+                className="w-full text-xs bg-gray-50 border-gray-200 rounded-md"
+                value={profile.tone}
+                onChange={(e) => handleUpdateProfile({ tone: e.target.value as any })}
+              >
+                <option value="casual">Casual</option>
+                <option value="balanced">Balanced</option>
+                <option value="formal">Formal</option>
+                <option value="encouraging">Encouraging</option>
+              </select>
+            </div>
+
+            <div className="setting-row flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Turn-Taking</label>
+              <select
+                className="w-full text-xs bg-gray-50 border-gray-200 rounded-md"
+                value={profile.turn_taking}
+                onChange={(e) => handleUpdateProfile({ turn_taking: e.target.value as any })}
+              >
+                <option value="socratic">Socratic</option>
+                <option value="lecture">Lecture</option>
+                <option value="dialogic">Dialogic</option>
+                <option value="on_demand">On-Demand</option>
+              </select>
+            </div>
+
+            <div className="setting-row flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Pacing</label>
+              <select
+                className="w-full text-xs bg-gray-50 border-gray-200 rounded-md"
+                value={profile.pacing}
+                onChange={(e) => handleUpdateProfile({ pacing: e.target.value as any })}
+              >
+                <option value="slow">Slow</option>
+                <option value="moderate">Moderate</option>
+                <option value="fast">Fast</option>
+              </select>
+            </div>
+
+            <div className="setting-row flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Response Length</label>
+              <select
+                className="w-full text-xs bg-gray-50 border-gray-200 rounded-md"
+                value={profile.response_length}
+                onChange={(e) => handleUpdateProfile({ response_length: e.target.value as any })}
+              >
+                <option value="concise">Concise</option>
+                <option value="balanced">Balanced</option>
+                <option value="detailed">Detailed</option>
+              </select>
+            </div>
           </div>
         </div>
       )}

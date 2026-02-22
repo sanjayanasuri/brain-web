@@ -161,9 +161,8 @@ def send_branch_message_endpoint(
 ):
     """Send a user message in a branch and get assistant reply."""
     from services_contextual_branches import get_branch
-    import os
-    import openai
-    
+    from services_model_router import model_router, TASK_CHAT_FAST
+
     user_id = auth.get("user_id", "anonymous")
     
     # Verify branch exists
@@ -185,10 +184,8 @@ def send_branch_message_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to add message: {str(e)}")
     
-    # Get assistant reply using LLM
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    if not model_router.client:
+        raise HTTPException(status_code=500, detail="OpenAI client not configured (check OPENAI_API_KEY)")
     
     # Get parent message content from DB (using the version stored with branch)
     parent_message_content = get_parent_message_content(
@@ -225,10 +222,8 @@ def send_branch_message_endpoint(
         system_prompt = _build_span_explanation_prompt(parent_message_content or "", selected_text)
     
     try:
-        client = openai.OpenAI(api_key=api_key)
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
         if is_anchor_ref and anchor_snippet:
-            # Provide the selected region as a stable context message for every turn.
             messages.append({
                 "role": "user",
                 "content": [
@@ -237,14 +232,12 @@ def send_branch_message_endpoint(
                 ],
             })
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        assistant_content = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[*messages, *conversation_history],
             temperature=0.7,
             max_tokens=1000,
         )
-        
-        assistant_content = response.choices[0].message.content
         
         # Add assistant message
         try:
@@ -317,27 +310,23 @@ def generate_bridging_hints_endpoint(
     if not explanation:
         raise HTTPException(status_code=400, detail="No explanation found in branch")
     
-    # Generate bridging hints using LLM
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
-    
+    if not model_router.client:
+        raise HTTPException(status_code=500, detail="OpenAI client not configured (check OPENAI_API_KEY)")
+
     try:
-        client = openai.OpenAI(api_key=api_key)
+        from services_model_router import model_router, TASK_CHAT_FAST
         prompt = _build_bridging_hints_prompt(parent_content, selected_text, explanation)
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+
+        result = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that generates bridging hints."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
             temperature=0.7,
             max_tokens=800,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
-        result = response.choices[0].message.content
         import json
         hints_data = json.loads(result)
         

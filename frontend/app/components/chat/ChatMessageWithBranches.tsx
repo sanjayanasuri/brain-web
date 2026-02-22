@@ -13,6 +13,8 @@ import { useBranchContext } from './BranchContext';
 import TaskCard from '../study/TaskCard';
 import Feedback from '../study/Feedback';
 import { ActionButtons } from './ActionButtons';
+import { submitFeedback } from '../../api/feedback';
+import StyleFeedbackForm from '../ui/StyleFeedbackForm';
 
 interface Branch {
   id: string;
@@ -36,6 +38,8 @@ interface ChatMessageWithBranchesProps {
   content: string;
   role: 'user' | 'assistant';
   timestamp: number;
+  answerId?: string | null;
+  feedbackQuestion?: string;
   actions?: Array<{
     type: 'view_graph' | 'add_to_profile' | 'open_url';
     label: string;
@@ -56,6 +60,8 @@ export default function ChatMessageWithBranches({
   content,
   role,
   timestamp,
+  answerId,
+  feedbackQuestion,
   actions,
   onExplain,
   onOpenBranch,
@@ -67,6 +73,9 @@ export default function ChatMessageWithBranches({
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [highlightedBranch, setHighlightedBranch] = useState<string | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState<1 | -1 | null>(null);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const [feedbackToast, setFeedbackToast] = useState('');
   const chatSessionId = useMemo(() => {
     const chatParam = searchParams?.get('chat') || null;
     if (chatParam) {
@@ -126,6 +135,29 @@ export default function ChatMessageWithBranches({
       // You could add visual highlighting at the offset
     }
   }, [messageId]);
+
+  const handleThumbFeedback = useCallback(
+    async (rating: 1 | -1) => {
+      if (!answerId || submittingFeedback) return;
+      setSubmittingFeedback(true);
+      try {
+        await submitFeedback(
+          answerId,
+          rating,
+          rating > 0 ? 'Helpful answer' : 'Unhelpful answer',
+          feedbackQuestion || undefined,
+        );
+        setFeedbackRating(rating);
+        setFeedbackToast('Thanks for feedback');
+        setTimeout(() => setFeedbackToast(''), 1800);
+      } catch (err) {
+        console.error('Failed to submit feedback:', err);
+      } finally {
+        setSubmittingFeedback(false);
+      }
+    },
+    [answerId, feedbackQuestion, submittingFeedback]
+  );
 
   const handleFindInLecture = useCallback(async () => {
     if (!chatSessionId) {
@@ -257,6 +289,72 @@ export default function ChatMessageWithBranches({
         >
           Find in lecture
         </button>
+      )}
+
+      {role === 'assistant' && answerId && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px' }}>
+          <button
+            onClick={() => handleThumbFeedback(1)}
+            disabled={submittingFeedback}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '6px 10px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              background: feedbackRating === 1 ? 'rgba(34,197,94,0.12)' : 'var(--surface)',
+              color: 'var(--ink)',
+              cursor: submittingFeedback ? 'not-allowed' : 'pointer',
+              opacity: submittingFeedback ? 0.7 : 1,
+            }}
+          >
+            Helpful
+          </button>
+          <button
+            onClick={() => handleThumbFeedback(-1)}
+            disabled={submittingFeedback}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '6px 10px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              background: feedbackRating === -1 ? 'rgba(239,68,68,0.12)' : 'var(--surface)',
+              color: 'var(--ink)',
+              cursor: submittingFeedback ? 'not-allowed' : 'pointer',
+              opacity: submittingFeedback ? 0.7 : 1,
+            }}
+          >
+            Not helpful
+          </button>
+        </div>
+      )}
+
+      {role === 'assistant' && answerId && feedbackToast && (
+        <div
+          style={{
+            alignSelf: 'flex-start',
+            marginTop: '-2px',
+            padding: '4px 8px',
+            borderRadius: '999px',
+            border: '1px solid var(--border)',
+            background: 'rgba(34,197,94,0.10)',
+            fontSize: '11px',
+            color: 'var(--ink)',
+          }}
+        >
+          {feedbackToast}
+        </div>
+      )}
+
+      {role === 'assistant' && answerId && (
+        <div style={{ alignSelf: 'flex-start', maxWidth: '85%' }}>
+          <StyleFeedbackForm
+            answerId={answerId}
+            question={feedbackQuestion || ''}
+            originalResponse={displayContent || content}
+          />
+        </div>
       )}
 
       {/* Branch chips */}

@@ -144,15 +144,15 @@
 /* Typography and touch target responsiveness */
 @media (max-width: 768px) {
     h1 {
-        font-size: 24px;
+        font-size: clamp(1.5rem, 6vw, 2rem);
     }
 
     h2 {
-        font-size: 20px;
+        font-size: clamp(1.1rem, 4vw, 1.4rem);
     }
 
     h3 {
-        font-size: 18px;
+        font-size: clamp(1rem, 3.5vw, 1.2rem);
     }
 
     .responsive-header-stack {
@@ -169,6 +169,25 @@
     .pill {
         min-height: 44px !important;
         min-width: 44px;
+    }
+
+    /* Auth card — reduce padding on mobile */
+    .auth-card {
+        padding: clamp(1.5rem, 5vw, 2.5rem);
+    }
+
+    /* Hero CTA buttons: stack vertically on small screens */
+    .hero-cta-wrapper {
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+    }
+
+    .hero-cta-wrapper a,
+    .hero-cta-wrapper button {
+        width: 100%;
+        max-width: 320px;
+        justify-content: center;
     }
 }
 
@@ -221,4 +240,85 @@
     to {
         transform: rotate(360deg);
     }
+}
+
+/* ============================================================
+   Additional Responsive Improvements
+   ============================================================ */
+
+/* Fluid container utility */
+.fluid-container {
+    width: 100%;
+    max-width: 100%;
+    padding-left: clamp(0.75rem, 3vw, 2rem);
+    padding-right: clamp(0.75rem, 3vw, 2rem);
+}
+
+/* Ensure all images inside content panels are fluid */
+.node-card img,
+.chat-bubble img,
+.resource-item img,
+.study-card img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+}
+
+/* Home page: search form fluid padding on small screens */
+@media (max-width: 600px) {
+
+    /* Shrink the home input box padding */
+    .home-search-box {
+        padding: 14px 16px !important;
+    }
+
+    /* Conversation cards: ensure text doesn't overflow */
+    .conversation-card {
+        padding: 10px 12px !important;
+    }
+
+    /* Floating chat input: full-width with tighter padding */
+    .chat-float-input {
+        padding: 14px 16px !important;
+        border-radius: 20px !important;
+    }
+
+    /* Make stat bar wrap instead of overflow */
+    .stat-bar {
+        flex-wrap: wrap;
+    }
+
+    /* Landing page: hide full symbol-container on tiny screens */
+    .symbol-container {
+        width: min(280px, 85vw) !important;
+        height: min(280px, 85vw) !important;
+    }
+}
+
+/* Ensure absolute/fixed positioned back-button doesn't overlap content on small screens */
+@media (max-width: 480px) {
+    .chat-back-btn {
+        top: 76px !important;
+        left: 12px !important;
+    }
+
+    /* Reduce floating input bottom offset slightly */
+    .chat-float-wrapper {
+        bottom: 16px !important;
+        padding: 0 10px;
+    }
+}
+
+/* Prevent horizontal scroll from oversized elements */
+.app-shell,
+.page-container {
+    overflow-x: hidden;
+}
+
+/* Responsive table/grid overflows — show scrollbar instead of breaking layout */
+table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }

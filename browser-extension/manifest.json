@@ -3,8 +3,20 @@
   "name": "Brain Web Capture",
   "version": "0.2.0",
   "description": "Add highlighted text to Brain Web from the context menu.",
-  "permissions": ["contextMenus", "storage", "notifications", "scripting"],
-  "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*", "https://*/*", "http://*/*", "file://*/*"],
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "notifications",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "https://*/*",
+    "http://*/*",
+    "file://*/*"
+  ],
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"
@@ -14,11 +26,21 @@
     "48": "assets/icon48.png",
     "128": "assets/icon128.png"
   },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Brain Web Capture"
+  },
   "web_accessible_resources": [
     {
-      "resources": ["assets/*.png"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "assets/icon16.png",
+        "assets/icon48.png",
+        "assets/icon128.png",
+        "voiceWidget.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
-

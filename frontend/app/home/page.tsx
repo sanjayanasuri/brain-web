@@ -237,6 +237,7 @@ function HomePageInner() {
         const decoder = new TextDecoder();
         let buffer = "";
         let accumulatedAnswer = "";
+        let streamedAnswerId: string | null = null;
         const receivedActions: any[] = [];
 
         while (true) {
@@ -263,6 +264,9 @@ function HomePageInner() {
                   receivedActions.push(...data.actions);
                   setCurrentActions(prev => [...prev, ...data.actions]);
                 } else if (data.type === "done") {
+                  if (typeof data.answer_id === "string" && data.answer_id.trim()) {
+                    streamedAnswerId = data.answer_id.trim();
+                  }
                   // Stream complete
                   break;
                 } else if (data.type === "error") {
@@ -298,11 +302,12 @@ function HomePageInner() {
         }
 
         const assistantMessage: ChatMessage = {
-          id: (Date.now() + 1).toString(),
+          id: streamedAnswerId || (Date.now() + 1).toString(),
           role: "assistant",
           content: answer,
           timestamp: Date.now(),
           actions: receivedActions.length > 0 ? receivedActions : undefined,
+          metadata: streamedAnswerId ? { answer_id: streamedAnswerId } : undefined,
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
@@ -313,7 +318,7 @@ function HomePageInner() {
             const newSession = await createChatSession(
               userMessage.content,
               answer,
-              null, // answerId not available in streaming
+              streamedAnswerId,
               null,
               activeGraphId || "default",
             );
@@ -329,7 +334,7 @@ function HomePageInner() {
               currentSessionId,
               userMessage.content,
               answer,
-              null, // answerId not available in streaming
+              streamedAnswerId,
               [], // suggestedQuestions not available in streaming
               [], // evidenceUsed not available in streaming
             );
@@ -404,10 +409,11 @@ function HomePageInner() {
 
         if (backendMessages && backendMessages.length > 0) {
           const history: ChatMessage[] = backendMessages.map((m, idx) => ({
-            id: `msg-${chatSession.id}-${idx}`,
+            id: m.id || `msg-${chatSession.id}-${idx}`,
             role: m.role,
             content: m.content,
-            timestamp: chatSession.updatedAt // Fallback
+            timestamp: m.timestamp || chatSession.updatedAt,
+            metadata: m.metadata || {},
           }));
           setMessages(history);
         } else {
@@ -415,16 +421,17 @@ function HomePageInner() {
           const history: ChatMessage[] = [];
           chatSession.messages.forEach(m => {
             history.push({
-              id: `q-${Date.now()}-${Math.random()}`,
+              id: m.id || `q-${Date.now()}-${Math.random()}`,
               role: 'user',
               content: m.question,
-              timestamp: chatSession.updatedAt
+              timestamp: m.timestamp || chatSession.updatedAt
             });
             history.push({
-              id: `a-${Date.now()}-${Math.random()}`,
+              id: m.answerId || `a-${Date.now()}-${Math.random()}`,
               role: 'assistant',
               content: m.answer,
-              timestamp: chatSession.updatedAt
+              timestamp: m.timestamp || chatSession.updatedAt,
+              metadata: { answer_id: m.answerId }
             });
           });
           setMessages(history);
@@ -599,9 +606,10 @@ function HomePageInner() {
                   </div>
                   <div
                     style={{
-                      fontSize: "20px",
+                      fontSize: "clamp(1rem, 2.5vw, 1.25rem)",
                       color: "var(--muted)",
                       maxWidth: "700px",
+                      width: "100%",
                       margin: "0 auto",
                       lineHeight: "1.4",
                     }}
@@ -612,6 +620,7 @@ function HomePageInner() {
 
                 <form onSubmit={handleSubmit} style={{ width: "100%", maxWidth: "1000px", marginTop: "10px" }}>
                   <div
+                    className="home-search-box"
                     style={{
                       display: "flex",
                       flexDirection: "column",
@@ -767,9 +776,9 @@ function HomePageInner() {
                 <div ref={messagesEndRef} />
 
                 {/* Floating-style Input for active chat */}
-                <div style={{ position: "fixed", bottom: "30px", left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "1200px", padding: "0 20px", zIndex: 100 }}>
+                <div className="chat-float-wrapper" style={{ position: "fixed", bottom: "30px", left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: "1200px", padding: "0 20px", zIndex: 100 }}>
                   <form onSubmit={handleSubmit} style={{ width: "100%" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "12px", padding: "20px 24px", background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "28px", boxShadow: "0 12px 64px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" }}>
+                    <div className="chat-float-input" style={{ display: "flex", flexDirection: "column", gap: "12px", padding: "20px 24px", background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "28px", boxShadow: "0 12px 64px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" }}>
                       <textarea
                         ref={inputRef}
                         value={query}

@@ -125,9 +125,16 @@ async def get_interaction_context(
 @router.get("/session/{session_id}/transcript")
 async def get_voice_session_transcript(session_id: str, request: Request):
     """List transcript chunks for a voice session (as artifacts + anchors)."""
-    user_id = getattr(request.state, "user_id", None) or "demo"
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
     try:
-        chunks = list_voice_transcript_chunks(voice_session_id=session_id, user_id=user_id)
+        chunks = list_voice_transcript_chunks(
+            voice_session_id=session_id,
+            user_id=str(user_id),
+            tenant_id=str(tenant_id),
+        )
         return {"session_id": session_id, "chunks": chunks}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch transcript: {str(e)}")
@@ -136,9 +143,16 @@ async def get_voice_session_transcript(session_id: str, request: Request):
 @router.get("/session/{session_id}/signals")
 async def get_voice_session_signals(session_id: str, request: Request):
     """List extracted learning signals for a voice session."""
-    user_id = getattr(request.state, "user_id", None) or "demo"
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
     try:
-        signals = list_voice_learning_signals(voice_session_id=session_id, user_id=user_id)
+        signals = list_voice_learning_signals(
+            voice_session_id=session_id,
+            user_id=str(user_id),
+            tenant_id=str(tenant_id),
+        )
         return {"session_id": session_id, "signals": signals}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch signals: {str(e)}")

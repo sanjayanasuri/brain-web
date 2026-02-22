@@ -93,6 +93,22 @@ async def chat_stream_endpoint(
     """
     Streaming AI chat endpoint using Server-Sent Events (SSE).
     """
+    user_id_ctx = auth.get("user_id", "unknown")
+    tenant_id_ctx = auth.get("tenant_id", "default")
+
+    # Learn communication style from typed input (cross-modal profile, best effort).
+    try:
+        from services_voice_style_profile import observe_text_turn
+
+        background_tasks.add_task(
+            observe_text_turn,
+            user_id=user_id_ctx,
+            tenant_id=tenant_id_ctx,
+            message=payload.message,
+        )
+    except Exception as e:
+        logger.debug(f"Failed to queue text-style observation: {e}")
+
     # Trigger notes digest update in background
     if payload.chat_id:
         try:
@@ -146,6 +162,7 @@ async def chat_stream_endpoint(
             # If cache hit, return immediately (skip memory orchestration + LLM).
             if cache_hit and isinstance(cache_hit.get("answer"), str):
                 full_response = str(cache_hit["answer"])
+                answer_id = str(uuid.uuid4())
                 data = {
                     "type": "chunk",
                     "content": full_response,
@@ -171,6 +188,7 @@ async def chat_stream_endpoint(
                             tenant_id=auth.get("tenant_id", "default"),
                             role="assistant",
                             content=full_response,
+                            metadata={"answer_id": answer_id},
                         )
 
                         # Extract facts in background for cross-session memory
@@ -191,7 +209,7 @@ async def chat_stream_endpoint(
                     except Exception as e:
                         logger.warning(f"Failed to save chat history: {e}")
 
-                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'answer_id': answer_id})}\n\n"
                 return
 
             # Fetch Tutor Profile for persona customization
@@ -280,6 +298,7 @@ async def chat_stream_endpoint(
             # 2.5 Resolve Tutor Profile Instructions (moved from below for scope)
             response_mode_instruction = ""
             question_policy_instruction = ""
+            learned_comm_style = ""
             try:
                 if tutor_profile.response_mode == "compact":
                     response_mode_instruction = "**Response Length**: Keep responses VERY BRIEF (2-3 sentences maximum). Be concise and to the point."
@@ -298,6 +317,17 @@ async def chat_stream_endpoint(
                     question_policy_instruction = "**Question Policy**: You may ask questions to engage the user."
             except:
                 pass
+
+            try:
+                from services_voice_style_profile import get_chat_response_style_hint
+
+                learned_comm_style = get_chat_response_style_hint(
+                    user_id=str(user_id_ctx),
+                    tenant_id=str(tenant_id_ctx),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to load learned communication style hint: {e}")
+                learned_comm_style = ""
                 
             # Detect if user is responding to a task
             task_evaluation_feedback = ""
@@ -343,6 +373,9 @@ async def chat_stream_endpoint(
                 ## Tutor Persona
                 {profile_instruction}
                 
+                ## Learned Communication Style
+                {learned_comm_style}
+                
                 {response_mode_instruction}
                 {question_policy_instruction}
                 """
@@ -361,14 +394,18 @@ async def chat_stream_endpoint(
 
             # 4. Use Model Router with chat history
             chat_history = unified_context.get("chat_history", [])
-            
-            # Fallback to payload history if DB is empty (helps with immediate turn context)
-            if not chat_history and payload.chatHistory:
-                logger.info(f"Using frontend-provided history fallback ({len(payload.chatHistory)} pairs)")
-                for pair in payload.chatHistory:
-                    chat_history.append({"role": "user", "content": pair.get("question", "")})
+
+            # Fallback to payload history if DB is empty (helps with immediate turn context).
+            # Accept both camelCase and snake_case payload fields.
+            incoming_history_pairs = payload.chatHistory or payload.chat_history or []
+            if not chat_history and incoming_history_pairs:
+                logger.info(f"Using frontend-provided history fallback ({len(incoming_history_pairs)} pairs)")
+                for pair in incoming_history_pairs:
+                    if not isinstance(pair, dict):
+                        continue
+                    chat_history.append({"role": "user", "content": str(pair.get("question", ""))})
                     if pair.get("answer"):
-                        chat_history.append({"role": "assistant", "content": pair.get("answer", "")})
+                        chat_history.append({"role": "assistant", "content": str(pair.get("answer", ""))})
 
             # 5. Use Model Router with Tool Support
             from services_model_router import model_router, TASK_CHAT_FAST
@@ -556,9 +593,10 @@ async def chat_stream_endpoint(
                     )
             except Exception as e:
                 logger.debug(f"Semantic cache store skipped/failed: {e}")
-            
+
             # Save messages to history
             chat_id_to_save = payload.chat_id or "default"
+            assistant_db_id = None
             try:
                 from services_chat_history import save_message
                 
@@ -573,13 +611,13 @@ async def chat_stream_endpoint(
                 
                 # Save assistant response
                 if full_response:
-                    save_message(
+                    assistant_db_id = save_message(
                         chat_id=chat_id_to_save,
                         user_id=auth.get("user_id", "unknown"),
                         tenant_id=auth.get("tenant_id", "default"),
                         role="assistant",
                         content=full_response,
-                        metadata={"answer_id": str(uuid.uuid4())}
+                        metadata={} # answer_id will be the row ID itself now
                     )
                     
                     # Extract facts in background for cross-session memory
@@ -599,7 +637,8 @@ async def chat_stream_endpoint(
             except Exception as e:
                 logger.warning(f"Failed to save chat history: {e}")
             
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            final_answer_id = assistant_db_id or str(uuid.uuid4())
+            yield f"data: {json.dumps({'type': 'done', 'answer_id': final_answer_id})}\n\n"
             
         except Exception as e:
             logger.error(f"Streaming error: {e}")

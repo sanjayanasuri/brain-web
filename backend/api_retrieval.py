@@ -310,6 +310,7 @@ def retrieve_endpoint(
         ):
             voice_chunks = search_voice_transcript_chunks(
                 user_id=str(auth["user_id"]),
+                tenant_id=str(auth.get("tenant_id") or ""),
                 graph_id=str(graph_id),
                 branch_id=str(branch_id),
                 query=payload.message,

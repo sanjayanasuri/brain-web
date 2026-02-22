@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getToken } from 'next-auth/jwt';
 
 export const dynamic = 'force-dynamic';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const PUBLIC_API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const BACKEND_API_BASE_URL =
+  process.env.BACKEND_API_URL ||
+  process.env.INTERNAL_API_URL ||
+  (PUBLIC_API_BASE_URL.endsWith('/api') ? 'http://backend:8000' : PUBLIC_API_BASE_URL);
 
 export async function GET(request: NextRequest) {
   try {
+    const token = await getToken({ req: request });
+    const accessToken = (token as any)?.accessToken;
+
     const { searchParams } = new URL(request.url);
     const graph_id = searchParams.get('graph_id');
     const branch_id = searchParams.get('branch_id');
@@ -21,7 +29,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Proxy request to backend
-    const backendUrl = new URL(`${API_BASE_URL}/offline/bootstrap`);
+    const backendUrl = new URL(`${BACKEND_API_BASE_URL.replace(/\/+$/, '')}/offline/bootstrap`);
     backendUrl.searchParams.set('graph_id', graph_id);
     backendUrl.searchParams.set('branch_id', branch_id);
     backendUrl.searchParams.set('limit_artifacts', limit_artifacts);
@@ -38,6 +46,7 @@ export async function GET(request: NextRequest) {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
         signal: controller.signal,
       });
@@ -73,4 +82,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-

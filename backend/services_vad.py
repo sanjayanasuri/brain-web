@@ -59,7 +59,7 @@ class VadConfig:
         return VadConfig(
             sample_rate_hz=_int("sample_rate_hz", 16000),
             frame_ms=max(10, _int("frame_ms", 30)),
-            speech_threshold=min(0.99, max(0.01, _float("speech_threshold", 0.5))),
+            speech_threshold=min(0.99, max(0.01, _float("speech_threshold", 0.65))),
             end_silence_ms=max(150, _int("end_silence_ms", 700)),
             min_speech_ms=max(50, _int("min_speech_ms", 200)),
             pre_roll_ms=max(0, _int("pre_roll_ms", 240)),
@@ -195,6 +195,8 @@ class VadUtteranceSegmenter:
         self._speech_ms: int = 0
         self._silence_ms: int = 0
         self._total_samples: int = 0
+        self._speech_start_emitted: bool = False
+        self._pending_speech_start_sample: Optional[int] = None
 
     @property
     def total_samples(self) -> int:
@@ -213,6 +215,8 @@ class VadUtteranceSegmenter:
         self._speech_ms = 0
         self._silence_ms = 0
         self._total_samples = 0
+        self._speech_start_emitted = False
+        self._pending_speech_start_sample = None
         self._pre_roll_frames.clear()
 
     def _start_utterance(self, *, frame: bytes, frame_start_sample: int, frame_end_sample: int) -> None:
@@ -225,6 +229,8 @@ class VadUtteranceSegmenter:
         self._last_speech_sample = frame_end_sample
         self._speech_ms = self.config.frame_ms
         self._silence_ms = 0
+        self._speech_start_emitted = False
+        self._pending_speech_start_sample = None
 
     def _finalize_utterance(self) -> Optional[UtteranceSegment]:
         if not self._in_utt:
@@ -235,6 +241,8 @@ class VadUtteranceSegmenter:
             self._utt_buf = bytearray()
             self._speech_ms = 0
             self._silence_ms = 0
+            self._speech_start_emitted = False
+            self._pending_speech_start_sample = None
             return None
 
         seg = UtteranceSegment(
@@ -247,7 +255,19 @@ class VadUtteranceSegmenter:
         self._utt_buf = bytearray()
         self._speech_ms = 0
         self._silence_ms = 0
+        self._speech_start_emitted = False
         return seg
+
+    def pop_speech_start_sample(self) -> Optional[int]:
+        """
+        Return and clear the sample index where stable speech onset was detected.
+
+        Stable onset means the active utterance has reached at least `min_speech_ms`,
+        which filters out many transient bumps like keyboard clicks.
+        """
+        sample = self._pending_speech_start_sample
+        self._pending_speech_start_sample = None
+        return sample
 
     def flush(self) -> Optional[UtteranceSegment]:
         """
@@ -286,6 +306,9 @@ class VadUtteranceSegmenter:
                 self._last_speech_sample = frame_end
                 self._speech_ms += self.config.frame_ms
                 self._silence_ms = 0
+                if (not self._speech_start_emitted) and self._speech_ms >= self.config.min_speech_ms:
+                    self._speech_start_emitted = True
+                    self._pending_speech_start_sample = int(self._speech_start_sample)
             else:
                 self._silence_ms += self.config.frame_ms
 

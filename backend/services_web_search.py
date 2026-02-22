@@ -27,11 +27,8 @@ except ImportError:
     GRAPH_RETRIEVAL_AVAILABLE = False
 
 # AI libraries for native agents
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+from services_model_router import model_router, TASK_SEARCH, TASK_SYNTHESIS, TASK_SUMMARIZE
+OPENAI_AVAILABLE = model_router.client is not None
 
 try:
     from dateutil import parser as date_parser
@@ -185,10 +182,7 @@ class QueryClassifier:
         """Classify query for focus area and search requirements."""
         if not OPENAI_AVAILABLE:
             return {"focus": SearchFocus.GENERAL, "skip_search": False, "standalone_query": query}
-            
-        from config import OPENAI_API_KEY
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
+
         prompt = f"""Analyze the user's query and classify it.
 QUERY: {query}
 HISTORY: {json.dumps(chat_history[-2:]) if chat_history else "[]"}
@@ -210,13 +204,15 @@ Rules:
 """
 
         try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": "You are a research classifier. Return only valid JSON."},
-                          {"role": "user", "content": prompt}],
-                response_format={ "type": "json_object" }
+            raw = model_router.completion(
+                task_type=TASK_SEARCH,
+                messages=[
+                    {"role": "system", "content": "You are a research classifier. Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
             )
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(raw)
             return result
         except Exception as e:
             logger.warning(f"Classification failed: {e}")
@@ -227,10 +223,12 @@ class ResearcherAgent:
     Python-native research agent that uses iterative tool-calling to gather info
     from the web and the personal knowledge graph.
     """
-    def __init__(self, api_key: str = None):
-        from config import OPENAI_API_KEY
-        self.api_key = api_key or OPENAI_API_KEY
-        self.client = OpenAI(api_key=self.api_key) if OPENAI_AVAILABLE else None
+    def __init__(self):
+        pass
+
+    @property
+    def client(self):
+        return model_router.client
 
     async def execute(self, query: str, active_graph_id: str = "default", history: List[Dict] = None) -> Dict[str, Any]:
         """Main Research Loop (Iterative ReAct)."""
@@ -290,12 +288,26 @@ class ResearcherAgent:
                 }
             ]
 
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "system", "content": "You are a deep-research agent. Use tools to gather facts."},
-                          {"role": "user", "content": prompt}],
+            raw = model_router.completion(
+                task_type=TASK_SEARCH,
+                messages=[
+                    {"role": "system", "content": "You are a deep-research agent. Use tools to gather facts."},
+                    {"role": "user", "content": prompt},
+                ],
                 tools=tools,
-                tool_choice="auto"
+                tool_choice="auto",
+                stream=False,
+            )
+            # tool-calling response — access via raw OpenAI object (model_router returns the full
+            # response object when tools are involved so we can inspect tool_calls)
+            response = model_router.client.chat.completions.create(
+                model=model_router.get_model_for_task(TASK_SEARCH),
+                messages=[
+                    {"role": "system", "content": "You are a deep-research agent. Use tools to gather facts."},
+                    {"role": "user", "content": prompt},
+                ],
+                tools=tools,
+                tool_choice="auto",
             )
 
             msg = response.choices[0].message
@@ -385,14 +397,16 @@ SOURCES:
 Return a detailed, informative response that connects web facts with your internal knowledge."""
 
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "system", "content": "You are a helpful research assistant."},
-                          {"role": "user", "content": prompt}]
+            answer = model_router.completion(
+                task_type=TASK_SYNTHESIS,
+                messages=[
+                    {"role": "system", "content": "You are a helpful research assistant."},
+                    {"role": "user", "content": prompt},
+                ],
             )
             return {
-                "answer": response.choices[0].message.content,
-                "sources": unique_sources[:15]
+                "answer": answer,
+                "sources": unique_sources[:15],
             }
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
@@ -1178,29 +1192,22 @@ async def translate_content(
                 from config import OPENAI_API_KEY
                 from openai import OpenAI
                 
-                if not OPENAI_API_KEY:
-                    return None
-                
-                client = OpenAI(api_key=OPENAI_API_KEY)
-                
                 language_names = {
                     "en": "English", "es": "Spanish", "fr": "French", "de": "German",
                     "it": "Italian", "pt": "Portuguese", "ru": "Russian", "ja": "Japanese",
                     "zh": "Chinese", "ko": "Korean", "ar": "Arabic", "hi": "Hindi",
                 }
                 target_lang_name = language_names.get(target_language, target_language)
-                
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+
+                return model_router.completion(
+                    task_type=TASK_SUMMARIZE,
                     messages=[
                         {"role": "system", "content": f"You are a professional translator. Translate the following text to {target_lang_name}. Preserve the original meaning and tone."},
-                        {"role": "user", "content": text[:5000]}  # Limit input length
+                        {"role": "user", "content": text[:5000]},
                     ],
                     temperature=0.3,
                     max_tokens=2000,
                 )
-                
-                return response.choices[0].message.content.strip()
                 
             except Exception as e:
                 logger.warning(f"LLM translation failed: {e}")
@@ -1497,14 +1504,9 @@ def _summarize_content(content: str, target_length: int = 5000) -> Optional[str]
         Summarized content or None if summarization fails
     """
     try:
-        from config import OPENAI_API_KEY
-        from openai import OpenAI
-        
-        if not OPENAI_API_KEY:
+        if not OPENAI_AVAILABLE:
             return None
-        
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
+
         # Only summarize if content is significantly longer than target
         if len(content) < target_length * 1.5:
             return None
@@ -1518,18 +1520,16 @@ Content:
 
 Summary:"""
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Use cheaper model for summarization
+        summary = model_router.completion(
+            task_type=TASK_SUMMARIZE,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that creates concise, factual summaries."},
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ],
-            max_tokens=min(target_length // 4, 2000),  # Rough estimate
-            temperature=0.3,  # Lower temperature for more factual summaries
+            max_tokens=min(target_length // 4, 2000),
+            temperature=0.3,
         )
-        
-        summary = response.choices[0].message.content.strip()
-        return summary if summary else None
+        return summary.strip() if summary else None
         
     except Exception as e:
         logger.warning(f"Content summarization failed: {e}")

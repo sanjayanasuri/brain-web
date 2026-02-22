@@ -7,23 +7,64 @@ This module handles:
 - Storing user-rewritten answers (revisions)
 """
 
-from fastapi import APIRouter, Depends
+import logging
 
+from fastapi import APIRouter, BackgroundTasks, Depends
+
+from auth import optional_auth
 from models import ExplanationFeedback, FeedbackSummary, AnswerRevisionRequest, StyleFeedbackRequest
 from db_neo4j import get_neo4j_session
 from services_graph import store_feedback, get_recent_feedback_summary, store_revision, store_style_feedback, get_style_feedback_examples
 from models import Revision
+from services_feedback_classifier import apply_inferred_feedback_signals, should_run_feedback_classifier
+from services_voice_style_profile import observe_explicit_feedback
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
+logger = logging.getLogger("brain_web")
 
 
 @router.post("/", status_code=204)
-def submit_feedback(fb: ExplanationFeedback, session=Depends(get_neo4j_session)):
+def submit_feedback(
+    fb: ExplanationFeedback,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(optional_auth),
+    session=Depends(get_neo4j_session),
+):
     """
     Submit feedback on a specific answer.
     Feedback is used to improve future responses through feedback loops.
     """
     store_feedback(session, fb)
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if user_id and tenant_id:
+        try:
+            observe_explicit_feedback(
+                user_id=str(user_id),
+                tenant_id=str(tenant_id),
+                rating=fb.rating,
+                reasoning=fb.reasoning,
+                verbosity=fb.verbosity,
+                question_preference=fb.question_preference,
+                humor_preference=fb.humor_preference,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to apply explicit feedback signal: {e}")
+        try:
+            if should_run_feedback_classifier(
+                reasoning=fb.reasoning,
+                verbosity=fb.verbosity,
+                question_preference=fb.question_preference,
+                humor_preference=fb.humor_preference,
+            ):
+                background_tasks.add_task(
+                    apply_inferred_feedback_signals,
+                    user_id=str(user_id),
+                    tenant_id=str(tenant_id),
+                    reasoning=str(fb.reasoning or ""),
+                )
+        except Exception as e:
+            logger.debug(f"Failed to queue fallback feedback classifier: {e}")
     return
 
 
@@ -51,7 +92,12 @@ def get_feedback_summary(session=Depends(get_neo4j_session)):
 
 
 @router.post("/style", status_code=201)
-def submit_style_feedback(fb: StyleFeedbackRequest, session=Depends(get_neo4j_session)):
+def submit_style_feedback(
+    fb: StyleFeedbackRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(optional_auth),
+    session=Depends(get_neo4j_session),
+):
     """
     Submit structured style feedback for learning user preferences.
     
@@ -61,6 +107,41 @@ def submit_style_feedback(fb: StyleFeedbackRequest, session=Depends(get_neo4j_se
     The feedback is used to automatically refine the style guide.
     """
     feedback_id = store_style_feedback(session, fb)
+    user_id = auth.get("user_id")
+    tenant_id = auth.get("tenant_id")
+    if user_id and tenant_id:
+        try:
+            observe_explicit_feedback(
+                user_id=str(user_id),
+                tenant_id=str(tenant_id),
+                reasoning=fb.feedback_notes,
+                verbosity=fb.verbosity,
+                question_preference=fb.question_preference,
+                humor_preference=fb.humor_preference,
+                original_response=fb.original_response,
+                user_rewritten_version=fb.user_rewritten_version,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to apply style-feedback signal: {e}")
+        try:
+            if should_run_feedback_classifier(
+                reasoning=fb.feedback_notes,
+                verbosity=fb.verbosity,
+                question_preference=fb.question_preference,
+                humor_preference=fb.humor_preference,
+                original_response=fb.original_response,
+                user_rewritten_version=fb.user_rewritten_version,
+            ):
+                background_tasks.add_task(
+                    apply_inferred_feedback_signals,
+                    user_id=str(user_id),
+                    tenant_id=str(tenant_id),
+                    reasoning=str(fb.feedback_notes or ""),
+                    original_response=fb.original_response,
+                    user_rewritten_version=fb.user_rewritten_version,
+                )
+        except Exception as e:
+            logger.debug(f"Failed to queue style fallback classifier: {e}")
     return {"feedback_id": feedback_id, "message": "Style feedback stored successfully"}
 
 

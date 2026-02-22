@@ -65,7 +65,7 @@ def _get_redis_client():
     return _redis_client
 
 
-def _save_to_redis(chat_id: str, role: str, content: str) -> bool:
+def _save_to_redis(chat_id: str, role: str, content: str, message_id: Optional[str] = None, metadata: Optional[Dict] = None) -> bool:
     """Save message to Redis cache."""
     redis_client = _get_redis_client()
     if not redis_client:
@@ -74,8 +74,10 @@ def _save_to_redis(chat_id: str, role: str, content: str) -> bool:
     try:
         key = f"chat:{chat_id}:messages"
         message = json.dumps({
+            "id": message_id,
             "role": role,
             "content": content,
+            "metadata": metadata or {},
             "timestamp": datetime.utcnow().isoformat()
         })
         
@@ -112,8 +114,10 @@ def _get_from_redis(chat_id: str, limit: int = 10) -> Optional[List[Dict[str, st
         for msg_str in reversed(messages_raw):
             msg = json.loads(msg_str)
             messages.append({
+                "id": msg.get("id"),
                 "role": msg["role"],
-                "content": msg["content"]
+                "content": msg["content"],
+                "metadata": msg.get("metadata", {})
             })
         
         return messages
@@ -146,9 +150,6 @@ def save_message(
     Returns:
         Message ID (UUID)
     """
-    # Save to Redis (fast, non-blocking)
-    _save_to_redis(chat_id, role, content)
-    
     # Save to Postgres (durable)
     if not PSYCOPG2_AVAILABLE:
         raise ImportError("psycopg2-binary is required for chat history")
@@ -163,9 +164,13 @@ def save_message(
                 RETURNING id
             """, (chat_id, user_id, tenant_id, role, content, psycopg2.extras.Json(metadata or {})))
             
-            message_id = cur.fetchone()[0]
+            message_id = str(cur.fetchone()[0])
             conn.commit()
-            return str(message_id)
+            
+            # Save to Redis (fast path, now with stable ID)
+            _save_to_redis(chat_id, role, content, message_id=message_id, metadata=metadata)
+            
+            return message_id
     finally:
         pool.putconn(conn)
 
@@ -208,7 +213,7 @@ def get_chat_history(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # Build query with optional filters
             query = """
-                SELECT role, content, created_at
+                SELECT id, role, content, metadata, created_at
                 FROM chat_messages
                 WHERE chat_id = %s
             """
@@ -233,14 +238,16 @@ def get_chat_history(
             messages = []
             for row in reversed(list(cur.fetchall())):  # Reverse to get chronological order
                 messages.append({
+                    "id": str(row["id"]),
                     "role": row["role"],
-                    "content": row["content"]
+                    "content": row["content"],
+                    "metadata": row["metadata"] if isinstance(row["metadata"], dict) else json.loads(row["metadata"] or "{}")
                 })
             
             # Warm up Redis cache
             if messages:
                 for msg in messages:
-                    _save_to_redis(chat_id, msg["role"], msg["content"])
+                    _save_to_redis(chat_id, msg["role"], msg["content"], message_id=msg["id"], metadata=msg.get("metadata"))
             
             return messages
     except Exception as e:

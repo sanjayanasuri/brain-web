@@ -27,6 +27,8 @@ from models import (
     Analogy,
     NotebookPage,
     NotebookPageUpdate,
+    FreeformCanvasCaptureRequest,
+    FreeformCanvasCaptureResponse,
 )
 from services_lectures import (
     create_lecture,
@@ -654,3 +656,26 @@ def draft_next_lecture_endpoint(
     except Exception as e:
         print(f"ERROR in draft-next lecture: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to draft lecture: {str(e)}")
+
+
+@router.post("/freeform-capture", response_model=FreeformCanvasCaptureResponse)
+def freeform_canvas_capture(
+    payload: FreeformCanvasCaptureRequest,
+    session=Depends(get_neo4j_session),
+    auth: dict = Depends(require_auth),
+):
+    """
+    Analyze a freeform canvas and produce a structured knowledge graph capture.
+    Strokes are analyzed geometrically; enclosed shapes -> concept nodes,
+    arrows -> directed links, text -> notes. A Markdown transcript is produced.
+    """
+    try:
+        from services_freeform_canvas import capture_freeform_canvas
+
+        tenant_id = auth.get("tenant_id")
+        return capture_freeform_canvas(session, payload, tenant_id=tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"ERROR in freeform canvas capture: {e}")
+        raise HTTPException(status_code=500, detail=f"Freeform canvas capture failed: {str(e)}")

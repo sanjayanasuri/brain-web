@@ -41,7 +41,11 @@ def build_context_from_selection(
     # Get active graph context if not provided
     if not graph_id or not branch_id:
         from services_branch_explorer import get_active_graph_context
-        active_graph_id, active_branch_id = get_active_graph_context(session)
+        active_graph_id, active_branch_id = get_active_graph_context(
+            session,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
         graph_id = graph_id or active_graph_id
         branch_id = branch_id or active_branch_id
     
@@ -89,10 +93,10 @@ def build_context_from_selection(
         
         # Optionally find related concepts by matching text
         from services_notes_digest import _extract_related_node_ids_for_entry
-        from api_concepts import get_all_concepts
+        from services_graph import get_all_concepts
         
         try:
-            potential_concepts = get_all_concepts(session, user_id=user_id, tenant_id=tenant_id)
+            potential_concepts = get_all_concepts(session, tenant_id=tenant_id)
             concepts = _extract_related_node_ids_for_entry(selection_id, potential_concepts)
         except Exception:
             pass
@@ -243,4 +247,3 @@ def build_context_from_selection(
             "selection_id": selection_id,
         }
     )
-

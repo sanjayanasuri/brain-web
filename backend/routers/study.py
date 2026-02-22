@@ -19,6 +19,14 @@ from services.context_builder import build_context_from_selection
 router = APIRouter(prefix="/study", tags=["study"])
 
 
+def _require_study_identity(request: Request) -> tuple[str, str]:
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+    return str(user_id), str(tenant_id)
+
+
 @router.post("/context/from-selection", response_model=ContextPack)
 def get_context_from_selection(
     req: ContextRequest,
@@ -31,9 +39,7 @@ def get_context_from_selection(
     Returns grounded excerpts sorted by relevance, plus related concepts.
     """
     try:
-        # Get user context from request state (set by auth middleware)
-        user_id = getattr(request.state, "user_id", "unknown")
-        tenant_id = getattr(request.state, "tenant_id", "default")
+        user_id, tenant_id = _require_study_identity(request)
         
         context_pack = build_context_from_selection(
             session=session,
@@ -67,9 +73,7 @@ def clarify_selection(
     Phase 1: Uses OpenAI to generate explanation from context.
     """
     try:
-        # Get user context
-        user_id = getattr(request.state, "user_id", "unknown")
-        tenant_id = getattr(request.state, "tenant_id", "default")
+        user_id, tenant_id = _require_study_identity(request)
         
         # Build context pack
         context_pack = build_context_from_selection(
@@ -88,23 +92,17 @@ def clarify_selection(
             )
         
         # Generate clarification using LLM
-        import os
-        import openai
-        
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise HTTPException(
-                status_code=500,
-                detail="OpenAI API key not configured"
-            )
-        
+        from services_model_router import model_router, TASK_CHAT_FAST
+        if not model_router.client:
+            raise HTTPException(status_code=500, detail="OpenAI client not configured")
+
         # Build prompt from context
         primary_excerpt = context_pack.excerpts[0]
         context_text = "\n\n".join([
             f"[{e.source_type.upper()}] {e.content[:200]}..."
             for e in context_pack.excerpts[:5]  # Top 5 most relevant
         ])
-        
+
         prompt = f"""You are a helpful teacher. A student has selected this text and wants clarification:
 
 SELECTED TEXT:
@@ -114,20 +112,16 @@ CONTEXT:
 {context_text}
 
 Provide a brief, grounded explanation (2-4 sentences) that clarifies the selected text using the provided context. Be concise and cite the context where relevant."""
-        
-        # Call OpenAI
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=os.getenv("STUDY_MODEL", "gpt-4o-mini"),
+
+        explanation = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[
                 {"role": "system", "content": "You are a helpful teacher providing concise, grounded explanations."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
             max_tokens=300,
-        )
-        
-        explanation = response.choices[0].message.content or "Unable to generate explanation."
+        ) or "Unable to generate explanation."
         
         # Extract citation IDs (simple heuristic for Phase 1)
         citations = [e.excerpt_id for e in context_pack.excerpts[:3]]
@@ -167,8 +161,7 @@ def start_study_session(
         from services.study_session_manager import start_session
         
         # Get user context
-        user_id = getattr(request.state, "user_id", "unknown")
-        tenant_id = getattr(request.state, "tenant_id", "default")
+        user_id, tenant_id = _require_study_identity(request)
         graph_id = getattr(request.state, "graph_id", None)
         branch_id = getattr(request.state, "branch_id", None)
         
@@ -198,6 +191,7 @@ def start_study_session(
 @router.post("/session/{session_id}/next", response_model=NextTaskResponse)
 def get_next_task(
     session_id: str,
+    request: Request,
     current_mode: str = None,
     session: Session = Depends(get_neo4j_session),
 ):
@@ -209,11 +203,14 @@ def get_next_task(
     try:
         from models.study import NextTaskResponse
         from services.study_session_manager import get_next_task as get_task
+        user_id, tenant_id = _require_study_identity(request)
         
         response = get_task(
             session_id=session_id,
             current_mode=current_mode,
-            neo4j_session=session
+            neo4j_session=session,
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
         
         return response
@@ -231,6 +228,7 @@ def get_next_task(
 def submit_task_attempt(
     task_id: str,
     req: AttemptRequest,
+    request: Request,
 ):
     """
     Submit and evaluate a task attempt.
@@ -240,11 +238,14 @@ def submit_task_attempt(
     try:
         from models.study import AttemptRequest, AttemptResponse
         from services.study_session_manager import submit_attempt
+        user_id, tenant_id = _require_study_identity(request)
         
         response = submit_attempt(
             task_id=task_id,
             response_text=req.response_text,
-            self_confidence=req.self_confidence
+            self_confidence=req.self_confidence,
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
         
         return response
@@ -261,6 +262,7 @@ def submit_task_attempt(
 @router.post("/session/{session_id}/end", response_model=SessionSummary)
 def end_study_session(
     session_id: str,
+    request: Request,
 ):
     """
     End a study session and return summary.
@@ -270,8 +272,9 @@ def end_study_session(
     try:
         from models.study import SessionSummary
         from services.study_session_manager import end_session
+        user_id, tenant_id = _require_study_identity(request)
         
-        summary = end_session(session_id=session_id)
+        summary = end_session(session_id=session_id, user_id=user_id, tenant_id=tenant_id)
         
         return summary
         
@@ -287,6 +290,7 @@ def end_study_session(
 @router.get("/session/{session_id}")
 def get_session_state(
     session_id: str,
+    request: Request,
 ):
     """
     Get current session state.
@@ -296,15 +300,18 @@ def get_session_state(
     try:
         from services.study_session_manager import _get_pool
         from psycopg2.extras import RealDictCursor
+        from db_postgres import apply_rls_session_settings
+        user_id, tenant_id = _require_study_identity(request)
         
         pool = _get_pool()
         conn = pool.getconn()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
                 # Get session
                 cur.execute("""
-                    SELECT * FROM study_sessions WHERE id = %s
-                """, (session_id,))
+                    SELECT * FROM study_sessions WHERE id = %s AND user_id = %s AND tenant_id = %s
+                """, (session_id, user_id, tenant_id))
                 session_row = cur.fetchone()
                 
                 if not session_row:

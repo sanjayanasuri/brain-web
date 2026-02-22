@@ -1,21 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Optional
 
-from openai import OpenAI
+from services_model_router import model_router, TASK_CHAT_SMART
 
-from config import OPENAI_API_KEY
-
-
-_client: Optional[OpenAI] = None
-if OPENAI_API_KEY:
-    cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-    if cleaned_key and cleaned_key.startswith("sk-"):
-        try:
-            _client = OpenAI(api_key=cleaned_key)
-        except Exception:
-            _client = None
+logger = logging.getLogger("brain_web")
 
 
 def llm_compare_branches(
@@ -24,7 +15,7 @@ def llm_compare_branches(
     branch_b_graph: Dict[str, Any],
     question: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if not _client:
+    if not model_router.client:
         raise RuntimeError("OpenAI client not configured (set OPENAI_API_KEY)")
 
     # Keep payload bounded.
@@ -62,8 +53,8 @@ def llm_compare_branches(
         "Each value must be an array of short strings."
     )
 
-    resp = _client.chat.completions.create(
-        model="gpt-4o-mini",
+    content = model_router.completion(
+        task_type=TASK_CHAT_SMART,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(payload)},
@@ -72,7 +63,7 @@ def llm_compare_branches(
         max_tokens=500,
     )
 
-    content = (resp.choices[0].message.content or "").strip()
+    content = (content or "").strip()
     # Strip markdown fences if present.
     if content.startswith("```"):
         parts = content.split("```")

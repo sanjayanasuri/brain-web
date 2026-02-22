@@ -29,8 +29,9 @@ const SESSION_STORAGE_KEY = "BW_SESSION_ID";
 const API_BASE_KEY = "BW_API_BASE";
 
 async function getApiBase(): Promise<string> {
-  const stored = await chrome.storage.sync.get([API_BASE_KEY]);
-  return (stored[API_BASE_KEY] as string) || DEFAULT_API_BASE;
+  const stored = await chrome.storage.local.get([API_BASE_KEY]);
+  const syncStored = await chrome.storage.sync.get([API_BASE_KEY]);
+  return (stored[API_BASE_KEY] as string) || (syncStored[API_BASE_KEY] as string) || DEFAULT_API_BASE;
 }
 
 function uuidLike(): string {
@@ -39,107 +40,61 @@ function uuidLike(): string {
 }
 
 async function getOrCreateSessionId(): Promise<string> {
-  const stored = await chrome.storage.sync.get([SESSION_STORAGE_KEY]);
+  const stored = await chrome.storage.local.get([SESSION_STORAGE_KEY]);
   const existing = stored[SESSION_STORAGE_KEY] as string | undefined;
   if (existing && existing.length <= 128) return existing;
 
   const sid = uuidLike();
-  await chrome.storage.sync.set({ [SESSION_STORAGE_KEY]: sid });
+  await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: sid });
   return sid;
 }
+
+// Minimal fallback icon (1x1 transparent PNG) to prevent "Unable to download" errors
+// if the main assets are flaky.
+const FALLBACK_ICON_DATA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 async function notify(title: string, message: string) {
   try {
     console.log(`[Brain Web] Notification: ${title} - ${message}`);
-    
-    // Check if notifications API is available
+
     if (!chrome.notifications) {
-      console.error(`[Brain Web] chrome.notifications API is not available`);
-      console.log(`[Brain Web] ${title}: ${message}`);
+      console.warn(`[Brain Web] chrome.notifications API not available.`);
       return;
     }
-    
-    // Chrome REQUIRES iconUrl for basic notifications - we cannot omit it
-    // Try to get the extension icon, with fallbacks to other sizes
-    let iconUrl: string | null = null;
-    const iconPaths = ["assets/icon48.png", "assets/icon128.png", "assets/icon16.png"];
-    
-    for (const iconPath of iconPaths) {
-      try {
-        const url = chrome.runtime.getURL(iconPath);
-        if (url && url.startsWith('chrome-extension://')) {
-          iconUrl = url;
-          break;
-        }
-      } catch (e) {
-        // Try next icon
-        continue;
-      }
-    }
-    
-    // If no icon found, we cannot create a notification (Chrome requirement)
-    if (!iconUrl) {
-      console.error(`[Brain Web] Could not find any icon file. Notifications require an icon.`);
-      console.log(`[Brain Web] ${title}: ${message}`);
-      return;
-    }
-    
-    const notificationId = `brainweb-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const notificationOptions: chrome.notifications.NotificationCreateOptions = {
+
+    const notificationId = `brainweb-${Date.now()}`;
+
+    // First attempt with the actual icon
+    chrome.notifications.create(notificationId, {
       type: "basic",
-      iconUrl: iconUrl,
+      iconUrl: chrome.runtime.getURL("assets/icon128.png"),
       title: title || "Brain Web",
       message: message || ""
-    };
-    
-    try {
-      // Check for lastError before creating
+    }, (id) => {
       if (chrome.runtime.lastError) {
-        console.warn(`[Brain Web] Pre-existing runtime error:`, chrome.runtime.lastError.message);
-      }
-      
-      const createdId = await chrome.notifications.create(notificationId, notificationOptions);
-      
-      // Check for errors after creation
-      if (chrome.runtime.lastError) {
-        const errorMsg = chrome.runtime.lastError.message;
-        console.error(`[Brain Web] Notification creation error:`, errorMsg);
-        console.log(`[Brain Web] ${title}: ${message}`);
-        return;
-      }
-      
-      if (!createdId) {
-        console.error(`[Brain Web] Notification creation returned no ID`);
-        console.log(`[Brain Web] ${title}: ${message}`);
-        return;
-      }
-      
-      console.log(`[Brain Web] Notification created successfully with ID: ${createdId}`);
-      
-      // Set up auto-clear after 5 seconds
-      setTimeout(() => {
-        chrome.notifications.clear(createdId, (wasCleared) => {
-          if (wasCleared) {
-            console.log(`[Brain Web] Notification ${createdId} auto-cleared`);
+        const err = chrome.runtime.lastError.message;
+        console.warn(`[Brain Web] Primary notification failed: ${err}. Attempting fallback...`);
+
+        // Fallback attempt with a data URI (which doesn't require "downloading")
+        chrome.notifications.create(`${notificationId}-fallback`, {
+          type: "basic",
+          iconUrl: FALLBACK_ICON_DATA,
+          title: title || "Brain Web",
+          message: message || ""
+        }, (fallbackId) => {
+          if (chrome.runtime.lastError) {
+            console.error(`[Brain Web] Fallback notification also failed: ${chrome.runtime.lastError.message}`);
+          } else if (fallbackId) {
+            setTimeout(() => chrome.notifications.clear(fallbackId), 5000);
           }
         });
-      }, 5000);
-      
-    } catch (notifError: any) {
-      const errorMsg = notifError?.message || String(notifError);
-      console.error(`[Brain Web] Notification creation exception:`, errorMsg);
-      
-      // Check chrome.runtime.lastError for additional context
-      if (chrome.runtime.lastError) {
-        console.error(`[Brain Web] Runtime error:`, chrome.runtime.lastError.message);
+      } else if (id) {
+        setTimeout(() => chrome.notifications.clear(id), 5000);
       }
-      
-      console.log(`[Brain Web] ${title}: ${message}`);
-    }
+    });
+
   } catch (error: any) {
-    const errorMsg = error?.message || String(error);
-    console.error(`[Brain Web] Failed to create notification:`, errorMsg);
-    console.log(`[Brain Web] ${title}: ${message}`);
+    console.error(`[Brain Web] Notify helper error:`, error.message);
   }
 }
 
@@ -150,7 +105,7 @@ async function extractSelectionFromTab(tabId: number): Promise<{
   context_after: string | null;
   anchor: Anchor | null;
 }> {
-  const [{ result }] = await chrome.scripting.executeScript({
+  const injectionResults = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
       function sha256Hex(input: string): string {
@@ -230,7 +185,7 @@ async function extractSelectionFromTab(tabId: number): Promise<{
     }
   });
 
-  return result as any;
+  return injectionResults[0]?.result as any;
 }
 
 // Expose test notification function for debugging
@@ -247,7 +202,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     title: "Add to Brain Web",
     contexts: ["selection"]
   });
-  
+
   // Test notification on install/reload for debugging
   if (details.reason === "install" || details.reason === "update") {
     console.log("[Brain Web] Extension installed/updated, testing notification...");
@@ -272,12 +227,12 @@ chrome.runtime.onMessage.addListener((message: any, sender: chrome.runtime.Messa
           },
           credentials: 'include'
         });
-        
+
         if (!res.ok) {
           sendResponse({ error: `HTTP ${res.status}` });
           return;
         }
-        
+
         const data = await res.json();
         sendResponse({ quotes: data.quotes || [] });
       } catch (error: any) {
@@ -292,7 +247,7 @@ chrome.runtime.onMessage.addListener((message: any, sender: chrome.runtime.Messa
 
 chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
   console.log("[Brain Web] Context menu clicked", { menuItemId: info.menuItemId, tabId: tab?.id });
-  
+
   if (info.menuItemId !== MENU_ID) return;
 
   const tabId = tab?.id;
@@ -302,13 +257,17 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
     return;
   }
 
+  // Use optional chaining for safety
+  const pageUrl = info.pageUrl || tab?.url || "";
+  const pageTitle = tab?.title || "Untitled";
+
   console.log("[Brain Web] Extracting selection from tab", tabId);
-  
+
   // Extract selection + context + anchor from the page.
   let extracted;
   try {
     extracted = await extractSelectionFromTab(tabId);
-    console.log("[Brain Web] Extracted selection:", { 
+    console.log("[Brain Web] Extracted selection:", {
       textLength: extracted.selected_text?.length,
       hasContext: !!extracted.context_before || !!extracted.context_after,
       hasAnchor: !!extracted.anchor
@@ -332,8 +291,8 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
 
   const payload: CaptureSelectionRequest = {
     selected_text: selectedText,
-    page_url: info.pageUrl || tab.url || "",
-    page_title: tab.title || null,
+    page_url: pageUrl,
+    page_title: pageTitle,
     frame_url: info.frameUrl || null,
     attach_concept_id: null,
     graph_id: null,
@@ -395,7 +354,7 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
       await notify("Brain Web", "Capture completed but response format error");
       return;
     }
-    
+
     const quoteId = out?.quote_id ? `Saved ${out.quote_id}` : "Saved";
     await notify("Brain Web", quoteId);
   } catch (e: any) {
@@ -403,4 +362,3 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
     await notify("Brain Web", `Capture error: ${String(e?.message || e)}`.slice(0, 180));
   }
 });
-

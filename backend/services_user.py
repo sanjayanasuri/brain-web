@@ -8,10 +8,16 @@ logger = logging.getLogger("brain_web")
 
 # Dynamic DB selection
 try:
-    from db_postgres import execute_query, execute_update, get_db_connection
+    from db_postgres import (
+        execute_query,
+        execute_update,
+        get_db_connection,
+        return_db_connection,
+        apply_rls_session_settings,
+    )
     # Test connection
     conn = get_db_connection()
-    conn.close()
+    return_db_connection(conn)
     logger.info("Connected to Postgres for User Service")
 except Exception as e:
     from config import ENVIRONMENT
@@ -70,25 +76,89 @@ def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
 def create_user(email: str, password_hash: str, full_name: str = "") -> Dict[str, Any]:
     """Create a new user and return the user object."""
     user_id = str(uuid.uuid4())
-    # Each user gets their own tenant_id for isolation, initially same as user_id
-    tenant_id = user_id 
-    
+    # Personal default tenant (owner model). This is now represented in
+    # tenants + tenant_memberships as well.
+    tenant_id = user_id
+    created_at = datetime.utcnow()
+
+    # Prefer one transaction when Postgres helpers are available.
+    if "return_db_connection" in globals() and "apply_rls_session_settings" in globals():
+        conn = get_db_connection()
+        error = False
+        try:
+            with conn.cursor() as cur:
+                # RLS context for tenant-scoped tables.
+                apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
+                cur.execute(
+                    """
+                    INSERT INTO users (user_id, tenant_id, email, password_hash, full_name, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (user_id, tenant_id, email, password_hash, full_name, created_at),
+                )
+                # Tenant registry (idempotent for retries).
+                cur.execute(
+                    """
+                    INSERT INTO tenants (tenant_id, name, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (tenant_id) DO NOTHING
+                    """,
+                    (tenant_id, (full_name or email or "Personal Workspace"), created_at),
+                )
+                # Owner membership.
+                cur.execute(
+                    """
+                    INSERT INTO tenant_memberships (tenant_id, user_id, role, created_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (tenant_id, user_id)
+                    DO UPDATE SET role = EXCLUDED.role
+                    """,
+                    (tenant_id, user_id, "owner", created_at),
+                )
+            conn.commit()
+            return {
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "email": email,
+                "full_name": full_name,
+                "created_at": created_at,
+            }
+        except Exception:
+            error = True
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            return_db_connection(conn, error=error)
+
+    # Fallback path (SQLite/dev compatibility)
     query = """
         INSERT INTO users (user_id, tenant_id, email, password_hash, full_name, created_at)
         VALUES (%s, %s, %s, %s, %s, %s)
     """
-    params = (user_id, tenant_id, email, password_hash, full_name, datetime.utcnow())
-    
-    # Try with RETURNING first (Postgres style)
+    params = (user_id, tenant_id, email, password_hash, full_name, created_at)
+    execute_update(query, params)
     try:
-        query_returning = query + " RETURNING user_id, tenant_id, email, full_name, created_at"
-        results = execute_query(query_returning, params, commit=True)
-        return results[0]
+        execute_update(
+            """
+            INSERT INTO tenants (tenant_id, name, created_at)
+            VALUES (%s, %s, %s)
+            """,
+            (tenant_id, (full_name or email or "Personal Workspace"), created_at),
+        )
+        execute_update(
+            """
+            INSERT INTO tenant_memberships (tenant_id, user_id, role, created_at)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (tenant_id, user_id, "owner", created_at),
+        )
     except Exception:
-        # Fallback for SQLite without RETURNING support
-        execute_update(query, params)
-        # Fetch the user manually
-        return get_user_by_id(user_id)
+        # Optional tables in SQLite fallback; keep user creation resilient.
+        pass
+    return get_user_by_id(user_id)
 
 def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     """Fetch a user from the database by user_id."""

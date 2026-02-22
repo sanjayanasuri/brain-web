@@ -4,13 +4,13 @@ Service for ingesting lecture text and extracting graph structure using LLM
 Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
 """
 import json
+import logging
 import re
 from typing import Optional, List, Dict, Any, Callable
 from uuid import uuid4
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from neo4j import Session
-from openai import OpenAI
 import os
 from pathlib import Path
 
@@ -51,27 +51,10 @@ from services_search import embed_text
 from services_branch_explorer import get_active_graph_context, ensure_graph_scoping_initialized
 from prompts import LECTURE_TO_GRAPH_PROMPT, LECTURE_SEGMENTATION_PROMPT, HANDWRITING_INGESTION_PROMPT
 from config import OPENAI_API_KEY
+from services_model_router import model_router, TASK_EXTRACT
 import hashlib
 
-# Initialize OpenAI client
-client = None
-if OPENAI_API_KEY:
-    # Clean the API key (remove whitespace, quotes, etc.)
-    cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-    if cleaned_key and cleaned_key.startswith('sk-'):
-        try:
-            client = OpenAI(api_key=cleaned_key)
-            # Never print key material (even partials) to logs.
-            print(f"✓ OpenAI client initialized for lecture ingestion (key length: {len(cleaned_key)})")
-        except Exception as e:
-            print(f"ERROR: Failed to initialize OpenAI client for lecture ingestion: {e}")
-            client = None
-    else:
-        print("WARNING: OPENAI_API_KEY format invalid (should start with 'sk-')")
-        client = None
-else:
-    print("WARNING: OPENAI_API_KEY not found - lecture ingestion will not work")
-    print("  Set it in .env.local (repo root) or backend/.env")
+logger = logging.getLogger("brain_web")
 
 
 def normalize_name(name: str) -> str:
@@ -186,10 +169,11 @@ def find_concept_by_name_and_domain(
     normalized_name = normalize_name(name)
     
     if domain:
-        # Try exact match first (name + domain)
+        # Try exact name/domain or alias match within domain
         query = """
         MATCH (c:Concept)
-        WHERE toLower(trim(c.name)) = $normalized_name
+        WHERE (toLower(trim(c.name)) = $normalized_name 
+               OR $normalized_name IN [alias IN COALESCE(c.aliases, []) | toLower(trim(alias))])
           AND c.domain = $domain
           AND (c.tenant_id = $tenant_id OR ($tenant_id IS NULL AND c.tenant_id IS NULL))
         RETURN c.node_id AS node_id,
@@ -202,6 +186,7 @@ def find_concept_by_name_and_domain(
                c.lecture_key AS lecture_key,
                c.url_slug AS url_slug,
                COALESCE(c.lecture_sources, []) AS lecture_sources,
+               COALESCE(c.aliases, []) AS aliases,
                c.created_by AS created_by,
                c.last_updated_by AS last_updated_by
         LIMIT 1
@@ -211,10 +196,11 @@ def find_concept_by_name_and_domain(
         if record:
             return _normalize_concept_from_db(record.data())
     
-    # Fallback: match by name only (case-insensitive)
+    # Fallback: match by name or alias only (case-insensitive) across all domains
     query = """
     MATCH (c:Concept)
-    WHERE toLower(trim(c.name)) = $normalized_name
+    WHERE (toLower(trim(c.name)) = $normalized_name 
+           OR $normalized_name IN [alias IN COALESCE(c.aliases, []) | toLower(trim(alias))])
       AND (c.tenant_id = $tenant_id OR ($tenant_id IS NULL AND c.tenant_id IS NULL))
     RETURN c.node_id AS node_id,
            c.name AS name,
@@ -226,6 +212,7 @@ def find_concept_by_name_and_domain(
            c.lecture_key AS lecture_key,
            c.url_slug AS url_slug,
            COALESCE(c.lecture_sources, []) AS lecture_sources,
+           COALESCE(c.aliases, []) AS aliases,
            c.created_by AS created_by,
            c.last_updated_by AS last_updated_by
     LIMIT 1
@@ -351,9 +338,8 @@ def extract_segments_and_analogies_with_llm(
       ...
     ]
     """
-    if not client:
-        # Return a single segment stub if LLM is not available
-        print("[Segment Extraction] OpenAI client not available, returning stub")
+    if not model_router.client:
+        logger.warning("[lecture_ingestion] OpenAI client not available — returning stub segment")
         return [{
             "segment_index": 0,
             "text": lecture_text,
@@ -364,38 +350,46 @@ def extract_segments_and_analogies_with_llm(
             "covered_concepts": [],
             "analogies": [],
         }]
-    
+
     # Build the user prompt
     concept_hint = ""
     if available_concepts:
-        concept_hint = f"\n\nIMPORTANT: When listing covered_concepts, use EXACT names from this list (case-insensitive match):\n{', '.join(available_concepts[:50])}"  # Limit to first 50 to avoid token bloat
+        concept_hint = f"\n\nIMPORTANT: When listing covered_concepts, use EXACT names from this list (case-insensitive match):\n{', '.join(available_concepts[:50])}"
         if len(available_concepts) > 50:
             concept_hint += f"\n(and {len(available_concepts) - 50} more concepts...)"
         concept_hint += "\nIf a concept is mentioned but not in this list, still include it but it may not link properly."
-    
+
     user_prompt = f"""Lecture Title: {lecture_title}
 
-Domain: {domain or "Not specified"}
+Domain: {domain or 'Not specified'}
 
 Lecture Text:
 {lecture_text}{concept_hint}
 
 Break this lecture into segments and extract concepts and analogies. Return the JSON as specified."""
-    
+
     try:
-        print(f"[Segment Extraction] Calling LLM to segment lecture: {lecture_title}")
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        logger.info(f"[lecture_ingestion] Segmenting lecture: {lecture_title}")
+        raw_content = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {"role": "system", "content": LECTURE_SEGMENTATION_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,  # Lower temperature for more consistent extraction
-            max_tokens=8000,  # Increased for longer lectures with many segments
+            temperature=0.3,
+            max_tokens=8000,
         )
+        # Wrap into a fake response object shape that the parsing code below expects
+        class _FakeMsg:
+            content = raw_content
+        class _FakeChoice:
+            message = _FakeMsg()
+        class _FakeResp:
+            choices = [_FakeChoice()]
+        response = _FakeResp()
     except Exception as api_error:
         error_str = str(api_error)
-        print(f"[Segment Extraction] ERROR: Failed to call LLM: {error_str}")
+        logger.error(f"[lecture_ingestion] Segment extraction LLM call failed: {error_str}")
         # Fall back to stub
         return [{
             "segment_index": 0,
@@ -530,13 +524,13 @@ def call_llm_for_extraction(lecture_title: str, lecture_text: str, domain: Optio
     Call OpenAI LLM to extract nodes and links from lecture text.
     Returns a validated LectureExtraction object.
     """
-    if not client:
+    if not model_router.client:
         raise ValueError("OpenAI client not initialized. Check OPENAI_API_KEY environment variable.")
-    
+
     # Build the user prompt
     user_prompt = f"""Lecture Title: {lecture_title}
-    
-Domain: {domain or "Not specified"}
+
+Domain: {domain or 'Not specified'}
 
 Lecture Text:
 {lecture_text}
@@ -544,15 +538,22 @@ Lecture Text:
 Extract the concepts and relationships from this lecture and return them as JSON."""
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        raw_content = model_router.completion(
+            task_type=TASK_EXTRACT,
             messages=[
                 {"role": "system", "content": LECTURE_TO_GRAPH_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,  # Lower temperature for more consistent extraction
-            max_tokens=8000,  # Increased for longer lectures with many segments
+            temperature=0.3,
+            max_tokens=8000,
         )
+        class _FakeMsg:
+            content = raw_content
+        class _FakeChoice:
+            message = _FakeMsg()
+        class _FakeResp:
+            choices = [_FakeChoice()]
+        response = _FakeResp()
     except Exception as api_error:
         error_str = str(api_error)
         if "invalid_api_key" in error_str.lower() or "401" in error_str or "incorrect api key" in error_str.lower():
@@ -1652,7 +1653,7 @@ def ingest_handwriting(
     Ingest a handwriting image using GPT-4o Vision.
     Processes the image to extract concepts, links, and segments.
     """
-    if not client:
+    if not model_router.client:
         raise ValueError("OpenAI client not initialized.")
 
     # 1. Prepare the image for GPT-4o Vision
@@ -1678,7 +1679,7 @@ def ingest_handwriting(
     ]
 
     try:
-        response = client.chat.completions.create(
+        response = model_router.client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": HANDWRITING_INGESTION_PROMPT},

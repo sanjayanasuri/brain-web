@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { getApiHeaders } from '../../api/base';
 
 interface StyleFeedbackFormProps {
   answerId: string;
@@ -25,6 +26,9 @@ export default function StyleFeedbackForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [verbosity, setVerbosity] = useState('');
+  const [questionPreference, setQuestionPreference] = useState('');
+  const [humorPreference, setHumorPreference] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +42,7 @@ export default function StyleFeedbackForm({
       const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
       const response = await fetch(`${API_BASE_URL}/feedback/style`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiHeaders(),
         body: JSON.stringify({
           answer_id: answerId,
           question,
@@ -46,6 +50,9 @@ export default function StyleFeedbackForm({
           feedback_notes: feedbackNotes,
           user_rewritten_version: userRewrittenVersion.trim() || undefined,
           test_label: testLabel.trim() || undefined,
+          verbosity: verbosity || undefined,
+          question_preference: questionPreference || undefined,
+          humor_preference: humorPreference || undefined,
         }),
       });
 
@@ -57,6 +64,9 @@ export default function StyleFeedbackForm({
       setFeedbackNotes('');
       setUserRewrittenVersion('');
       setTestLabel('');
+      setVerbosity('');
+      setQuestionPreference('');
+      setHumorPreference('');
       
       if (onSubmitted) {
         onSubmitted();
@@ -209,6 +219,75 @@ export default function StyleFeedbackForm({
         />
       </div>
 
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>
+          Verbosity Signal (optional):
+        </label>
+        <select
+          value={verbosity}
+          onChange={(e) => setVerbosity(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '6px 8px',
+            border: '1px solid #d1d5db',
+            borderRadius: '4px',
+            fontSize: '12px',
+            background: 'white',
+          }}
+        >
+          <option value="">No explicit signal</option>
+          <option value="too_short">Too short</option>
+          <option value="too_verbose">Too verbose</option>
+          <option value="just_right">Just right</option>
+        </select>
+      </div>
+
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>
+          Question Style Signal (optional):
+        </label>
+        <select
+          value={questionPreference}
+          onChange={(e) => setQuestionPreference(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '6px 8px',
+            border: '1px solid #d1d5db',
+            borderRadius: '4px',
+            fontSize: '12px',
+            background: 'white',
+          }}
+        >
+          <option value="">No explicit signal</option>
+          <option value="more_questions">Ask more follow-up questions</option>
+          <option value="fewer_questions">Ask fewer follow-up questions</option>
+          <option value="ok">Current question style is fine</option>
+        </select>
+      </div>
+
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>
+          Humor Signal (optional):
+        </label>
+        <select
+          value={humorPreference}
+          onChange={(e) => setHumorPreference(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '6px 8px',
+            border: '1px solid #d1d5db',
+            borderRadius: '4px',
+            fontSize: '12px',
+            background: 'white',
+          }}
+        >
+          <option value="">No explicit signal</option>
+          <option value="more_humor">Use more humor</option>
+          <option value="less_humor">Use less humor</option>
+          <option value="ok">Current humor level is fine</option>
+        </select>
+      </div>
+
       <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px' }}>
         <strong>Original Response:</strong>
         <div style={{ marginTop: '4px', padding: '8px', background: '#f9fafb', borderRadius: '4px', maxHeight: '150px', overflow: 'auto' }}>
@@ -236,4 +315,3 @@ export default function StyleFeedbackForm({
     </form>
   );
 }
-

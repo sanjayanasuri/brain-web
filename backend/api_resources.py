@@ -43,6 +43,14 @@ class ConfusionSkillRequest(BaseModel):
     limit: int = 8
 
 
+def _require_graph_identity(request: Request) -> tuple[str, str]:
+    user_id = getattr(request.state, "user_id", None)
+    tenant_id = getattr(request.state, "tenant_id", None)
+    if not user_id or not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication with tenant context is required")
+    return str(user_id), str(tenant_id)
+
+
 def _save_upload(file: UploadFile, tenant_id: Optional[str] = None) -> Tuple[str, str]:
     """
     Save uploaded file using configured storage backend (local or S3).
@@ -63,7 +71,13 @@ def list_resources_for_concept(
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
-    resources = get_resources_for_concept(session=session, concept_id=concept_id)
+    user_id, tenant_id = _require_graph_identity(request)
+    resources = get_resources_for_concept(
+        session=session,
+        concept_id=concept_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
     # Log access to resources for audit trail
     for resource in resources:
         try:
@@ -84,10 +98,13 @@ def search_resources_endpoint(
     """
     Search resources in the active graph + branch by title/caption/url.
     """
+    user_id, tenant_id = _require_graph_identity(request)
     resources = search_resources(
         session=session,
         query=query,
         limit=limit,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
     # Log access to resources for audit trail
     for resource in resources:
@@ -148,7 +165,7 @@ async def upload_resource(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
 
-    tenant_id = getattr(request.state, "tenant_id", None) if request else None
+    user_id, tenant_id = _require_graph_identity(request)
     url, storage_path = _save_upload(file, tenant_id=tenant_id)
 
     mime_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
@@ -209,11 +226,19 @@ async def upload_resource(
         caption=caption,
         source=source,
         metadata=metadata if metadata else None,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     if concept_id:
         try:
-            link_resource_to_concept(session=session, concept_id=concept_id, resource_id=resource.resource_id)
+            link_resource_to_concept(
+                session=session,
+                concept_id=concept_id,
+                resource_id=resource.resource_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -242,6 +267,7 @@ def _caption_from_confusion_output(out: Dict[str, Any]) -> str:
 @router.post("/fetch/confusions", response_model=Resource)
 async def fetch_confusions(
     req: ConfusionSkillRequest,
+    request: Request,
     auth: dict = Depends(require_auth),
     session=Depends(get_neo4j_session),
 ):
@@ -250,6 +276,7 @@ async def fetch_confusions(
     Replaces the external Browser Use skill with internal search_and_fetch.
     """
     from services_web_search import search_and_fetch
+    user_id, tenant_id = _require_graph_identity(request)
 
     # 1. search for combined query
     # We append terms to find specific "confusion" type content
@@ -302,6 +329,8 @@ async def fetch_confusions(
         caption=_caption_from_confusion_output(skill_out),
         source="web_search",
         metadata=skill_out,
+        tenant_id=tenant_id,
+        user_id=user_id,
     )
 
     if req.concept_id:
@@ -310,6 +339,8 @@ async def fetch_confusions(
                 session=session,
                 concept_id=req.concept_id,
                 resource_id=resource.resource_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))

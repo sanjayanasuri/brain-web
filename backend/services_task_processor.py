@@ -16,26 +16,26 @@ from services_signals import get_task
 from services_branch_explorer import get_active_graph_context, set_active_branch, set_active_graph
 from services_graphrag import retrieve_graphrag_context
 from services_retrieval_signals import enhance_retrieval_with_signals, format_signal_context
+from services_model_router import model_router, TASK_CHAT_FAST, TASK_REASONING, TASK_SUMMARIZE
 
 logger = logging.getLogger("brain_web")
 
-# Lazy import OpenAI client
-_client = None
 
-def _get_llm_client():
-    """Get OpenAI client, initializing if needed."""
-    global _client
-    if _client is None:
-        from openai import OpenAI
-        from config import OPENAI_API_KEY
-        if OPENAI_API_KEY:
-            cleaned_key = OPENAI_API_KEY.strip().strip('"').strip("'")
-            if cleaned_key and cleaned_key.startswith("sk-"):
-                try:
-                    _client = OpenAI(api_key=cleaned_key)
-                except Exception:
-                    _client = None
-    return _client
+def _get_graph_tenant_id(session: Session, graph_id: Optional[str]) -> Optional[str]:
+    if not graph_id:
+        return None
+    rec = session.run(
+        """
+        MATCH (g:GraphSpace {graph_id: $graph_id})
+        RETURN g.tenant_id AS tenant_id
+        LIMIT 1
+        """,
+        graph_id=graph_id,
+    ).single()
+    if not rec:
+        return None
+    tenant_id = rec.get("tenant_id")
+    return str(tenant_id) if tenant_id else None
 
 
 def _ensure_task_graph_context(session: Session, task: Task) -> None:
@@ -46,11 +46,12 @@ def _ensure_task_graph_context(session: Session, task: Task) -> None:
     with a fresh session, so we re-select here to prevent cross-graph drift.
     """
     try:
-        current_graph_id, current_branch_id = get_active_graph_context(session)
+        tenant_id = _get_graph_tenant_id(session, task.graph_id)
+        current_graph_id, current_branch_id = get_active_graph_context(session, tenant_id=tenant_id)
         if task.graph_id and task.graph_id != current_graph_id:
-            set_active_graph(session, task.graph_id)
-        if task.branch_id and task.branch_id != get_active_graph_context(session)[1]:
-            set_active_branch(session, task.branch_id)
+            set_active_graph(session, task.graph_id, tenant_id=tenant_id)
+        if task.branch_id and task.branch_id != get_active_graph_context(session, tenant_id=tenant_id)[1]:
+            set_active_branch(session, task.branch_id, tenant_id=tenant_id)
     except Exception:
         # Don't fail tasks solely due to context selection problems.
         pass
@@ -102,6 +103,28 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
     This function executes the task based on its type and updates the task status.
     Should be called from a background worker.
     """
+    # Seed active context from task's own graph/branch so non-API workers never
+    # rely on an unrelated "global" active graph.
+    try:
+        rec = session.run(
+            """
+            MATCH (t:Task {task_id: $task_id})
+            RETURN t.graph_id AS graph_id, t.branch_id AS branch_id
+            LIMIT 1
+            """,
+            task_id=task_id,
+        ).single()
+        if rec:
+            graph_id = rec.get("graph_id")
+            branch_id = rec.get("branch_id")
+            tenant_id = _get_graph_tenant_id(session, graph_id)
+            if graph_id:
+                set_active_graph(session, graph_id, tenant_id=tenant_id)
+                if branch_id:
+                    set_active_branch(session, branch_id, tenant_id=tenant_id)
+    except Exception:
+        pass
+
     task = get_task(session, task_id)
     if not task:
         logger.error(f"Task {task_id} not found")
@@ -217,32 +240,21 @@ def _process_generate_answers(session: Session, task: Task) -> Dict[str, Any]:
         if signal_context:
             full_context += "\n\n" + signal_context
         
-        # Generate answer using LLM
-        client = _get_llm_client()
-        if not client:
-            return {
-                "error": "OpenAI client not available",
-                "context": full_context,
-                "task_type": task.task_type.value,
-            }
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        answer = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful tutor. Answer questions using only the provided context from the user's knowledge graph. If the context doesn't contain enough information, say so clearly."
+                    "content": "You are a helpful tutor. Answer questions using only the provided context from the user's knowledge graph. If the context doesn't contain enough information, say so clearly.",
                 },
                 {
                     "role": "user",
-                    "content": f"Question: {question}\n\nContext from knowledge graph:\n{full_context}\n\nAnswer:"
-                }
+                    "content": f"Question: {question}\n\nContext from knowledge graph:\n{full_context}\n\nAnswer:",
+                },
             ],
             temperature=0.7,
             max_tokens=1000,
         )
-        
-        answer = response.choices[0].message.content
         
         return {
             "answer": answer,
@@ -294,37 +306,27 @@ def _process_summarize(session: Session, task: Task) -> Dict[str, Any]:
             "task_type": task.task_type.value,
         }
     
-    # Generate summary using LLM
-    client = _get_llm_client()
-    if not client:
-        return {
-            "error": "OpenAI client not available",
-            "task_type": task.task_type.value,
-        }
-    
     try:
         # Truncate if too long
         max_chars = 8000
         if len(text) > max_chars:
             text = text[:max_chars] + "..."
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+
+        summary = model_router.completion(
+            task_type=TASK_SUMMARIZE,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that creates concise summaries. Focus on key concepts and main points."
+                    "content": "You are a helpful assistant that creates concise summaries. Focus on key concepts and main points.",
                 },
                 {
                     "role": "user",
-                    "content": f"Summarize this content:\n\n{text}"
-                }
+                    "content": f"Summarize this content:\n\n{text}",
+                },
             ],
             temperature=0.3,
             max_tokens=500,
         )
-        
-        summary = response.choices[0].message.content
         
         return {
             "summary": summary,
@@ -372,32 +374,21 @@ def _process_explain(session: Session, task: Task) -> Dict[str, Any]:
         if signal_context:
             full_context += "\n\n" + signal_context
         
-        # Generate explanation using LLM
-        client = _get_llm_client()
-        if not client:
-            return {
-                "error": "OpenAI client not available",
-                "context": full_context,
-                "task_type": task.task_type.value,
-            }
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        explanation = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful tutor. Explain concepts using only the provided context from the user's knowledge graph. Use the user's own words and reflections when available."
+                    "content": "You are a helpful tutor. Explain concepts using only the provided context from the user's knowledge graph. Use the user's own words and reflections when available.",
                 },
                 {
                     "role": "user",
-                    "content": f"Explain: {query}\n\nContext from knowledge graph:\n{full_context}\n\nExplanation:"
-                }
+                    "content": f"Explain: {query}\n\nContext from knowledge graph:\n{full_context}\n\nExplanation:",
+                },
             ],
             temperature=0.7,
             max_tokens=1000,
         )
-        
-        explanation = response.choices[0].message.content
         
         return {
             "explanation": explanation,
@@ -438,15 +429,6 @@ def _process_gap_analysis(session: Session, task: Task) -> Dict[str, Any]:
         logger.error(f"Error retrieving context for gap analysis: {e}", exc_info=True)
         context_result = {"context_text": "", "concepts": [], "claims": [], "communities": [], "edges": []}
 
-    client = _get_llm_client()
-    if not client:
-        return {
-            "error": "OpenAI client not available",
-            "question": question,
-            "context_preview": (context_result.get("context_text") or "")[:1500],
-            "task_type": task.task_type.value,
-        }
-
     # Ask the LLM for prerequisite concepts, then score coverage using the graph.
     known_concepts = []
     for c in (context_result.get("concepts") or [])[:30]:
@@ -455,8 +437,8 @@ def _process_gap_analysis(session: Session, task: Task) -> Dict[str, Any]:
             known_concepts.append(name.strip())
 
     try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+        raw = model_router.completion(
+            task_type=TASK_REASONING,
             messages=[
                 {
                     "role": "system",
@@ -482,7 +464,7 @@ def _process_gap_analysis(session: Session, task: Task) -> Dict[str, Any]:
             temperature=0.2,
             max_tokens=700,
         )
-        raw = (resp.choices[0].message.content or "").strip()
+        raw = (raw or "").strip()
         parsed = json.loads(raw) if raw else {}
     except Exception as e:
         logger.warning(f"Gap analysis prerequisite extraction failed; falling back to retrieved concepts: {e}")

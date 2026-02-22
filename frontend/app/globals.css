@@ -181,6 +181,14 @@
   margin: 0;
 }
 
+/* Fluid images — never overflow their container */
+img,
+picture {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
 html {
   max-width: 100vw;
   overflow-x: hidden;
@@ -230,7 +238,7 @@ h6 {
 
 h1 {
   font-family: var(--font-serif);
-  font-size: 48px;
+  font-size: clamp(1.75rem, 5vw, 3rem);
   font-weight: 700;
   line-height: 1.1;
 }
@@ -1887,6 +1895,7 @@ button:not(.pill):not(.chip):not(.badge) {
 .text-gradient {
   background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -2026,8 +2035,9 @@ button:not(.pill):not(.chip):not(.badge) {
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 8rem 2rem;
-  max-width: 1000px;
+  padding: clamp(3rem, 8vw, 8rem) 1.5rem;
+  max-width: min(1000px, 100%);
+  width: 100%;
   margin: 0 auto;
   z-index: 10;
   flex: 1;
@@ -2057,7 +2067,7 @@ button:not(.pill):not(.chip):not(.badge) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 2.5rem 3rem;
+  padding: clamp(1rem, 3vw, 2.5rem) clamp(1rem, 4vw, 3rem);
   z-index: 20;
 }
 
@@ -2081,6 +2091,7 @@ button:not(.pill):not(.chip):not(.badge) {
   justify-content: center;
   color: white;
 }
+
 /* Global Orb Component */
 .system-orb {
   width: 120px;
@@ -2144,8 +2155,8 @@ button:not(.pill):not(.chip):not(.badge) {
 .symbol-container {
   display: flex;
   position: relative;
-  width: 400px;
-  height: 400px;
+  width: min(400px, 90vw);
+  height: min(400px, 90vw);
   align-items: center;
   justify-content: center;
   margin-bottom: 2rem;
@@ -2188,30 +2199,81 @@ button:not(.pill):not(.chip):not(.badge) {
 }
 
 /* Positioning for the 3-node trinity around the orb */
-.node-speech { top: 0; left: 50%; transform: translateX(-50%); }
-.node-writing { bottom: 60px; left: 0; }
-.node-typing { bottom: 60px; right: 0; }
+.node-speech {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.node-writing {
+  bottom: 60px;
+  left: 0;
+}
+
+.node-typing {
+  bottom: 60px;
+  right: 0;
+}
 
 /* Modality Keyword Animations */
 @keyframes keyword-drift-up {
-  0% { transform: translateY(0) scale(0.8); opacity: 0; }
-  20% { opacity: 0.6; }
-  80% { opacity: 0.6; }
-  100% { transform: translateY(-40px) scale(1.1); opacity: 0; }
+  0% {
+    transform: translateY(0) scale(0.8);
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 0.6;
+  }
+
+  80% {
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: translateY(-40px) scale(1.1);
+    opacity: 0;
+  }
 }
 
 @keyframes keyword-drift-left {
-  0% { transform: translateX(0) scale(0.8); opacity: 0; }
-  20% { opacity: 0.6; }
-  80% { opacity: 0.6; }
-  100% { transform: translateX(-40px) scale(1.1); opacity: 0; }
+  0% {
+    transform: translateX(0) scale(0.8);
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 0.6;
+  }
+
+  80% {
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: translateX(-40px) scale(1.1);
+    opacity: 0;
+  }
 }
 
 @keyframes keyword-drift-right {
-  0% { transform: translateX(0) scale(0.8); opacity: 0; }
-  20% { opacity: 0.6; }
-  80% { opacity: 0.6; }
-  100% { transform: translateX(40px) scale(1.1); opacity: 0; }
+  0% {
+    transform: translateX(0) scale(0.8);
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 0.6;
+  }
+
+  80% {
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: translateX(40px) scale(1.1);
+    opacity: 0;
+  }
 }
 
 .keyword-float {
@@ -2225,6 +2287,14 @@ button:not(.pill):not(.chip):not(.badge) {
   z-index: 5;
 }
 
-.float-up { animation: keyword-drift-up 4s infinite linear; }
-.float-left { animation: keyword-drift-left 4s infinite linear; }
-.float-right { animation: keyword-drift-right 4s infinite linear; }
+.float-up {
+  animation: keyword-drift-up 4s infinite linear;
+}
+
+.float-left {
+  animation: keyword-drift-left 4s infinite linear;
+}
+
+.float-right {
+  animation: keyword-drift-right 4s infinite linear;
+}

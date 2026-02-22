@@ -8,7 +8,7 @@ import os
 import json
 from typing import Dict, Any, List
 from models.study import TaskSpec, EvaluationResult
-import openai
+from services_model_router import model_router, TASK_CHAT_FAST
 
 
 def evaluate_attempt(
@@ -30,9 +30,8 @@ def evaluate_attempt(
         EvaluationResult with scores, feedback, and gap concepts
     """
     
-    # Get OpenAI API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    api_key = None  # model_router handles key management
+    if not model_router.client:
         # Fallback to simple heuristic scoring
         return _heuristic_evaluation(task_spec, response_text)
     
@@ -65,19 +64,16 @@ Evaluate the response across all dimensions and return a JSON object with:
 Return ONLY valid JSON, no other text."""
     
     try:
-        # Call OpenAI
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model=os.getenv("STUDY_MODEL", "gpt-4o-mini"),
+        # Call LLM via model_router
+        result_text = model_router.completion(
+            task_type=TASK_CHAT_FAST,
             messages=[
                 {"role": "system", "content": "You are an expert teacher providing fair, constructive evaluation."},
                 {"role": "user", "content": eval_prompt},
             ],
-            temperature=0.2,  # Low temperature for consistent scoring
+            temperature=0.2,
             max_tokens=500,
-        )
-        
-        result_text = response.choices[0].message.content or "{}"
+        ) or "{}"
         
         # Parse JSON response
         try:

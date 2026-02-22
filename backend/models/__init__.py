@@ -87,6 +87,7 @@ class ConceptCreate(BaseModel):
     notes_key: Optional[str] = None
     lecture_key: Optional[str] = None  # Deprecated: kept for backward compatibility
     url_slug: Optional[str] = None
+    aliases: Optional[List[str]] = None
     
     # Multi-source tracking fields
     lecture_sources: Optional[List[str]] = None
@@ -208,6 +209,7 @@ class ExtractedNode(BaseModel):
     type: Optional[str] = "concept"
     examples: List[str] = []
     tags: List[str] = []
+    aliases: List[str] = []  # Synonyms, acronyms, or variations
 
 """
 extract links are one relationship found in a lecture by the LLM.
@@ -265,6 +267,17 @@ class HandwritingIngestRequest(BaseModel):
     ocr_hint: Optional[str] = None
     lecture_title: Optional[str] = "Handwritten Notes"
     domain: Optional[str] = None
+
+
+class FreeformCanvasCaptureRequest(BaseModel):
+    """Request for analyzing a structured freeform canvas (strokes + text blocks)."""
+    canvas_id: str
+    canvas_title: str = "Freeform Canvas"
+    domain: Optional[str] = None
+    strokes_json: str
+    text_blocks_json: str
+    phases_json: Optional[str] = None
+    ocr_hint: Optional[str] = None
 
 """
 analogies are one relationships found in a lecture by the LLM.
@@ -380,12 +393,27 @@ class LectureIngestResult(BaseModel):
     reused_existing: bool = False
 
 
+class FreeformCanvasCaptureResponse(BaseModel):
+    """Response from freeform canvas capture endpoint."""
+    lecture_id: str
+    nodes_created: List[Concept]
+    nodes_updated: List[Concept]
+    links_created: List[dict]
+    segments: List[LectureSegment] = []
+    transcript: str
+    run_id: str
+
+
 # ---------- Basic AI Chat Models ----------
 
 class AIChatRequest(BaseModel):
     message: str
     chat_id: Optional[str] = None
     context: Optional[dict] = None
+    # Optional frontend-provided history fallback (camelCase from web client).
+    chatHistory: Optional[List[Dict[str, Any]]] = None
+    # Snake-case alias for compatibility with other clients.
+    chat_history: Optional[List[Dict[str, Any]]] = None
 
 
 class AIChatResponse(BaseModel):
@@ -524,6 +552,10 @@ class ExplanationFeedback(BaseModel):
     question: str
     rating: int  # +1 or -1
     reasoning: Optional[str] = None
+    # Optional explicit style signals for faster personalization convergence.
+    verbosity: Optional[Literal["too_short", "too_verbose", "just_right"]] = None
+    question_preference: Optional[Literal["more_questions", "fewer_questions", "ok"]] = None
+    humor_preference: Optional[Literal["more_humor", "less_humor", "ok"]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -551,39 +583,49 @@ class FocusArea(BaseModel):
 
 class UserProfile(BaseModel):
     """
-    Long-term personal preferences encoding background, interests, weak spots, and learning preferences.
-    Used to personalize explanations and avoid re-explaining fundamentals.
-    
-    Now includes:
-    - static_profile: Core identity (occupation, skills, learning style) - rarely changes
-    - episodic_context: Current context (projects, topics, recent searches) - changes frequently
-    - email: User's contact address
-    - signup_date: When the user first joined the system
+    Long-term personal context and preferences.
+    Transparency-first: This data is shown to the user in plain language for correction.
     """
     id: str = "default"
-    name: str
+    name: str = "Learner"
     email: Optional[str] = None
     signup_date: Optional[datetime] = None
-    background: List[str] = []
+
+    # 1. Explicit User-Provided Info (Editable)
+    learning_goals: str = Field(
+        default="",
+        description="High-level goals: e.g. 'Master distributed systems to pass an interview.'"
+    )
+    domain_background: str = Field(
+        default="",
+        description="What the user already knows: e.g. 'Senior JS developer, brand new to C++.'"
+    )
+    learning_style: Optional[str] = Field(
+        default="Balanced",
+        description="User-defined preference: e.g. 'Visual', 'Socratic', 'Fast-paced'."
+    )
+
+    # 2. Inferred Data (Transparent/Correctable)
+    # Marks what the AI thinks about the user. User can see and 'dismiss' these.
+    inferred_knowledge_tags: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of concept → inferred status (e.g. 'Mastered', 'Struggling')."
+    )
+    weak_areas: List[str] = Field(
+        default_factory=list,
+        description="Specific topics identified as gaps or hurdles."
+    )
+    
+    # 3. Preferences & Integration State
+    learning_preferences: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Storage for TutorProfile and other structured settings."
+    )
+    ui_preferences: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Legacy - flattened/kept for simplicity
     interests: List[str] = []
-    weak_spots: List[str] = []
-    learning_preferences: Dict[str, Any] = {}
-    
-    # Static Memory: Who you are (core identity)
-    static_profile: Dict[str, Any] = {
-        "occupation": "",
-        "core_skills": [],
-        "learning_style": "",
-        "verified_expertise": []
-    }
-    
-    # Episodic Memory: What you're working on (current context)
-    episodic_context: Dict[str, Any] = {
-        "current_projects": [],
-        "active_topics": [],
-        "recent_searches": [],
-        "last_updated": None
-    }
+
 
 
 class ReminderPreferences(BaseModel):
@@ -676,6 +718,10 @@ class StyleFeedbackRequest(BaseModel):
     feedback_notes: str  # User's feedback/notes about what could be different
     user_rewritten_version: Optional[str] = None  # User's version if they rewrote it
     test_label: Optional[str] = None  # Optional label like "Test1", "Test2", etc.
+    # Optional structured style tags (backward compatible).
+    verbosity: Optional[Literal["too_short", "too_verbose", "just_right"]] = None
+    question_preference: Optional[Literal["more_questions", "fewer_questions", "ok"]] = None
+    humor_preference: Optional[Literal["more_humor", "less_humor", "ok"]] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

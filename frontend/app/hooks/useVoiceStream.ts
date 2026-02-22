@@ -15,6 +15,7 @@ export interface VoiceStreamStartParams {
 export interface VoiceStreamEventHandlers {
   onTranscript?: (text: string) => void;
   onAgentReply?: (payload: any) => void;
+  onSpeechStart?: (payload: any) => void;
   onProcessingStart?: (payload: any) => void;
   onTtsAudio?: (audio: ArrayBuffer, meta: any) => void;
   onError?: (error: Error) => void;
@@ -84,6 +85,7 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
   // Keep handler refs stable
   const onTranscriptRef = useRef(handlers.onTranscript);
   const onAgentReplyRef = useRef(handlers.onAgentReply);
+  const onSpeechStartRef = useRef(handlers.onSpeechStart);
   const onProcessingStartRef = useRef(handlers.onProcessingStart);
   const onTtsAudioRef = useRef(handlers.onTtsAudio);
   const onErrorRef = useRef(handlers.onError);
@@ -93,13 +95,14 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
   useEffect(() => {
     onTranscriptRef.current = handlers.onTranscript;
     onAgentReplyRef.current = handlers.onAgentReply;
+    onSpeechStartRef.current = handlers.onSpeechStart;
     onProcessingStartRef.current = handlers.onProcessingStart;
     onTtsAudioRef.current = handlers.onTtsAudio;
     onErrorRef.current = handlers.onError;
     onReconnectingRef.current = handlers.onReconnecting;
     onReconnectedRef.current = handlers.onReconnected;
   }, [
-    handlers.onTranscript, handlers.onAgentReply, handlers.onProcessingStart,
+    handlers.onTranscript, handlers.onAgentReply, handlers.onSpeechStart, handlers.onProcessingStart,
     handlers.onTtsAudio, handlers.onError, handlers.onReconnecting, handlers.onReconnected,
   ]);
 
@@ -169,6 +172,23 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
       reconnectAttemptsRef.current = 0;
       if (isReconnect) onReconnectedRef.current?.();
 
+      const pipeline = params.pipeline || 'agent';
+      const vadConfig = pipeline === 'agent'
+        ? {
+            speech_threshold: 0.65,
+            end_silence_ms: 1100,
+            min_speech_ms: 260,
+            pre_roll_ms: 240,
+            max_utterance_ms: 20000,
+          }
+        : {
+            speech_threshold: 0.65,
+            end_silence_ms: 700,
+            min_speech_ms: 200,
+            pre_roll_ms: 240,
+            max_utterance_ms: 20000,
+          };
+
       const msg = {
         type: 'start',
         graph_id: params.graphId,
@@ -176,14 +196,11 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
         session_id: params.sessionId || null,
         is_scribe_mode: !!params.isScribeMode,
         metadata: params.metadata || null,
-        pipeline: params.pipeline || 'agent',
+        pipeline,
         vad_mode: 'server',
         vad_config: {
           engine: 'energy',
-          end_silence_ms: 700,
-          min_speech_ms: 200,
-          pre_roll_ms: 240,
-          max_utterance_ms: 20000,
+          ...vadConfig,
         },
       };
       try { ws.send(JSON.stringify(msg)); } catch { }
@@ -250,6 +267,10 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
           startedResolver?.();
           startedResolver = null;
           startedRejecter = null;
+          return;
+        }
+        if (type === 'vad_speech_start') {
+          onSpeechStartRef.current?.(obj);
           return;
         }
         if (type === 'processing_start' || type === 'vad_utterance_end') {
@@ -350,7 +371,13 @@ export function useVoiceStream(handlers: VoiceStreamEventHandlers = {}) {
       let stream = mediaStreamRef.current;
       const ended = !stream || stream.getTracks().every(t => t.readyState === 'ended');
       if (ended) {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
         mediaStreamRef.current = stream;
       }
       if (!stream) throw new Error('Microphone stream unavailable');

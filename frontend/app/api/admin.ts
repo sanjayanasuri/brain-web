@@ -2,7 +2,7 @@
  * Admin related API methods
  */
 
-import { API_BASE_URL } from './base';
+import { API_BASE_URL, getApiHeaders } from './base';
 import {
     GraphFilesResponse,
     FilePreviewResponse,
@@ -41,7 +41,8 @@ export async function triggerExport(perGraph: boolean = true): Promise<{ status:
 }
 
 export async function getWorkflowStatus(): Promise<WorkflowStatusResponse> {
-    const res = await fetch(`${API_BASE_URL}/workflows/status`);
+    const headers = await getApiHeaders();
+    const res = await fetch(`${API_BASE_URL}/workflows/status`, { headers });
     if (!res.ok) {
         throw new Error(`Failed to get workflow status: ${res.statusText}`);
     }

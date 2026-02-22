@@ -19,6 +19,7 @@ from models import (
 from services_branch_explorer import (
     ensure_graph_scoping_initialized,
     get_active_graph_context,
+    get_request_graph_identity,
 )
 
 from config import PROPOSED_VISIBILITY_THRESHOLD
@@ -26,20 +27,45 @@ from config import PROPOSED_VISIBILITY_THRESHOLD
 from services_user import get_user_by_id, update_user
 
 
-def _build_tenant_filter_clause(tenant_id: Optional[str]) -> str:
-    """
-    Build Cypher WHERE clause snippet for tenant filtering on GraphSpace.
-    
-    Args:
-        tenant_id: Optional tenant identifier. If None, no filtering (backward compatibility).
-    
-    Returns:
-        Cypher WHERE clause snippet: "AND (g.tenant_id IS NULL OR g.tenant_id = $tenant_id)"
-        or empty string if tenant_id is None
-    """
-    if tenant_id:
-        return "AND (g.tenant_id IS NULL OR g.tenant_id = $tenant_id)"
-    return ""
+def _resolve_required_tenant_id(tenant_id: Optional[str] = None, session: Optional[Session] = None) -> str:
+    """Resolve tenant_id from argument or request context; require it for graph reads."""
+    _, req_tenant_id = get_request_graph_identity()
+    resolved_tenant_id = str(tenant_id).strip() if tenant_id else (str(req_tenant_id).strip() if req_tenant_id else "")
+    if not resolved_tenant_id and session is not None:
+        try:
+            graph_id, _ = get_active_graph_context(session)
+            rec = session.run(
+                """
+                MATCH (g:GraphSpace {graph_id: $graph_id})
+                RETURN g.tenant_id AS tenant_id
+                LIMIT 1
+                """,
+                graph_id=graph_id,
+            ).single()
+            if rec and rec.get("tenant_id"):
+                resolved_tenant_id = str(rec.get("tenant_id")).strip()
+        except Exception:
+            pass
+    if not resolved_tenant_id:
+        raise ValueError("Tenant-scoped graph context is required")
+    return resolved_tenant_id
+
+
+def _get_tenant_scoped_graph_context(
+    session: Session,
+    *,
+    tenant_id: Optional[str] = None,
+) -> Tuple[str, str, str]:
+    resolved_tenant_id = _resolve_required_tenant_id(tenant_id, session=session)
+    graph_id, branch_id = get_active_graph_context(session, tenant_id=resolved_tenant_id)
+    return graph_id, branch_id, resolved_tenant_id
+
+
+def _build_tenant_filter_clause(tenant_id: str) -> str:
+    """Build strict tenant filter for GraphSpace."""
+    if not tenant_id:
+        raise ValueError("tenant_id is required for tenant filtering")
+    return "AND g.tenant_id = $tenant_id"
 
 
 def _normalize_include_proposed(include_proposed: Optional[str]) -> str:
@@ -134,7 +160,7 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
         tenant_id: Optional tenant_id for multi-tenant isolation
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     where_clauses = [
         "$branch_id IN COALESCE(c.on_branches, [])"
     ]
@@ -142,9 +168,7 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
         where_clauses.append("COALESCE(c.archived, false) = false")
     
     # Add tenant filtering
-    tenant_filter = _build_tenant_filter_clause(tenant_id)
-    if tenant_filter:
-        where_clauses.append(tenant_filter.replace("AND ", ""))  # Remove leading AND since it's in WHERE
+    tenant_filter = _build_tenant_filter_clause(resolved_tenant_id)
     
     # Normalize name for matching
     normalized_name = name.lower().strip()
@@ -154,9 +178,8 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
         "normalized_name": normalized_name,
         "graph_id": graph_id,
         "branch_id": branch_id,
+        "tenant_id": resolved_tenant_id,
     }
-    if tenant_id:
-        params["tenant_id"] = tenant_id
     
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
@@ -190,9 +213,14 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
     return _normalize_concept_from_db(record.data())
 
 
-def get_concept_by_id(session: Session, node_id: str, include_archived: bool = False) -> Optional[Concept]:
+def get_concept_by_id(
+    session: Session,
+    node_id: str,
+    include_archived: bool = False,
+    tenant_id: Optional[str] = None,
+) -> Optional[Concept]:
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id, tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     where_clauses = [
         "$branch_id IN COALESCE(c.on_branches, [])"
     ]
@@ -201,6 +229,7 @@ def get_concept_by_id(session: Session, node_id: str, include_archived: bool = F
     
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    WHERE g.tenant_id = $tenant_id
     MATCH (c:Concept {{node_id: $node_id}})-[:BELONGS_TO]->(g)
     WHERE {' AND '.join(where_clauses)}
     RETURN c.node_id AS node_id,
@@ -218,16 +247,16 @@ def get_concept_by_id(session: Session, node_id: str, include_archived: bool = F
            c.last_updated_by AS last_updated_by
     LIMIT 1
     """
-    record = session.run(query, node_id=node_id, graph_id=graph_id, branch_id=branch_id).single()
+    record = session.run(query, node_id=node_id, graph_id=graph_id, branch_id=branch_id, tenant_id=tenant_id).single()
     if not record:
         return None
     return _normalize_concept_from_db(record.data())
 
 
-def get_concept_by_slug(session: Session, slug: str, include_archived: bool = False) -> Optional[Concept]:
+def get_concept_by_slug(session: Session, slug: str, include_archived: bool = False, tenant_id: Optional[str] = None) -> Optional[Concept]:
     """Get a concept by its URL slug (Wikipedia-style)."""
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     where_clauses = [
         "c.url_slug = $slug",
         "$branch_id IN COALESCE(c.on_branches, [])"
@@ -237,6 +266,7 @@ def get_concept_by_slug(session: Session, slug: str, include_archived: bool = Fa
     
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    WHERE g.tenant_id = $tenant_id
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE {' AND '.join(where_clauses)}
     RETURN c.node_id AS node_id,
@@ -254,7 +284,7 @@ def get_concept_by_slug(session: Session, slug: str, include_archived: bool = Fa
            c.last_updated_by AS last_updated_by
     LIMIT 1
     """
-    record = session.run(query, slug=slug, graph_id=graph_id, branch_id=branch_id).single()
+    record = session.run(query, slug=slug, graph_id=graph_id, branch_id=branch_id, tenant_id=resolved_tenant_id).single()
     if not record:
         return None
     return _normalize_concept_from_db(record.data())
@@ -799,7 +829,12 @@ def create_relationship(session: Session, payload: RelationshipCreate, tenant_id
     )
 
 
-def get_neighbors(session: Session, node_id: str, include_proposed: str = "auto") -> List[Concept]:
+def get_neighbors(
+    session: Session,
+    node_id: str,
+    include_proposed: str = "auto",
+    tenant_id: Optional[str] = None,
+) -> List[Concept]:
     """
     Returns direct neighbors of a concept node, excluding merged nodes.
     
@@ -812,7 +847,7 @@ def get_neighbors(session: Session, node_id: str, include_proposed: str = "auto"
             - "none": Only ACCEPTED
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     
     include_proposed = _normalize_include_proposed(include_proposed)
     edge_visibility_clause = _build_edge_visibility_where_clause(include_proposed)
@@ -821,12 +856,14 @@ def get_neighbors(session: Session, node_id: str, include_proposed: str = "auto"
         "node_id": node_id,
         "graph_id": graph_id,
         "branch_id": branch_id,
+        "tenant_id": resolved_tenant_id,
         "include_proposed": include_proposed,
         "threshold": PROPOSED_VISIBILITY_THRESHOLD,
     }
     
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    WHERE g.tenant_id = $tenant_id
     MATCH (c:Concept {{node_id: $node_id}})-[:BELONGS_TO]->(g)
     MATCH (c)-[r]-(n:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
@@ -851,7 +888,12 @@ def get_neighbors(session: Session, node_id: str, include_proposed: str = "auto"
     return [_normalize_concept_from_db(record.data()) for record in result]
 
 
-def get_neighbors_with_relationships(session: Session, node_id: str, include_proposed: str = "auto") -> List[dict]:
+def get_neighbors_with_relationships(
+    session: Session,
+    node_id: str,
+    include_proposed: str = "auto",
+    tenant_id: Optional[str] = None,
+) -> List[dict]:
     """
     Returns direct neighbors with their relationship types, excluding merged nodes.
     Returns a list of dicts with 'concept', 'predicate', 'is_outgoing', 'relationship_status',
@@ -866,7 +908,7 @@ def get_neighbors_with_relationships(session: Session, node_id: str, include_pro
             - "none": Only ACCEPTED
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     
     include_proposed = _normalize_include_proposed(include_proposed)
     edge_visibility_clause = _build_edge_visibility_where_clause(include_proposed)
@@ -875,12 +917,14 @@ def get_neighbors_with_relationships(session: Session, node_id: str, include_pro
         "node_id": node_id,
         "graph_id": graph_id,
         "branch_id": branch_id,
+        "tenant_id": resolved_tenant_id,
         "include_proposed": include_proposed,
         "threshold": PROPOSED_VISIBILITY_THRESHOLD,
     }
     
     query = f"""
     MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    WHERE g.tenant_id = $tenant_id
     MATCH (c:Concept {{node_id: $node_id}})-[:BELONGS_TO]->(g)
     MATCH (c)-[r]-(n:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
@@ -931,11 +975,11 @@ def get_all_concepts(session: Session, tenant_id: Optional[str] = None) -> List[
     Returns all Concept nodes in the database, excluding merged nodes.
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     
     # Try the scoped query first
     query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
       AND COALESCE(c.is_merged, false) = false
@@ -956,13 +1000,19 @@ def get_all_concepts(session: Session, tenant_id: Optional[str] = None) -> List[
            c.last_updated_by AS last_updated_by
     ORDER BY c.node_id
     """
-    result = session.run(query, graph_id=graph_id, branch_id=branch_id)
+    result = session.run(query, graph_id=graph_id, branch_id=branch_id, tenant_id=resolved_tenant_id)
     concepts = [_normalize_concept_from_db(record.data()) for record in result]
     
     return concepts
 
 
-def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: int = 600, include_proposed: str = "auto") -> Dict[str, Any]:
+def get_graph_overview(
+    session: Session,
+    limit_nodes: int = 300,
+    limit_edges: int = 600,
+    include_proposed: str = "auto",
+    tenant_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Returns a lightweight overview of the graph with top nodes by degree.
     
@@ -976,7 +1026,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
         Dict with 'nodes', 'edges', and 'meta' keys
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     
     include_proposed = _normalize_include_proposed(include_proposed)
     edge_visibility_clause = _build_edge_visibility_where_clause(include_proposed)
@@ -984,6 +1034,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     params = {
         "graph_id": graph_id,
         "branch_id": branch_id,
+        "tenant_id": resolved_tenant_id,
         "limit_nodes": limit_nodes,
         "limit_edges": limit_edges,
         "include_proposed": include_proposed,
@@ -994,7 +1045,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     # Also include nodes with 0 degree to ensure isolated nodes are visible
     # Debug: First check if GraphSpace exists and count nodes
     debug_query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
     RETURN count(c) AS total_nodes, count(DISTINCT c.on_branches) AS branch_variants
     """
@@ -1012,7 +1063,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     # We use a UNION to get both connected nodes AND isolated nodes separately
     query = f"""
     // First part: Get connected nodes (degree > 0), ordered by degree
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
       AND COALESCE(c.is_merged, false) = false
@@ -1042,7 +1093,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     
     // Second part: Get ALL isolated nodes (degree = 0) - always include these
     // Use a simpler approach: get all nodes, then filter out those that have relationships
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
       AND COALESCE(c.is_merged, false) = false
@@ -1078,13 +1129,13 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     if len(nodes) == 0:
         # Check if nodes exist at all
         check_query = """
-        MATCH (g:GraphSpace {graph_id: $graph_id})
+        MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
         OPTIONAL MATCH (c:Concept)-[:BELONGS_TO]->(g)
         RETURN count(c) AS total_nodes,
                collect(c.node_id)[0..5] AS sample_node_ids,
                collect(c.on_branches)[0..5] AS sample_branches
         """
-        check_result = session.run(check_query, graph_id=graph_id)
+        check_result = session.run(check_query, graph_id=graph_id, tenant_id=resolved_tenant_id)
         check_data = check_result.single()
         if check_data:
             total = check_data.get("total_nodes", 0)
@@ -1100,7 +1151,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     # Get edges among the selected nodes
     if len(node_ids) > 0:
         edge_query = f"""
-        MATCH (g:GraphSpace {{graph_id: $graph_id}})
+        MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
         MATCH (s:Concept)-[:BELONGS_TO]->(g)
         MATCH (t:Concept)-[:BELONGS_TO]->(g)
         MATCH (s)-[r]->(t)
@@ -1142,7 +1193,7 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     
     # Get total counts for metadata
     count_query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
+    MATCH (g:GraphSpace {graph_id: $graph_id, tenant_id: $tenant_id})
     MATCH (c:Concept)-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(c.on_branches, [])
       AND COALESCE(c.is_merged, false) = false
@@ -1162,7 +1213,11 @@ def get_graph_overview(session: Session, limit_nodes: int = 300, limit_edges: in
     }
 
 
-def get_all_relationships(session: Session, include_proposed: str = "auto") -> List[dict]:
+def get_all_relationships(
+    session: Session,
+    include_proposed: str = "auto",
+    tenant_id: Optional[str] = None,
+) -> List[dict]:
     """
     Returns all relationships between Concept nodes.
     Returns a list of dicts with source_id, target_id, predicate, status, confidence, and method.
@@ -1176,7 +1231,7 @@ def get_all_relationships(session: Session, include_proposed: str = "auto") -> L
             - "none": Only ACCEPTED
     """
     ensure_graph_scoping_initialized(session)
-    graph_id, branch_id = get_active_graph_context(session)
+    graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     
     include_proposed = _normalize_include_proposed(include_proposed)
     edge_visibility_clause = _build_edge_visibility_where_clause(include_proposed)
@@ -1184,12 +1239,13 @@ def get_all_relationships(session: Session, include_proposed: str = "auto") -> L
     params = {
         "graph_id": graph_id,
         "branch_id": branch_id,
+        "tenant_id": resolved_tenant_id,
         "include_proposed": include_proposed,
         "threshold": PROPOSED_VISIBILITY_THRESHOLD,
     }
     
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (g:GraphSpace {{graph_id: $graph_id, tenant_id: $tenant_id}})
     MATCH (s:Concept)-[:BELONGS_TO]->(g)
     MATCH (t:Concept)-[:BELONGS_TO]->(g)
     MATCH (s)-[r]->(t)
@@ -1804,6 +1860,9 @@ def store_style_feedback(session: Session, fb) -> str:
         feedback_notes: $feedback_notes,
         user_rewritten_version: $user_rewritten_version,
         test_label: $test_label,
+        verbosity: $verbosity,
+        question_preference: $question_preference,
+        humor_preference: $humor_preference,
         created_at: $created_at
     })
     RETURN sf.feedback_id AS feedback_id
@@ -1836,6 +1895,9 @@ def get_style_feedback_examples(session: Session, limit: int = 10) -> List[Dict[
            sf.feedback_notes AS feedback_notes,
            sf.user_rewritten_version AS user_rewritten_version,
            sf.test_label AS test_label,
+           sf.verbosity AS verbosity,
+           sf.question_preference AS question_preference,
+           sf.humor_preference AS humor_preference,
            sf.created_at AS created_at
     """
     records = session.run(query, limit=limit)
@@ -1849,6 +1911,9 @@ def get_style_feedback_examples(session: Session, limit: int = 10) -> List[Dict[
             "feedback_notes": rec["feedback_notes"],
             "user_rewritten_version": rec.get("user_rewritten_version"),
             "test_label": rec.get("test_label"),
+            "verbosity": rec.get("verbosity"),
+            "question_preference": rec.get("question_preference"),
+            "humor_preference": rec.get("humor_preference"),
             "created_at": rec["created_at"],
         })
     return results
@@ -1976,6 +2041,9 @@ def store_feedback(session: Session, fb: ExplanationFeedback) -> None:
         question: $question,
         rating: $rating,
         reasoning: $reasoning,
+        verbosity: $verbosity,
+        question_preference: $question_preference,
+        humor_preference: $humor_preference,
         created_at: $created_at
     })
     """

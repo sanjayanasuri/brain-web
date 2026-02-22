@@ -192,7 +192,7 @@ Transcript:
                         tags=["voice-extracted"],
                         created_by=f"voice-agent-{self.user_id}",
                     )
-                    node = create_concept(neo_sess, payload)
+                    node = create_concept(neo_sess, payload, tenant_id=self.tenant_id)
                     node_id = getattr(node, "node_id", None) or getattr(node, "id", None)
                     if node_id:
                         topic_node_ids[t_name] = node_id
@@ -213,7 +213,7 @@ Transcript:
                                     target_name=rel_name,
                                     predicate="RELATED_TO",
                                 )
-                                create_relationship(neo_sess, rel_payload)
+                                create_relationship(neo_sess, rel_payload, tenant_id=self.tenant_id)
                             except Exception as rel_err:
                                 logger.debug(f"[voice_agent] Could not create relationship {t_name}->{rel_name}: {rel_err}")
 
@@ -231,8 +231,8 @@ Transcript:
         ended_at = datetime.utcnow()
         
         # 1. Fetch graph_id for synthesis
-        query_fetch = "SELECT graph_id, branch_id FROM voice_sessions WHERE id = %s AND user_id = %s"
-        graph_res = execute_query(query_fetch, (session_id, self.user_id))
+        query_fetch = "SELECT graph_id, branch_id FROM voice_sessions WHERE id = %s AND user_id = %s AND tenant_id = %s"
+        graph_res = execute_query(query_fetch, (session_id, self.user_id, self.tenant_id))
         graph_id = graph_res[0]["graph_id"] if graph_res else None
         branch_id = graph_res[0].get("branch_id") if graph_res else None
 
@@ -268,9 +268,9 @@ Transcript:
         query = """
         UPDATE voice_sessions
         SET ended_at = %s, total_duration_seconds = %s, token_usage_estimate = %s
-        WHERE id = %s AND user_id = %s
+        WHERE id = %s AND user_id = %s AND tenant_id = %s
         """
-        params = (ended_at, duration_seconds, tokens_used, session_id, self.user_id)
+        params = (ended_at, duration_seconds, tokens_used, session_id, self.user_id, self.tenant_id)
         
         try:
             execute_update(query, params)
@@ -472,7 +472,7 @@ Transcript:
                             tags=["voice-extracted"],
                             created_by=f"voice-agent-{self.user_id}",
                         )
-                        node = create_concept(neo_sess, payload)
+                        node = create_concept(neo_sess, payload, tenant_id=self.tenant_id)
                         node_id = getattr(node, "node_id", None)
                         logger.info(f"[voice_agent] Fog-clearing persisted concept: '{concept_name}' ({node_id})")
                 except Exception as e:
@@ -490,9 +490,9 @@ Transcript:
         """Retrieve conversation history — in-memory first, Postgres as cold-start fallback."""
         if session_id in self._session_history:
             return list(self._session_history[session_id])
-        query = "SELECT metadata FROM voice_sessions WHERE id = %s AND user_id = %s"
+        query = "SELECT metadata FROM voice_sessions WHERE id = %s AND user_id = %s AND tenant_id = %s"
         try:
-            res = execute_query(query, (session_id, self.user_id))
+            res = execute_query(query, (session_id, self.user_id, self.tenant_id))
             history: list = []
             if res and res[0]['metadata']:
                 history = res[0]['metadata'].get('history', [])
@@ -504,9 +504,9 @@ Transcript:
 
     async def get_session_policy(self, session_id: str) -> Dict[str, Any]:
         """Retrieve turn-taking/pacing policy from voice session metadata."""
-        query = "SELECT metadata FROM voice_sessions WHERE id = %s AND user_id = %s"
+        query = "SELECT metadata FROM voice_sessions WHERE id = %s AND user_id = %s AND tenant_id = %s"
         try:
-            res = execute_query(query, (session_id, self.user_id))
+            res = execute_query(query, (session_id, self.user_id, self.tenant_id))
             metadata = res[0].get("metadata") if res else None
             if isinstance(metadata, dict):
                 return metadata.get("policy", {}) or {}
@@ -522,9 +522,9 @@ Transcript:
                 """
                 UPDATE voice_sessions
                 SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{policy}', %s::jsonb, true)
-                WHERE id = %s AND user_id = %s
+                WHERE id = %s AND user_id = %s AND tenant_id = %s
                 """,
-                (json.dumps(policy), session_id, self.user_id),
+                (json.dumps(policy), session_id, self.user_id, self.tenant_id),
             )
         except Exception as e:
             logger.error(f"Failed to set session policy: {e}")
@@ -544,10 +544,10 @@ Transcript:
         query = """
         UPDATE voice_sessions
         SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{history}', %s::jsonb, true)
-        WHERE id = %s AND user_id = %s
+        WHERE id = %s AND user_id = %s AND tenant_id = %s
         """
         try:
-            execute_update(query, (json.dumps(self._session_history[session_id]), session_id, self.user_id))
+            execute_update(query, (json.dumps(self._session_history[session_id]), session_id, self.user_id, self.tenant_id))
         except Exception as e:
             logger.error(f"Failed to save interaction history: {e}")
 
@@ -698,63 +698,33 @@ Transcript:
             # 6. Construct system prompt
             mode_desc = "SCRIBE MODE" if is_scribe_mode else ("FOG-CLEARER MODE" if is_confused else "CONVERSATIONAL MODE")
 
-            # Phase F: apply TutorProfile tone/audience/depth (best-effort)
+            # Phase F/v2: apply TutorProfile parameters (Clean Break)
             tutor_layer = ""
             try:
                 if tutor_profile:
-                    voice_cards = {
-                        "neutral": "Tone: professional and clear.",
-                        "friendly": "Tone: warm, friendly, and supportive (still precise).",
-                        "direct": "Tone: straightforward and no-nonsense (still kind).",
-                        "playful": "Tone: light and engaging (avoid distracting jokes).",
-                    }
-                    audience_cards = {
-                        "default": "Audience: default learner.",
-                        "eli5": "Audience: ELI5 (simple, concrete, define jargon).",
-                        "ceo_pitch": "Audience: CEO pitch (executive summary, tradeoffs, crisp).",
-                        "recruiter_interview": "Audience: recruiter interview (clear definition + practical example).",
-                        "technical": "Audience: technical (precise terms, rigorous reasoning).",
-                    }
-                    response_depth = {
-                        "hint": "Depth: one brief nudge (1–2 sentences).",
-                        "compact": "Depth: concise (2–4 short sentences by default).",
-                        "normal": "Depth: balanced (short explanation + one example).",
-                        "deep": "Depth: step-by-step (short numbered steps; pause to check alignment).",
-                    }
+                    # If custom_instructions (God Mode) is set, it overrides structured settings
+                    if tutor_profile.custom_instructions:
+                        tutor_layer = f"\nAI PERSONA OVERRIDE:\n{tutor_profile.custom_instructions}"
+                    else:
+                        tutor_layer = "\n".join([
+                            "## AI Tutor Persona (v2)",
+                            f"- Comprehension Level: {tutor_profile.comprehension_level} (Target {tutor_profile.comprehension_level} level explanations)",
+                            f"- Tone: {tutor_profile.tone}",
+                            f"- Pacing: {tutor_profile.pacing}",
+                            f"- Turn-Taking Style: {tutor_profile.turn_taking}",
+                            f"- Response Length: {tutor_profile.response_length}",
+                            f"- Behavioral: {'Direct feedback, no glaze' if tutor_profile.no_glazing else 'Supportive guide'}",
+                            f"- Completion Rule: {'Always end with a suggested next step' if tutor_profile.end_with_next_step else 'Natural flow'}"
+                        ])
 
-                    voice_id = getattr(tutor_profile, "voice_id", "neutral") or "neutral"
-                    audience_mode = getattr(tutor_profile, "audience_mode", "default") or "default"
-                    response_mode = getattr(tutor_profile, "response_mode", "compact") or "compact"
-                    ask_question_policy = getattr(tutor_profile, "ask_question_policy", "at_most_one") or "at_most_one"
-                    end_with_next_step = getattr(tutor_profile, "end_with_next_step", True) is not False
-                    no_glazing = getattr(tutor_profile, "no_glazing", True) is not False
-
-                    question_policy_cards = {
-                        "never": "Question policy: avoid follow-up questions unless critical details are missing.",
-                        "at_most_one": "Question policy: ask at most one brief clarification, then answer directly.",
-                        "ok": "Question policy: questions are allowed, but avoid repeated clarifying loops.",
-                    }
-                    tutor_layer = "\n".join(
-                        [
-                            "Tutor Profile:",
-                            f"- {voice_cards.get(str(voice_id), voice_cards['neutral'])}",
-                            f"- {audience_cards.get(str(audience_mode), audience_cards['default'])}",
-                            f"- {response_depth.get(str(response_mode), response_depth['compact'])}",
-                            f"- {question_policy_cards.get(str(ask_question_policy), question_policy_cards['at_most_one'])}",
-                            f"- Closure: {'end with one concrete next step when useful.' if end_with_next_step else 'do not force next-step prompts.'}",
-                            f"- Correctness: {'be direct; answer yes/no when asked; correct errors (no glazing).' if no_glazing else 'be supportive; still correct errors.'}",
-                        ]
-                    )
-
-                    # Apply pacing/turn-taking defaults to policy if missing (signals still override)
+                    # Sync pacing/turn-taking to session policy if not explicitly set by signals
                     if isinstance(policy, dict):
-                        pacing = getattr(tutor_profile, "pacing", None)
-                        turn_taking = getattr(tutor_profile, "turn_taking", None)
-                        if pacing and "pacing" not in policy:
-                            policy["pacing"] = pacing
-                        if turn_taking and "turn_taking" not in policy:
-                            policy["turn_taking"] = turn_taking
-            except Exception:
+                        if tutor_profile.pacing and "pacing" not in policy:
+                            policy["pacing"] = tutor_profile.pacing
+                        if tutor_profile.turn_taking and "turn_taking" not in policy:
+                            policy["turn_taking"] = tutor_profile.turn_taking
+            except Exception as e:
+                logger.debug(f"Failed to apply TutorProfile v2 layer: {e}")
                 tutor_layer = ""
             
             # Unified memory sections
@@ -873,7 +843,11 @@ Transcript:
 
                 # Persist transcript chunks + extracted learning signals as artifacts (additive)
                 try:
-                    started_at_ms = get_voice_session_started_at_ms(voice_session_id=session_id, user_id=self.user_id)
+                    started_at_ms = get_voice_session_started_at_ms(
+                        voice_session_id=session_id,
+                        user_id=self.user_id,
+                        tenant_id=self.tenant_id,
+                    )
                     now_ms = int(datetime.utcnow().timestamp() * 1000)
                     session_offset_now = max(0, now_ms - started_at_ms) if started_at_ms else 0
 
