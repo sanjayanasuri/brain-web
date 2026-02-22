@@ -14,11 +14,12 @@ from datetime import datetime
 from neo4j import Session
 
 from services_web_search import search_and_fetch
-from services_web_ingestion import ingest_web_payload
 from services_retrieval_plans import run_plan
 from services_retrieval_helpers import retrieve_focus_communities, retrieve_claims_for_community_ids
 from services_ingestion_runs import create_ingestion_run, update_ingestion_run_status
 from services_branch_explorer import get_active_graph_context
+from services_ingestion_kernel import ingest_artifact
+from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
 from db_neo4j import get_neo4j_session
 from models import Intent
 

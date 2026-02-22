@@ -37,13 +37,29 @@ GHCR_NAMESPACE="$GHCR_NAMESPACE" IMAGE_TAG="$IMAGE_TAG" "${compose_cmd[@]}" up -
 echo "Service status:"
 GHCR_NAMESPACE="$GHCR_NAMESPACE" IMAGE_TAG="$IMAGE_TAG" "${compose_cmd[@]}" ps
 
+retry_http_ok() {
+  local name="$1"
+  local attempts="$2"
+  shift 2
+
+  for i in $(seq 1 "$attempts"); do
+    if "$@" >/dev/null 2>&1; then
+      echo "✓ $name reachable"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "WARNING: $name did not become healthy in time"
+  return 1
+}
+
 echo "Checking frontend..."
-curl -fsSL http://localhost:3000 >/dev/null
-echo "✓ Frontend reachable"
+retry_http_ok "Frontend" 20 curl -fsSL http://localhost:3000
 
 echo "Checking backend..."
-if curl -fsSL http://localhost:8000/health >/dev/null 2>&1 || curl -fsSL http://localhost:8000/api/health >/dev/null 2>&1; then
-  echo "✓ Backend healthy"
+if retry_http_ok "Backend" 30 curl -fsSL http://localhost:8000/health || retry_http_ok "Backend" 30 curl -fsSL http://localhost:8000/api/health; then
+  :
 else
   echo "WARNING: Backend health endpoint did not return success yet"
   exit 1

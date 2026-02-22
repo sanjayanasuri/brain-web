@@ -19,9 +19,6 @@ from services_branch_explorer import (
 )
 router = APIRouter(prefix="/sync", tags=["sync"])
 
-# Import here to avoid circular dependencies
-from services_sync_capture import capture_selection_into_graph
-
 
 # -----------------------------
 # Models
