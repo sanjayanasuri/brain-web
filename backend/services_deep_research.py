@@ -102,18 +102,34 @@ async def perform_deep_research(
                     "source_title": title,
                 }
                 
-                res = ingest_web_payload(
-                    session=session,
-                    url=url,
-                    text=content_data.get("content", ""),
+                artifact_input = ArtifactInput(
+                    artifact_type="webpage",
+                    source_url=url,
                     title=title,
-                    graph_id_override=graph_id,
-                    branch_id_override=branch_id,
+                    text=content_data.get("content", ""),
                     metadata=meta,
+                    actions=IngestionActions(
+                        run_lecture_extraction=True,
+                        run_chunk_and_claims=True,
+                        embed_claims=True,
+                        create_lecture_node=True,
+                        create_artifact_node=True,
+                    ),
+                    policy=IngestionPolicy(local_only=True)
+                )
+
+                res = ingest_artifact(
+                    session=session,
+                    payload=artifact_input,
+                    graph_id=graph_id,
+                    branch_id=branch_id,
                 )
                 
-                item["ingest_result"] = res
-                logger.info(f"  ✓ Ingested {title}. Run ID: {res['run_id']}")
+                item["ingest_result"] = {
+                    "run_id": res.run_id,
+                    "status": res.status,
+                }
+                logger.info(f"  ✓ Ingested {title}. Run ID: {res.run_id}")
             
             # Collect all run IDs from ingestion
             ingestion_run_ids = [

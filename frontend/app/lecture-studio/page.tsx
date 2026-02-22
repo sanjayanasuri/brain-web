@@ -18,6 +18,7 @@ import {
   type PDFIngestResponse,
 } from '../api-client';
 import { optimizedStorage } from '../lib/navigationUtils';
+import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../lib/ipadScribble';
 import PDFViewer from '../components/pdf/PDFViewer';
 
 export default function LectureStudioPage() {
@@ -48,12 +49,26 @@ function LectureStudioPageInner() {
   const [ingestMode, setIngestMode] = useState<'text' | 'pdf'>('text');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [showPdfViewer, setShowPdfViewer] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(1440);
+  const [viewportHeight, setViewportHeight] = useState(900);
+  const isIPadLike = useIPadLikeDevice();
 
   // Landing page state (when no lectureId)
   const [allLectures, setAllLectures] = useState<Lecture[]>(optimizedStorage.getItem('lecture-studio-list', []));
   const [searchQuery, setSearchQuery] = useState('');
 
   // Persistence for selection
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateViewport = () => {
+      setViewportWidth(window.innerWidth);
+      setViewportHeight(window.innerHeight);
+    };
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    return () => window.removeEventListener('resize', updateViewport);
+  }, []);
+
   useEffect(() => {
     if (lectureId) {
       const savedIndex = optimizedStorage.getItem(`lecture-studio-idx-${lectureId}`);
@@ -224,6 +239,24 @@ function LectureStudioPageInner() {
     router.push(`/lecture-editor?lectureId=${lectureId}`);
   };
 
+  const isLandscapeViewport = viewportWidth >= viewportHeight;
+  const isIPadPortrait = isIPadLike && viewportWidth <= 1100 && !isLandscapeViewport;
+  const isIPadLandscape = isIPadLike && viewportWidth <= 1366 && isLandscapeViewport;
+  const isTabletOrNarrow = viewportWidth < 1100;
+  const lectureListGridColumns = isTabletOrNarrow
+    ? 'minmax(220px, 1.15fr) minmax(220px, 1.35fr) 96px 84px'
+    : '1fr 2fr 120px 100px';
+  const studioDetailGridColumns = isIPadPortrait
+    ? '1fr'
+    : isIPadLandscape
+      ? '1fr 1fr 0.95fr'
+      : 'repeat(auto-fit, minmax(350px, 1fr))';
+  const studioPanelMaxHeight = isIPadPortrait
+    ? 'none'
+    : isIPadLandscape
+      ? 'calc(100dvh - 220px)'
+      : 'calc(100vh - 250px)';
+
   // Show landing page when no lectureId
   if (!lectureId) {
     const filteredLectures = allLectures.filter(lecture =>
@@ -233,16 +266,17 @@ function LectureStudioPageInner() {
 
     return (
       <div style={{
-        minHeight: '100vh',
+        minHeight: '100dvh',
         background: 'var(--background)',
         padding: '0',
         display: 'flex',
         flexDirection: 'column',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}>
         {/* Main Content Area */}
         <div style={{
           flex: 1,
-          padding: '40px clamp(20px, 5vw, 80px)',
+          padding: isIPadPortrait ? '24px 14px 20px' : '40px clamp(20px, 5vw, 80px)',
           maxWidth: '1600px',
           width: '100%',
           margin: '0 auto'
@@ -271,7 +305,7 @@ function LectureStudioPageInner() {
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', width: isIPadPortrait ? '100%' : 'auto' }}>
               <button
                 onClick={() => router.push('/freeform-canvas')}
                 style={{
@@ -373,7 +407,8 @@ function LectureStudioPageInner() {
             padding: '8px',
             borderRadius: '16px',
             border: '1px solid var(--border)',
-            alignItems: 'center'
+            alignItems: 'center',
+            flexWrap: 'wrap'
           }}>
             <div style={{ position: 'relative', flex: 1 }}>
               <div style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }}>
@@ -384,14 +419,17 @@ function LectureStudioPageInner() {
                 placeholder="Search lectures, files, or concepts..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onPointerDown={focusOnPenPointerDown}
+                {...scribbleInputProps}
                 style={{
                   width: '100%',
                   padding: '12px 16px 12px 48px',
                   border: 'none',
                   background: 'transparent',
                   color: 'var(--ink)',
-                  fontSize: '15px',
+                  fontSize: isIPadLike ? '16px' : '15px',
                   outline: 'none',
+                  ...getScribbleInputStyle(isIPadLike, 'singleline'),
                 }}
               />
             </div>
@@ -403,12 +441,14 @@ function LectureStudioPageInner() {
             borderRadius: '20px',
             border: '1px solid var(--border)',
             overflow: 'hidden',
-            boxShadow: '0 4px 24px rgba(0,0,0,0.04)'
+            boxShadow: '0 4px 24px rgba(0,0,0,0.04)',
+            overflowX: isTabletOrNarrow ? 'auto' : 'hidden',
+            WebkitOverflowScrolling: 'touch'
           }}>
             {/* List Header */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 2fr 120px 100px',
+              gridTemplateColumns: lectureListGridColumns,
               padding: '16px 24px',
               borderBottom: '1px solid var(--border)',
               background: 'rgba(0,0,0,0.02)',
@@ -416,7 +456,8 @@ function LectureStudioPageInner() {
               fontWeight: '700',
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
-              color: 'var(--muted)'
+              color: 'var(--muted)',
+              minWidth: isTabletOrNarrow ? '680px' : undefined,
             }}>
               <div>Name</div>
               <div>Description</div>
@@ -454,12 +495,13 @@ function LectureStudioPageInner() {
                     onClick={() => router.push(`/lecture-editor?lectureId=${lecture.lecture_id}`)}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '1fr 2fr 120px 100px',
+                      gridTemplateColumns: lectureListGridColumns,
                       padding: '16px 24px',
                       borderBottom: '1px solid var(--border)',
                       cursor: 'pointer',
                       alignItems: 'center',
                       transition: 'background 0.2s',
+                      minWidth: isTabletOrNarrow ? '680px' : undefined,
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.background = 'rgba(37, 99, 235, 0.03)';
@@ -586,9 +628,9 @@ function LectureStudioPageInner() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      minHeight: '100dvh',
       background: 'var(--background)',
-      padding: '40px clamp(20px, 5vw, 60px)',
+      padding: isIPadPortrait ? '20px 14px calc(env(safe-area-inset-bottom, 0px) + 20px)' : '40px clamp(20px, 5vw, 60px)',
       display: 'flex',
       flexDirection: 'column',
     }}>
@@ -670,7 +712,7 @@ function LectureStudioPageInner() {
         {/* Three Column Layout */}
         <div className="lecture-studio-grid" style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))',
+          gridTemplateColumns: studioDetailGridColumns,
           gap: '32px',
           alignItems: 'start'
         }}>
@@ -681,8 +723,9 @@ function LectureStudioPageInner() {
             padding: '24px',
             border: '1px solid var(--border)',
             boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
-            maxHeight: 'calc(100vh - 250px)',
+            maxHeight: studioPanelMaxHeight,
             overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px' }}>Timeline</h2>
@@ -839,8 +882,9 @@ function LectureStudioPageInner() {
             padding: '24px',
             border: '1px solid var(--border)',
             boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
-            maxHeight: 'calc(100vh - 250px)',
+            maxHeight: studioPanelMaxHeight,
             overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
           }}>
             <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px', marginBottom: '24px' }}>Concept Cluster</h2>
             {allConcepts.size === 0 ? (
@@ -921,8 +965,9 @@ function LectureStudioPageInner() {
             padding: '24px',
             border: '1px solid var(--border)',
             boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
-            maxHeight: 'calc(100vh - 250px)',
+            maxHeight: studioPanelMaxHeight,
             overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch',
           }}>
             <h2 style={{ fontSize: '20px', fontWeight: '700', letterSpacing: '-0.5px', marginBottom: '24px' }}>Insights & Actions</h2>
 
@@ -1057,9 +1102,10 @@ function LectureStudioPageInner() {
               bottom: 0,
               background: 'rgba(0, 0, 0, 0.5)',
               display: 'flex',
-              alignItems: 'center',
+              alignItems: isIPadPortrait ? 'flex-end' : 'center',
               justifyContent: 'center',
               zIndex: 1000,
+              padding: isIPadPortrait ? '8px' : undefined,
             }}
             onClick={() => !ingesting && setShowIngestModal(false)}
             onKeyDown={(e) => {
@@ -1072,13 +1118,15 @@ function LectureStudioPageInner() {
             <div
               style={{
                 background: 'var(--panel)',
-                borderRadius: '12px',
-                padding: '24px',
+                borderRadius: isIPadPortrait ? '16px' : '12px',
+                padding: isIPadPortrait ? '16px' : '24px',
                 width: '90%',
-                maxWidth: '600px',
+                maxWidth: isIPadPortrait ? '100%' : '600px',
                 border: '1px solid var(--border)',
-                maxHeight: '90vh',
+                maxHeight: isIPadPortrait ? 'min(86dvh, 860px)' : '90vh',
                 overflowY: 'auto',
+                WebkitOverflowScrolling: 'touch',
+                paddingBottom: 'max(16px, env(safe-area-inset-bottom, 0px))',
               }}
               onClick={(e) => e.stopPropagation()}
             >
@@ -1130,7 +1178,7 @@ function LectureStudioPageInner() {
               {ingestMode === 'pdf' ? (
                 <div>
                   <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
-                    Upload a PDF file to extract concepts, relationships, and create a knowledge graph. You'll be able to review extractions before confirming.
+                    Upload a PDF file to extract concepts, relationships, and create a knowledge graph. You&apos;ll be able to review extractions before confirming.
                   </p>
                   <div style={{ marginBottom: '16px' }}>
                     <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', marginBottom: '8px', color: 'var(--ink)' }}>
@@ -1140,7 +1188,9 @@ function LectureStudioPageInner() {
                       type="text"
                       value={ingestDomain}
                       onChange={(e) => setIngestDomain(e.target.value)}
+                      onPointerDown={focusOnPenPointerDown}
                       placeholder="e.g., Software Engineering, Biology, etc."
+                      {...scribbleInputProps}
                       style={{
                         width: '100%',
                         padding: '10px 12px',
@@ -1148,7 +1198,8 @@ function LectureStudioPageInner() {
                         borderRadius: '8px',
                         background: 'var(--surface)',
                         color: 'var(--ink)',
-                        fontSize: '14px',
+                        fontSize: isIPadLike ? '16px' : '14px',
+                        ...getScribbleInputStyle(isIPadLike, 'singleline'),
                       }}
                     />
                   </div>
@@ -1199,6 +1250,15 @@ function LectureStudioPageInner() {
                   <p style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
                     Paste or type your lecture content below. The system will automatically extract concepts, create segments, and link them to your knowledge graph.
                   </p>
+                  {isIPadLike && (
+                    <div style={{
+                      marginBottom: '12px',
+                      fontSize: '12px',
+                      color: 'var(--muted)',
+                    }}>
+                      Apple Pencil Scribble supported in the domain and content fields below.
+                    </div>
+                  )}
                   <div style={{
                     padding: '12px',
                     background: 'var(--surface)',
@@ -1219,8 +1279,10 @@ function LectureStudioPageInner() {
                       type="text"
                       value={ingestDomain}
                       onChange={(e) => setIngestDomain(e.target.value)}
+                      onPointerDown={focusOnPenPointerDown}
                       placeholder="e.g., Software Engineering, Biology, etc."
                       disabled={ingesting}
+                      {...scribbleInputProps}
                       onKeyDown={(e) => {
                         // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
                         if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
@@ -1235,7 +1297,8 @@ function LectureStudioPageInner() {
                         borderRadius: '8px',
                         background: 'var(--surface)',
                         color: 'var(--ink)',
-                        fontSize: '14px',
+                        fontSize: isIPadLike ? '16px' : '14px',
+                        ...getScribbleInputStyle(isIPadLike, 'singleline'),
                       }}
                     />
                   </div>
@@ -1247,9 +1310,12 @@ function LectureStudioPageInner() {
                     <textarea
                       value={ingestText}
                       onChange={(e) => setIngestText(e.target.value)}
+                      onPointerDown={focusOnPenPointerDown}
                       placeholder="Paste or type your lecture content here..."
                       disabled={ingesting}
                       rows={12}
+                      enterKeyHint="done"
+                      {...scribbleInputProps}
                       onKeyDown={(e) => {
                         // Allow standard keyboard shortcuts (Ctrl/Cmd+A, Ctrl/Cmd+C, etc.)
                         if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) {
@@ -1259,14 +1325,15 @@ function LectureStudioPageInner() {
                       }}
                       style={{
                         width: '100%',
-                        padding: '12px',
+                        padding: isIPadLike ? '14px' : '12px',
                         border: '1px solid var(--border)',
-                        borderRadius: '8px',
+                        borderRadius: isIPadLike ? '12px' : '8px',
                         background: 'var(--surface)',
                         color: 'var(--ink)',
-                        fontSize: '14px',
+                        fontSize: isIPadLike ? '16px' : '14px',
                         fontFamily: 'inherit',
                         resize: 'vertical',
+                        ...getScribbleInputStyle(isIPadLike, 'multiline'),
                       }}
                     />
                   </div>

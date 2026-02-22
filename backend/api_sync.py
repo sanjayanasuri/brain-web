@@ -158,54 +158,40 @@ def _handle_artifact_ingest(session: Session, event: ClientSyncEvent) -> Dict[st
     text = p.get("text")
     content_hash = p.get("content_hash")
 
-    if not url or not text or not content_hash:
-        raise ValueError("artifact.ingest requires url, text, content_hash")
+    if not url or not text:
+        raise ValueError("artifact.ingest requires url and text")
 
-    artifact_id = p.get("artifact_id") or f"A_{content_hash[:12].upper()}"
-    title = p.get("title")
-    domain = p.get("domain")
-    captured_at = p.get("captured_at")  # ms
-    metadata = p.get("metadata") or {}
+    from services_ingestion_kernel import ingest_artifact
+    from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
 
-    session.run(
-        """
-        MATCH (g:GraphSpace {graph_id: $graph_id})
-        MERGE (a:Artifact {graph_id: $graph_id, url: $url, content_hash: $content_hash})
-        ON CREATE SET
-          a.artifact_id = $artifact_id,
-          a.branch_id = $branch_id,
-          a.artifact_type = 'webpage',
-          a.title = $title,
-          a.domain = $domain,
-          a.captured_at = $captured_at,
-          a.text = $text,
-          a.metadata_json = $metadata_json,
-          a.created_at = $now,
-          a.updated_at = $now
-        ON MATCH SET
-          a.title = COALESCE($title, a.title),
-          a.domain = COALESCE($domain, a.domain),
-          a.captured_at = COALESCE($captured_at, a.captured_at),
-          a.text = COALESCE($text, a.text),
-          a.metadata_json = COALESCE($metadata_json, a.metadata_json),
-          a.updated_at = $now
-        MERGE (a)-[:BELONGS_TO]->(g)
-        RETURN a.artifact_id AS artifact_id
-        """,
-        graph_id=event.graph_id,
-        branch_id=event.branch_id,
-        artifact_id=artifact_id,
-        url=url,
-        content_hash=content_hash,
-        title=title,
-        domain=domain,
-        captured_at=captured_at,
+    artifact_input = ArtifactInput(
+        artifact_type="webpage",
+        source_url=url,
+        source_id=p.get("artifact_id"),
+        title=p.get("title"),
+        domain=p.get("domain"),
         text=text,
-        metadata_json=_json_or_none(metadata),
-        now=_now_iso(),
-    ).single()
+        metadata={
+            **(p.get("metadata") or {}),
+            "captured_at": p.get("captured_at"),
+            "content_hash": content_hash,
+        },
+        actions=IngestionActions(
+            run_lecture_extraction=False,
+            run_chunk_and_claims=False,
+            create_artifact_node=True,
+        ),
+        policy=IngestionPolicy(local_only=True)
+    )
 
-    return {"artifact_id": artifact_id, "content_hash": content_hash}
+    result = ingest_artifact(
+        session=session,
+        payload=artifact_input,
+        graph_id=event.graph_id,
+        branch_id=event.branch_id
+    )
+
+    return {"artifact_id": result.artifact_id, "content_hash": content_hash}
 
 
 def _handle_resource_create(session: Session, event: ClientSyncEvent) -> Dict[str, Any]:
@@ -466,25 +452,41 @@ def capture_selection_endpoint(
         graph_id = req.graph_id or active_graph_id
         branch_id = req.branch_id or active_branch_id
 
-        out = capture_selection_into_graph(
-            session=session,
-            graph_id=graph_id,
-            branch_id=branch_id,
-            page_url=req.page_url,
-            page_title=req.page_title,
-            frame_url=req.frame_url,
-            selected_text=req.selected_text,
-            context_before=req.context_before,
-            context_after=req.context_after,
+        from services_ingestion_kernel import ingest_artifact
+        from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+
+        artifact_input = ArtifactInput(
+            artifact_type="webpage",
+            source_url=req.page_url,
+            title=req.page_title,
+            text="", # Selection capture usually doesn't need full text fetch
+            selection_text=req.selected_text,
             anchor=req.anchor,
             attach_concept_id=req.attach_concept_id,
+            metadata={
+                "capture_mode": "selection",
+                "frame_url": req.frame_url,
+                "context_before": req.context_before,
+                "context_after": req.context_after,
+            },
+            actions=IngestionActions(
+                create_artifact_node=True,
+            ),
+            policy=IngestionPolicy(local_only=True)
+        )
+
+        out = ingest_artifact(
+            session=session,
+            payload=artifact_input,
+            graph_id=graph_id,
+            branch_id=branch_id
         )
 
         return CaptureSelectionResponse(
             graph_id=graph_id,
             branch_id=branch_id,
-            artifact_id=out["artifact_id"],
-            quote_id=out["quote_id"],
+            artifact_id=out.artifact_id,
+            quote_id=out.quote_id,
         )
     except HTTPException:
         raise

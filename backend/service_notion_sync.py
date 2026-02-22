@@ -11,7 +11,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from neo4j import Session
 
 from service_notion_wrapper import get_page, get_page_blocks, get_database_pages, extract_plaintext_from_blocks, get_page_title, get_page_domain
-from services_lecture_ingestion import ingest_lecture
+from services_ingestion_kernel import ingest_artifact
+from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
 from services_notion import list_notion_databases, list_notion_pages
 from config import NOTION_DATABASE_IDS
 from db_neo4j import get_neo4j_session
@@ -321,12 +322,26 @@ def sync_once(force_full: bool = False) -> Dict[str, Any]:
                 
                 print(f"[Notion Sync] Ingesting page: {title}")
                 
-                # Ingest via internal function (not HTTP endpoint)
-                result = ingest_lecture(
-                    session=session,
-                    lecture_title=title,
-                    lecture_text=text,
+                # Ingest via unified kernel
+                artifact_input = ArtifactInput(
+                    artifact_type="notion_page",
+                    source_id=page_id,
+                    title=title,
+                    text=text,
                     domain=domain,
+                    actions=IngestionActions(
+                        run_lecture_extraction=True,
+                        run_chunk_and_claims=True,
+                        embed_claims=True,
+                        create_lecture_node=True,
+                        create_artifact_node=True,
+                    ),
+                    policy=IngestionPolicy(local_only=True)
+                )
+
+                result = ingest_artifact(
+                    session=session,
+                    payload=artifact_input,
                 )
                 
                 stats["pages_ingested"] += 1

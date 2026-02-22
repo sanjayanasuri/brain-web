@@ -95,22 +95,40 @@ def capture_workflow(
             if not request.selected_text or not request.page_url:
                 raise HTTPException(status_code=400, detail="selected_text and page_url required for selection capture")
             
-            from services_sync_capture import capture_selection_into_graph
-            # Get session_id from request state if available
-            session_id = getattr(fastapi_request.state, 'session_id', None) if fastapi_request else None
-            out = capture_selection_into_graph(
+            from services_ingestion_kernel import ingest_artifact
+            from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+
+            artifact_input = ArtifactInput(
+                artifact_type="webpage",
+                source_url=request.page_url,
+                title=request.page_title,
+                text="", # Not fetching full text for pure selection capture
+                selection_text=request.selected_text,
+                anchor=None, # Frontend currently doesn't pass anchor here, uses selection_text as fallback
+                attach_concept_id=request.attach_concept_id,
+                metadata={
+                    "capture_mode": "selection",
+                },
+                actions=IngestionActions(
+                    run_lecture_extraction=False,
+                    run_chunk_and_claims=False,
+                    create_artifact_node=True, # Ensure we have the artifact node
+                ),
+                policy=IngestionPolicy(local_only=True)
+            )
+
+            out = ingest_artifact(
                 session=session,
+                payload=artifact_input,
                 graph_id=graph_id,
                 branch_id=branch_id,
-                page_url=request.page_url,
-                page_title=request.page_title,
-                selected_text=request.selected_text,
-                attach_concept_id=request.attach_concept_id,
-                session_id=session_id,
+                tenant_id=str(tenant_id)
             )
+            
             result = {
-                "artifact_id": out.get("artifact_id"),
-                "quote_id": out.get("quote_id"),
+                "artifact_id": out.artifact_id,
+                "quote_id": out.quote_id,
+                "status": out.status,
             }
             next_actions = ["explore_concept", "synthesize_claims"]
             
@@ -118,16 +136,36 @@ def capture_workflow(
             if not request.url:
                 raise HTTPException(status_code=400, detail="url required for URL capture")
             
-            from services_web_ingestion import ingest_web_payload
-            ingest_result = ingest_web_payload(
-                session=session,
-                url=request.url,
-                text="",  # Will be fetched
+            from services_ingestion_kernel import ingest_artifact
+            from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
+
+            artifact_input = ArtifactInput(
+                artifact_type="webpage",
+                source_url=request.url,
+                text="", # Will be fetched
                 title=None,
+                actions=IngestionActions(
+                    run_lecture_extraction=True,
+                    run_chunk_and_claims=True,
+                    embed_claims=True,
+                    create_lecture_node=True,
+                    create_artifact_node=True,
+                ),
+                policy=IngestionPolicy(local_only=True)
             )
+
+            ingest_result = ingest_artifact(
+                session=session,
+                payload=artifact_input,
+                graph_id=graph_id,
+                branch_id=branch_id,
+                tenant_id=str(tenant_id)
+            )
+            
             result = {
-                "source_id": ingest_result.get("source_id"),
-                "chunks_created": ingest_result.get("chunks_created", 0),
+                "source_id": ingest_result.artifact_id,
+                "chunks_created": ingest_result.summary_counts.get("chunks_created", 0),
+                "status": ingest_result.status,
             }
             next_actions = ["explore_graph", "synthesize_summary"]
             

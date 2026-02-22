@@ -14,6 +14,7 @@ import Citations from '../study/Citations';
 import { startStudySession, getNextTask } from '../../api-client-study';
 import { submitFeedback } from '../../api/feedback';
 import StyleFeedbackForm from '../ui/StyleFeedbackForm';
+import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../../lib/ipadScribble';
 
 const MinimizeIcon = Minimize2 as any;
 const MaximizeIcon = Maximize2 as any;
@@ -29,6 +30,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
     const { state, actions } = useChat();
     const { activeGraphId } = useGraph();
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const isIPadLike = useIPadLikeDevice();
     const [feedbackByMessageId, setFeedbackByMessageId] = useState<Record<string, 1 | -1>>({});
     const [submittingFeedbackByMessageId, setSubmittingFeedbackByMessageId] = useState<Record<string, boolean>>({});
     const [feedbackToastByMessageId, setFeedbackToastByMessageId] = useState<Record<string, string>>({});
@@ -683,31 +685,47 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                     )}
 
                     {/* Input Area */}
-                    <div style={{ padding: '16px 20px 20px', background: 'var(--panel)', borderTop: '1px solid var(--border)' }}>
+                    <div style={{
+                        paddingTop: '16px',
+                        paddingRight: '20px',
+                        paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))',
+                        paddingLeft: '20px',
+                        background: 'var(--panel)',
+                        borderTop: '1px solid var(--border)'
+                    }}>
+                        {isIPadLike && (
+                            <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '8px' }}>
+                                Apple Pencil Scribble supported for graph questions.
+                            </div>
+                        )}
                         <form onSubmit={handleSubmit} style={{ position: 'relative' }}>
                             <textarea
                                 ref={inputRef}
-                                placeholder="Ask about the graph..."
+                                placeholder={isIPadLike ? 'Handwrite a question about the graph…' : 'Ask about the graph...'}
+                                onPointerDown={focusOnPenPointerDown}
+                                enterKeyHint="send"
+                                {...scribbleInputProps}
                                 onInput={(e) => {
                                     const target = e.target as HTMLTextAreaElement;
                                     target.style.height = 'auto';
-                                    target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                                    target.style.height = `${Math.min(target.scrollHeight, isIPadLike ? 220 : 200)}px`;
                                 }}
                                 style={{
                                     width: '100%',
-                                    padding: '12px 48px 12px 16px',
-                                    borderRadius: '12px',
+                                    padding: isIPadLike ? '14px 56px 14px 16px' : '12px 48px 12px 16px',
+                                    borderRadius: isIPadLike ? '14px' : '12px',
                                     border: '1px solid var(--border)',
                                     background: 'var(--surface)',
-                                    fontSize: '14px',
+                                    fontSize: isIPadLike ? '16px' : '14px',
                                     outline: 'none',
                                     boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
                                     transition: 'all 0.2s',
                                     resize: 'none',
-                                    minHeight: '44px',
-                                    maxHeight: '200px',
+                                    minHeight: isIPadLike ? '56px' : '44px',
+                                    maxHeight: isIPadLike ? '220px' : '200px',
                                     fontFamily: 'inherit',
-                                    lineHeight: '1.5'
+                                    lineHeight: '1.5',
+                                    ...getScribbleInputStyle(isIPadLike, 'multiline')
                                 }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -723,13 +741,13 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                 style={{
                                     position: 'absolute',
                                     right: '8px',
-                                    bottom: '12px',
+                                    bottom: isIPadLike ? '10px' : '12px',
                                     background: 'var(--accent)',
                                     color: 'white',
                                     border: 'none',
-                                    width: '32px',
-                                    height: '32px',
-                                    borderRadius: '8px',
+                                    width: isIPadLike ? '40px' : '32px',
+                                    height: isIPadLike ? '40px' : '32px',
+                                    borderRadius: isIPadLike ? '10px' : '8px',
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'center',
@@ -860,7 +878,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                         padding: '40px'
                                     }}>
                                         <div style={{ fontSize: '13px', lineHeight: '1.5' }}>
-                                            Select text on the graph and click "Dive Deeper" to start a focused learning session, or wait for the tutor to suggest a topic.
+                                            Select text on the graph and click &quot;Dive Deeper&quot; to start a focused learning session, or wait for the tutor to suggest a topic.
                                         </div>
                                     </div>
                                 )

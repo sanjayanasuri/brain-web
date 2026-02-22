@@ -35,6 +35,7 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # For future AI integration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EXA_API_KEY = os.getenv("EXA_API_KEY")
 
 # Explicit feedback classifier fallback (cheap model; only for ambiguous feedback notes).
 ENABLE_FEEDBACK_CLASSIFIER_FALLBACK = os.getenv(

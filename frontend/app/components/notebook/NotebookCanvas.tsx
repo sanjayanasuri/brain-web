@@ -72,6 +72,7 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
     const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [history, setHistory] = useState<PageData[][]>([]);
     const [redoStack, setRedoStack] = useState<PageData[][]>([]);
+    const [containerWidth, setContainerWidth] = useState(0);
 
     // Debounced save for individual pages
     const debouncedSavePage = useMemo(
@@ -95,15 +96,19 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
         [paperType]
     );
 
-    // Track current page on scroll
+    // Track current page on scroll (inside the notebook scroll container, not window)
     useEffect(() => {
         const handleScroll = () => {
+            const scrollContainer = scrollContainerRef.current;
+            if (!scrollContainer) return;
+
             const pageElements = pages.map(p => document.getElementById(`page-container-${p.id}`));
-            const scrollPos = window.scrollY + window.innerHeight / 3;
+            const containerRect = scrollContainer.getBoundingClientRect();
+            const thresholdY = containerRect.top + containerRect.height / 3;
 
             for (let i = pageElements.length - 1; i >= 0; i--) {
                 const el = pageElements[i];
-                if (el && el.offsetTop <= scrollPos) {
+                if (el && el.getBoundingClientRect().top <= thresholdY) {
                     if (currentPageIndex !== i) {
                         setCurrentPageIndex(i);
                         // Expose the editor of the current page to the parent
@@ -117,13 +122,23 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
             }
         };
 
-        window.addEventListener('scroll', handleScroll);
-        return () => window.removeEventListener('scroll', handleScroll);
-    }, [pages]);
+        const scrollContainer = scrollContainerRef.current;
+        if (!scrollContainer) return;
+
+        handleScroll();
+        scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+        window.addEventListener('resize', handleScroll);
+
+        return () => {
+            scrollContainer.removeEventListener('scroll', handleScroll);
+            window.removeEventListener('resize', handleScroll);
+        };
+    }, [pages, editors, currentPageIndex, onEditorReady]);
 
     // Use a ref to track what's currently loaded to prevent infinite loops but allow switching lectures
     const loadedLectureIdRef = useRef<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
 
     // Auto-zoom to fit width
     useEffect(() => {
@@ -132,9 +147,11 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
         const resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
                 const width = entry.contentRect.width;
+                setContainerWidth(width);
                 // 816 is page width, 40 is total padding (20px * 2)
                 // We add a tiny buffer (-10) to avoid scrollbar flickering
-                const targetZoom = Math.min(1.0, (width - 50) / 816);
+                const paddingAllowance = width < 900 ? 28 : width < 1180 ? 36 : 50;
+                const targetZoom = Math.max(0.55, Math.min(1.0, (width - paddingAllowance) / 816));
                 // Only update if significantly different to avoid loops
                 setZoom(prev => Math.abs(prev - targetZoom) > 0.01 ? targetZoom : prev);
             }
@@ -148,7 +165,8 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
     useEffect(() => {
         // Only re-initialize if we haven't loaded this lecture yet, or if it's a new lecture (null id)
         // and we have content to show (or it's explicitly resetting to empty)
-        if (lectureId !== loadedLectureIdRef.current || (lectureId === null && pages.length === 0)) {
+        const currentId = lectureId || 'new';
+        if (currentId !== loadedLectureIdRef.current || (lectureId === null && pages.length === 0)) {
             const result = splitContentIntoPages(initialContent || '');
 
             let initialStrokes: Stroke[] = [];
@@ -348,6 +366,12 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
     }, []);
 
     const PAGE_SPACING = 20; // Space between pages in pixels
+    const isTabletOptimizedViewport = containerWidth > 0 && containerWidth < 1180;
+    const isCompactViewport = containerWidth > 0 && containerWidth < 900;
+    const controlsBottomInset = isTabletOptimizedViewport
+        ? 'calc(env(safe-area-inset-bottom, 0px) + 74px)'
+        : 'calc(env(safe-area-inset-bottom, 0px) + 20px)';
+    const navBottomInset = 'calc(env(safe-area-inset-bottom, 0px) + 12px)';
 
     return (
         <div
@@ -364,17 +388,19 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
             <div
                 style={{
                     position: 'absolute',
-                    bottom: '20px',
-                    left: '20px', // Changed from right to left
+                    bottom: controlsBottomInset,
+                    left: isTabletOptimizedViewport ? '12px' : '20px',
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px',
+                    flexDirection: isTabletOptimizedViewport ? 'row' : 'column',
+                    alignItems: 'center',
+                    gap: isTabletOptimizedViewport ? '6px' : '8px',
                     zIndex: 1000,
                     background: 'rgba(255, 255, 255, 0.95)',
                     backdropFilter: 'blur(10px)',
                     borderRadius: '12px',
-                    padding: '8px',
+                    padding: isTabletOptimizedViewport ? '6px 8px' : '8px',
                     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+                    border: '1px solid rgba(0,0,0,0.05)',
                 }}
             >
                 <button
@@ -400,7 +426,7 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
                 </button>
                 <div
                     style={{
-                        padding: '4px 8px',
+                        padding: isTabletOptimizedViewport ? '0 6px' : '4px 8px',
                         fontSize: '11px',
                         textAlign: 'center',
                         fontWeight: 'bold',
@@ -436,22 +462,25 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
             <div
                 style={{
                     position: 'absolute',
-                    bottom: '20px',
+                    bottom: navBottomInset,
                     left: '50%',
                     transform: 'translateX(-50%)',
                     background: 'rgba(255, 255, 255, 0.95)',
                     backdropFilter: 'blur(10px)',
                     borderRadius: '30px',
-                    padding: '8px 20px',
+                    padding: isTabletOptimizedViewport ? '8px 12px' : '8px 20px',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '16px',
+                    justifyContent: 'space-between',
+                    gap: isTabletOptimizedViewport ? '10px' : '16px',
+                    width: isTabletOptimizedViewport ? 'calc(100% - 24px)' : 'auto',
+                    maxWidth: isTabletOptimizedViewport ? 'min(760px, calc(100% - 24px))' : 'none',
                     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.12)',
                     zIndex: 1000,
                     border: '1px solid rgba(0,0,0,0.05)',
                 }}
             >
-                <div style={{ display: 'flex', gap: '6px' }}>
+                <div style={{ display: 'flex', gap: '6px', maxWidth: isTabletOptimizedViewport ? (isCompactViewport ? '42%' : '48%') : 'none', overflowX: 'auto' }}>
                     {pages.map((_, i) => (
                         <button
                             key={i}
@@ -476,7 +505,7 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
 
                 <div style={{ width: '1px', height: '20px', background: 'rgba(0,0,0,0.05)' }} />
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: isTabletOptimizedViewport ? '6px' : '8px', minWidth: 0 }}>
                     <div style={{ fontSize: '12px', fontWeight: '700', color: '#1a1a1e', letterSpacing: '-0.01em' }}>
                         PAGE {currentPageIndex + 1} OF {pages.length}
                     </div>
@@ -490,7 +519,7 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
-                        minWidth: '60px'
+                        minWidth: isTabletOptimizedViewport ? '48px' : '60px'
                     }}>
                         {saveStatus === 'saving' ? (
                             'Saving...'
@@ -505,15 +534,22 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
 
             {/* Scrollable Pages Container */}
             <div
+                ref={scrollContainerRef}
                 style={{
                     width: '100%',
                     height: '100%',
                     overflowY: 'auto',
                     overflowX: 'auto',
-                    padding: '20px',
+                    paddingTop: isTabletOptimizedViewport ? '12px' : '20px',
+                    paddingRight: isTabletOptimizedViewport ? '12px' : '20px',
+                    paddingLeft: isTabletOptimizedViewport ? '12px' : '20px',
+                    paddingBottom: isTabletOptimizedViewport
+                        ? 'calc(env(safe-area-inset-bottom, 0px) + 130px)'
+                        : 'calc(env(safe-area-inset-bottom, 0px) + 120px)',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
+                    overscrollBehavior: 'contain',
                 }}
             >
                 <div
@@ -521,7 +557,7 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
                         transform: `scale(${zoom})`,
                         transformOrigin: 'top center',
                         transition: 'transform 0.2s ease',
-                        paddingBottom: '100px', // Extra space for scroll
+                        paddingBottom: isTabletOptimizedViewport ? '40px' : '60px', // Extra space for scroll
                     }}
                 >
                     {pages.map((page, index) => (
@@ -596,3 +632,5 @@ export const NotebookCanvas = React.forwardRef<NotebookCanvasRef, NotebookCanvas
         </div>
     );
 });
+
+NotebookCanvas.displayName = 'NotebookCanvas';

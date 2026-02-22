@@ -137,13 +137,16 @@ export function LineAlignedEditor({
           font-family: 'Crimson Pro', 'Georgia', serif;
           font-size: 16px;
           line-height: 28px; /* Match ruled line spacing */
-          color: var(--editor-text-color);
+          color: var(--editor-text-color, #000000);
+          caret-color: var(--editor-text-color, #000000);
           cursor: text;
         }
 
         .line-aligned-editor .ProseMirror {
           outline: none;
           min-height: 100%;
+          color: var(--editor-text-color, #000000);
+          caret-color: var(--editor-text-color, #000000);
         }
 
         /* Paragraph styling - aligned to lines */

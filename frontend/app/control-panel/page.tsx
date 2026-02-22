@@ -99,7 +99,7 @@ export default function ControlPanel() {
               <div style={{ fontSize: '12px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--accent)', fontWeight: 600 }}>
                 Workspace Library
               </div>
-              <h1 style={{ margin: '6px 0 8px', fontSize: '32px', color: 'var(--ink)' }}>Manage graphs</h1>
+              <h1 style={{ margin: '6px 0 8px', fontSize: '32px', color: 'var(--ink)' }}>Workspace Library</h1>
               <div style={{ color: 'var(--muted)', fontSize: '14px', maxWidth: '520px' }}>
                 Scan every knowledge graph, spot what needs attention, and jump right into the right workspace.
               </div>

@@ -11,7 +11,8 @@ from db_neo4j import get_neo4j_session
 from services_branch_explorer import ensure_graph_scoping_initialized
 
 from models_events import EventsReplayRequest, EventsReplayResponse, ReplayResult
-from services_web_ingestion import ingest_web_payload
+from services_ingestion_kernel import ingest_artifact
+from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -67,22 +68,38 @@ def replay_events(req: EventsReplayRequest, session: Session = Depends(get_neo4j
                 continue
 
             # Apply side effects through the SAME code path as /web/ingest
-            out = ingest_web_payload(
-                session=session,
-                url=ingest["url"],
+            artifact_input = ArtifactInput(
+                artifact_type="webpage",
+                source_url=ingest["url"],
                 title=ingest.get("title"),
-                capture_mode=ingest.get("capture_mode", "reader"),
+                domain=ingest.get("domain", "General"),
                 text=ingest.get("text", ""),
                 selection_text=ingest.get("selection_text"),
                 anchor=ingest.get("anchor"),
-                domain=ingest.get("domain", "General"),
-                tags=ingest.get("tags") or [],
-                note=ingest.get("note"),
-                metadata=ingest.get("metadata") or {},
                 trail_id=ingest.get("trail_id") or ev.trail_id,
-                graph_id_override=ev.graph_id,
-                branch_id_override=ev.branch_id,
+                metadata={
+                    **(ingest.get("metadata") or {}),
+                    "capture_mode": ingest.get("capture_mode", "reader"),
+                    "note": ingest.get("note"),
+                    "tags": ingest.get("tags"),
+                },
+                actions=IngestionActions(
+                    run_lecture_extraction=True,
+                    run_chunk_and_claims=True,
+                    embed_claims=True,
+                    create_lecture_node=True,
+                    create_artifact_node=True,
+                ),
+                policy=IngestionPolicy(local_only=True)
             )
+            
+            result = ingest_artifact(
+                session=session, 
+                payload=artifact_input,
+                graph_id=ev.graph_id,
+                branch_id=ev.branch_id
+            )
+            out_status = result.status
 
             # Mark applied even if ingestion SKIPPED, because the event was processed.
             session.run(
@@ -91,7 +108,7 @@ def replay_events(req: EventsReplayRequest, session: Session = Depends(get_neo4j
                 SET e.applied = true, e.applied_at = datetime(), e.result = $result
                 """,
                 event_id=ev.event_id,
-                result=out.get("status"),
+                result=out_status,
             )
 
             results.append(ReplayResult(event_id=ev.event_id, status="applied"))

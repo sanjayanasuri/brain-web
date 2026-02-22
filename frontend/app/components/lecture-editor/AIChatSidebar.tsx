@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { getCurrentSessionId } from '../../lib/chatSessions';
+import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../../lib/ipadScribble';
 
 interface AIChatSidebarProps {
   lectureId?: string | null;
@@ -18,6 +19,7 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isIPadLike = useIPadLikeDevice();
 
   const graphId = searchParams?.get('graph_id') || undefined;
   const branchId = searchParams?.get('branch_id') || undefined;
@@ -242,10 +244,18 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
       <form
         onSubmit={handleSubmit}
         style={{
-          padding: '16px',
+          paddingTop: '16px',
+          paddingRight: '16px',
+          paddingBottom: 'max(16px, env(safe-area-inset-bottom, 0px))',
+          paddingLeft: '16px',
           borderTop: '1px solid var(--border)',
         }}
       >
+        {isIPadLike && (
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '8px' }}>
+            Apple Pencil Scribble supported in the message box.
+          </div>
+        )}
         <div
           style={{
             display: 'flex',
@@ -257,8 +267,11 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
             ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder="Type your message..."
+            onPointerDown={focusOnPenPointerDown}
+            placeholder={isIPadLike ? 'Handwrite or type your message…' : 'Type your message...'}
             disabled={isLoading}
+            enterKeyHint="send"
+            {...scribbleInputProps}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -272,30 +285,31 @@ export function AIChatSidebar({ lectureId, lectureTitle, triggerMessage, onTrigg
             }}
             style={{
               flex: 1,
-              padding: '10px 14px',
-              fontSize: '14px',
-              minHeight: '44px',
-              maxHeight: '200px',
+              padding: isIPadLike ? '12px 14px' : '10px 14px',
+              fontSize: isIPadLike ? '16px' : '14px',
+              minHeight: isIPadLike ? '52px' : '44px',
+              maxHeight: isIPadLike ? '220px' : '200px',
               resize: 'none',
               fontFamily: 'inherit',
               lineHeight: '1.5',
               border: '1px solid var(--border)',
-              borderRadius: '8px',
+              borderRadius: isIPadLike ? '12px' : '8px',
               background: 'var(--surface)',
               color: 'var(--ink)',
               outline: 'none',
+              ...getScribbleInputStyle(isIPadLike, 'multiline'),
             }}
           />
           <button
             type="submit"
             disabled={isLoading || !message.trim()}
             style={{
-              padding: '10px 20px',
+              padding: isIPadLike ? '12px 18px' : '10px 20px',
               background: isLoading || !message.trim() ? 'var(--muted)' : 'var(--accent)',
               color: 'white',
               border: 'none',
-              borderRadius: '8px',
-              fontSize: '14px',
+              borderRadius: isIPadLike ? '12px' : '8px',
+              fontSize: isIPadLike ? '16px' : '14px',
               fontWeight: 600,
               cursor: isLoading || !message.trim() ? 'not-allowed' : 'pointer',
               flexShrink: 0,

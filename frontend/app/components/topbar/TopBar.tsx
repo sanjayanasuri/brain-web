@@ -824,7 +824,7 @@ function renderPreviewPanel(
               onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
               onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
             >
-              Browse graph
+              Graph Details
             </button>
           )}
         </div>
@@ -1262,7 +1262,7 @@ export default function TopBar() {
       {
         type: 'action',
         id: 'browse-graph',
-        label: 'Browse Graph',
+        label: 'Graph Details',
         description: 'Open graph browse page',
         command: '/browse-graph',
         icon: '📊',
@@ -1727,9 +1727,10 @@ export default function TopBar() {
         router.push(`/graphs/${result.graph.graph_id}`);
       } else {
         // Primary action: Open explorer for that graph
-        const params = new URLSearchParams();
+        const params = new URLSearchParams(window.location.search);
         params.set('graph_id', result.graph.graph_id);
-        router.push(`/?${params.toString()}`);
+        const targetPath = pathname === '/' ? '/home' : pathname;
+        router.push(`${targetPath}?${params.toString()}`);
       }
     } else if (result.type === 'action') {
       // Execute action - use the full search query if it's a command, otherwise use the base command
@@ -1802,15 +1803,12 @@ export default function TopBar() {
         graph_id: graphId,
       });
 
-      // Navigate to explorer with graph_id
-      const params = new URLSearchParams();
+      // Navigate to current content with new graph_id
+      const params = new URLSearchParams(window.location.search);
       params.set('graph_id', graphId);
-      if (pathname === '/') {
-        // Already on explorer, just update query
-        router.push(`/?${params.toString()}`);
-      } else {
-        router.push(`/?${params.toString()}`);
-      }
+      // If we're on root, go to /home (which is where root redirects anyway)
+      const targetPath = pathname === '/' ? '/home' : pathname;
+      router.push(`${targetPath}?${params.toString()}`);
 
       setGraphSwitcherOpen(false);
     } catch (err) {
@@ -1860,10 +1858,11 @@ export default function TopBar() {
       const data = await listGraphs();
       setGraphs(data.graphs || []);
 
-      // Navigate to explorer with new graph
-      const params = new URLSearchParams();
+      // Navigate to current context with new graph
+      const params = new URLSearchParams(window.location.search);
       params.set('graph_id', result.active_graph_id);
-      router.push(`/?${params.toString()}`);
+      const targetPath = pathname === '/' ? '/home' : pathname;
+      router.push(`${targetPath}?${params.toString()}`);
 
       setCreateGraphOpen(false);
       setCreateGraphName('');
@@ -2258,8 +2257,8 @@ export default function TopBar() {
                   </>
                 )}
 
-                {/* All Graphs */}
-                {otherGraphs.length > 0 && (
+                {/* All Graphs - only show during search as per user request */}
+                {otherGraphs.length > 0 && graphSearchQuery.trim() !== "" && (
                   <>
                     <div style={{
                       padding: '8px 16px',
@@ -2271,7 +2270,7 @@ export default function TopBar() {
                       borderTop: (pinnedGraphs.length > 0 || recentGraphs.length > 0) ? '1px solid var(--border)' : 'none',
                       borderBottom: '1px solid var(--border)',
                     }}>
-                      All Graphs
+                      Other Graphs
                     </div>
                     {otherGraphs.map(graph => (
                       <div
@@ -2347,7 +2346,7 @@ export default function TopBar() {
                       onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                       onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
-                      Browse graph
+                      Graph Details
                     </Link>
                   )}
                   <div
@@ -2375,7 +2374,7 @@ export default function TopBar() {
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--panel)'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
-                    Manage Graphs
+                    Workspace Library
                   </div>
                 </div>
               </div>

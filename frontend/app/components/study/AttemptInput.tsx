@@ -7,6 +7,7 @@
 'use client';
 
 import { useState } from 'react';
+import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../../lib/ipadScribble';
 
 interface AttemptInputProps {
     onSubmit: (responseText: string) => void;
@@ -23,6 +24,7 @@ export default function AttemptInput({
 }: AttemptInputProps) {
     const [responseText, setResponseText] = useState('');
     const [selectedIndex, setSelectedIndex] = useState<number | null>(null); // Added
+    const isIPadLike = useIPadLikeDevice();
 
     const handleSubmit = () => {
         if (options.length > 0) {
@@ -105,28 +107,43 @@ export default function AttemptInput({
                 </div>
             ) : (
                 /* Default Textarea */
-                <textarea
-                    value={responseText}
-                    onChange={(e) => setResponseText(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={placeholder}
-                    disabled={isLoading}
-                    style={{
-                        width: '100%',
-                        minHeight: '120px',
-                        padding: '12px',
-                        border: '1px solid #ddd',
-                        borderRadius: '6px',
-                        fontSize: '14px',
-                        lineHeight: '1.6',
-                        fontFamily: 'inherit',
-                        resize: 'vertical',
-                        outline: 'none',
-                        transition: 'border-color 0.2s',
-                    }}
-                    onFocus={(e) => e.target.style.borderColor = '#3498db'}
-                    onBlur={(e) => e.target.style.borderColor = '#ddd'}
-                />
+                <>
+                    {isIPadLike && (
+                        <div style={{
+                            fontSize: '11px',
+                            color: '#7f8c8d',
+                            marginBottom: '8px',
+                        }}>
+                            Apple Pencil Scribble supported in this response box.
+                        </div>
+                    )}
+                    <textarea
+                        value={responseText}
+                        onChange={(e) => setResponseText(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        onPointerDown={focusOnPenPointerDown}
+                        placeholder={isIPadLike ? 'Handwrite your response here…' : placeholder}
+                        disabled={isLoading}
+                        enterKeyHint="done"
+                        {...scribbleInputProps}
+                        style={{
+                            width: '100%',
+                            minHeight: isIPadLike ? '150px' : '120px',
+                            padding: isIPadLike ? '14px' : '12px',
+                            border: '1px solid #ddd',
+                            borderRadius: isIPadLike ? '10px' : '6px',
+                            fontSize: isIPadLike ? '16px' : '14px',
+                            lineHeight: '1.6',
+                            fontFamily: 'inherit',
+                            resize: 'vertical',
+                            outline: 'none',
+                            transition: 'border-color 0.2s',
+                            ...getScribbleInputStyle(isIPadLike, 'multiline'),
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = '#3498db'}
+                        onBlur={(e) => e.target.style.borderColor = '#ddd'}
+                    />
+                </>
             )}
 
             <div style={{

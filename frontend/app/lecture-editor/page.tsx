@@ -118,6 +118,11 @@ function LectureEditorPageInner() {
   const [paperType, setPaperType] = useState('ruled');
   const [annotations, setAnnotations] = useState<string | null>(null);
   const [useNotebookMode, setUseNotebookMode] = useState(true); // Feature flag for notebook mode
+  const [viewportWidth, setViewportWidth] = useState(1440);
+  const [viewportHeight, setViewportHeight] = useState(900);
+  const [showOutlineSidebar, setShowOutlineSidebar] = useState(true);
+  const [showChatSidebar, setShowChatSidebar] = useState(true);
+  const [overlayPanel, setOverlayPanel] = useState<'outline' | 'chat' | null>(null);
 
   // Handwriting tool state
   const [activeTool, setActiveTool] = useState<ToolType>('lasso');
@@ -129,6 +134,19 @@ function LectureEditorPageInner() {
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<string>('');
+  const isSavingRef = useRef<boolean>(false);
+  const lastLayoutPresetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const updateViewport = () => {
+      setViewportWidth(window.innerWidth);
+      setViewportHeight(window.innerHeight);
+    };
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    return () => window.removeEventListener('resize', updateViewport);
+  }, []);
 
   useEffect(() => {
     if (graphId) {
@@ -185,29 +203,37 @@ function LectureEditorPageInner() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       // We check if anything changed.
       const annotationsChanged = annotationsToSave !== undefined && annotationsToSave !== (lecture?.annotations || null);
-      if (contentToSave === lastSavedContentRef.current && titleToSave === (lecture?.title || '') && !annotationsChanged) return;
+      const titleChanged = titleToSave !== (lecture?.title || '');
+      const contentChanged = contentToSave !== lastSavedContentRef.current;
+
+      if (!contentChanged && !titleChanged && !annotationsChanged) return;
 
       const doSave = async () => {
+        if (isSavingRef.current) return;
         try {
+          isSavingRef.current = true;
           setSaveStatus('saving');
           if (isNew) {
             const newLecture = await createLecture({
               title: titleToSave || 'Untitled Lecture',
               raw_text: contentToSave
             });
-            setLecture(newLecture);
-            router.replace(`/lecture-editor?lectureId=${newLecture.lecture_id}`);
             lastSavedContentRef.current = contentToSave;
+            setLecture(newLecture);
+            // Navigate without full reload and mark as not new
+            router.replace(`/lecture-editor?lectureId=${newLecture.lecture_id}`, { scroll: false });
+
             if (editor) {
               const blocks = extractBlocksFromEditor(editor);
               await upsertLectureBlocks(newLecture.lecture_id, blocks);
             }
           } else {
-            await updateLecture(lectureId!, {
+            const updatedLecture = await updateLecture(lectureId!, {
               title: titleToSave,
               raw_text: contentToSave,
               annotations: annotationsToSave !== undefined ? annotationsToSave : annotations
             });
+            setLecture(updatedLecture);
             lastSavedContentRef.current = contentToSave;
             if (editor) {
               const blocks = extractBlocksFromEditor(editor);
@@ -220,7 +246,13 @@ function LectureEditorPageInner() {
           setReadingTime(calculateReadingTime(words));
         } catch (err) {
           setSaveStatus('error');
-          setTimeout(() => saveLecture(titleToSave, contentToSave, annotationsToSave, true), 3000);
+          // Retry logic (only if not already retrying from elsewhere)
+          setTimeout(() => {
+            isSavingRef.current = false;
+            saveLecture(titleToSave, contentToSave, annotationsToSave, true);
+          }, 3000);
+        } finally {
+          isSavingRef.current = false;
         }
       };
 
@@ -311,6 +343,62 @@ function LectureEditorPageInner() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [exportMenuOpen]);
 
+  useEffect(() => {
+    const isLandscapeViewport = viewportWidth >= viewportHeight;
+    const tier =
+      viewportWidth >= 1560 ? 'wide' :
+        viewportWidth >= 1280 ? 'desktop' :
+          viewportWidth >= 900 ? 'tablet' : 'mobile';
+    const iPadBand = viewportWidth >= 744 && viewportWidth <= 1366;
+    const iPadOrientation = iPadBand ? (isLandscapeViewport ? 'landscape' : 'portrait') : 'none';
+    const presetKey = `${tier}:${iPadOrientation}:${isPencilMode ? 'pencil' : 'text'}`;
+
+    if (lastLayoutPresetRef.current === presetKey) return;
+    lastLayoutPresetRef.current = presetKey;
+
+    if (isPencilMode) {
+      setShowOutlineSidebar(false);
+      setShowChatSidebar(false);
+      setOverlayPanel(null);
+      return;
+    }
+
+    if (tier === 'wide') {
+      setShowOutlineSidebar(true);
+      setShowChatSidebar(true);
+      setOverlayPanel(null);
+      return;
+    }
+
+    if (tier === 'desktop') {
+      setShowOutlineSidebar(false);
+      setShowChatSidebar(true);
+      setOverlayPanel(null);
+      return;
+    }
+
+    setShowOutlineSidebar(false);
+    setShowChatSidebar(false);
+    setOverlayPanel(null);
+  }, [viewportWidth, viewportHeight, isPencilMode]);
+
+  useEffect(() => {
+    const tier =
+      viewportWidth >= 1560 ? 'wide' :
+        viewportWidth >= 1280 ? 'desktop' :
+          viewportWidth >= 900 ? 'tablet' : 'mobile';
+    const inlineOutlineAvailable = !isPencilMode && tier === 'wide';
+    const inlineChatAvailable = !isPencilMode && (tier === 'wide' || tier === 'desktop');
+
+    if (overlayPanel === 'outline' && inlineOutlineAvailable && showOutlineSidebar) {
+      setOverlayPanel(null);
+    }
+
+    if (overlayPanel === 'chat' && inlineChatAvailable && showChatSidebar) {
+      setOverlayPanel(null);
+    }
+  }, [viewportWidth, viewportHeight, isPencilMode, overlayPanel, showOutlineSidebar, showChatSidebar]);
+
   if (loading && lectureId) {
     return (
       <div style={{
@@ -330,29 +418,201 @@ function LectureEditorPageInner() {
 
   const statusText = { saved: 'Saved ✓', saving: 'Saving...', error: 'Error', offline: 'Offline' }[saveStatus];
   const statusColor = { saved: 'var(--muted)', saving: 'var(--accent)', error: 'var(--accent-2)', offline: 'var(--accent-2)' }[saveStatus];
+  const layoutTier =
+    viewportWidth >= 1560 ? 'wide' :
+      viewportWidth >= 1280 ? 'desktop' :
+        viewportWidth >= 900 ? 'tablet' : 'mobile';
+  const isLandscapeViewport = viewportWidth >= viewportHeight;
+  const isIPadPortrait = viewportWidth >= 744 && viewportWidth <= 1100 && !isLandscapeViewport;
+  const isIPadLandscape = viewportWidth >= 900 && viewportWidth <= 1366 && isLandscapeViewport;
+  const isCompactScreen = layoutTier === 'tablet' || layoutTier === 'mobile';
+  const canShowInlineOutline = !isPencilMode && layoutTier === 'wide';
+  const canShowInlineChat = !isPencilMode && (layoutTier === 'wide' || layoutTier === 'desktop');
+  const showInlineOutline = canShowInlineOutline && showOutlineSidebar;
+  const showInlineChat = canShowInlineChat && showChatSidebar;
+  const showOverlayPanel = overlayPanel !== null;
+  const overlayAsBottomSheet = layoutTier === 'mobile' || isIPadPortrait;
+  const pencilTopInset = isIPadPortrait
+    ? 'calc(env(safe-area-inset-top, 0px) + 132px)'
+    : viewportWidth < 900
+      ? 'calc(env(safe-area-inset-top, 0px) + 116px)'
+      : isIPadLandscape
+        ? 'calc(env(safe-area-inset-top, 0px) + 82px)'
+        : 'calc(env(safe-area-inset-top, 0px) + 88px)';
+  const inlineChatWidth = isIPadLandscape
+    ? 'clamp(300px, 24vw, 340px)'
+    : 'clamp(300px, 26vw, 380px)';
+  const headerActionsStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '12px',
+    color: 'var(--muted)',
+    flexWrap: 'wrap',
+    justifyContent: isIPadPortrait ? 'space-between' : 'flex-end',
+    flex: isIPadPortrait ? '1 1 100%' : '0 1 auto',
+  };
+  const overlayPanelStyle: React.CSSProperties = overlayAsBottomSheet
+    ? {
+      position: 'absolute',
+      right: 'max(8px, env(safe-area-inset-right, 0px))',
+      left: 'max(8px, env(safe-area-inset-left, 0px))',
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+      height: isPencilMode ? 'min(56%, calc(100% - 20px))' : (isIPadPortrait ? 'min(62%, calc(100% - 20px))' : 'min(70%, calc(100% - 20px))'),
+      maxHeight: 'calc(100% - 16px)',
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: '16px',
+      boxShadow: 'var(--shadow)',
+      overflow: 'hidden',
+      zIndex: 50,
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 0,
+    }
+    : {
+      position: 'absolute',
+      top: isPencilMode ? '12px' : '8px',
+      right: 'max(8px, env(safe-area-inset-right, 0px))',
+      bottom: 'calc(env(safe-area-inset-bottom, 0px) + 8px)',
+      width: overlayPanel === 'chat'
+        ? (isIPadLandscape ? 'min(480px, calc(100% - 16px))' : 'min(420px, calc(100% - 16px))')
+        : (isIPadLandscape ? 'min(420px, calc(100% - 16px))' : 'min(360px, calc(100% - 16px))'),
+      maxWidth: 'calc(100% - 16px)',
+      background: 'var(--surface)',
+      border: '1px solid var(--border)',
+      borderRadius: '14px',
+      boxShadow: 'var(--shadow)',
+      overflow: 'hidden',
+      zIndex: 50,
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 0,
+    };
+  const unifiedEditorPadding = isIPadPortrait
+    ? '14px 10px 20px'
+    : isIPadLandscape
+      ? '18px 16px 24px'
+      : isCompactScreen
+        ? '16px 12px 24px'
+        : '20px clamp(10px, 3vw, 24px)';
+  const unifiedPaperPadding = isIPadPortrait
+    ? '28px clamp(14px, 3vw, 20px)'
+    : isIPadLandscape
+      ? '40px clamp(24px, 4vw, 44px)'
+      : isCompactScreen
+        ? '36px clamp(18px, 4vw, 28px)'
+        : '60px clamp(40px, 5vw, 100px)';
+
+  const toggleOutlinePanel = () => {
+    if (isPencilMode) return;
+    if (canShowInlineOutline) {
+      setShowOutlineSidebar(prev => !prev);
+      setOverlayPanel(null);
+      return;
+    }
+    setOverlayPanel(prev => prev === 'outline' ? null : 'outline');
+  };
+
+  const toggleChatPanel = () => {
+    if (canShowInlineChat) {
+      setShowChatSidebar(prev => !prev);
+      setOverlayPanel(null);
+      return;
+    }
+    setOverlayPanel(prev => prev === 'chat' ? null : 'chat');
+  };
+
+  const renderOutlineSidebar = () => (
+    <>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontSize: '13px', fontWeight: 600 }}>Outline</div>
+      <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ borderBottom: '1px solid var(--border)' }}>
+          <DocumentOutline editor={editor} content={content} />
+        </div>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontSize: '13px', fontWeight: 600, background: 'var(--surface)' }}>
+          Linked Concepts
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+          <LinkedConceptsList lectureId={lecture?.lecture_id || lectureId || undefined} editor={editor} content={content} />
+        </div>
+      </div>
+    </>
+  );
+
+  const renderChatSidebar = () => (
+    <FloatingChat
+      lectureId={lecture?.lecture_id || lectureId}
+      lectureTitle={title}
+      triggerMessage={chatTrigger}
+      onTriggerProcessed={() => setChatTrigger(null)}
+      isSidebar={true}
+    />
+  );
+
+  const panelToggleButton = (active: boolean): React.CSSProperties => ({
+    background: active ? 'rgba(37, 99, 235, 0.10)' : 'transparent',
+    border: '1px solid var(--border)',
+    borderRadius: '8px',
+    color: active ? 'var(--accent)' : 'var(--ink)',
+    padding: '4px 10px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
+  });
 
   return (
     <div style={{
       height: '100dvh',
+      minHeight: '100svh',
       overflow: 'hidden',
       background: isPencilMode ? (paperType === 'dark' ? '#1a1a1e' : '#e8e8e8') : 'var(--background)',
       display: 'flex',
-      flexDirection: 'column'
+      flexDirection: 'column',
+      position: 'relative'
     }}>
       {/* Dynamic Header */}
       {!isPencilMode && (
-        <div style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)', padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', transition: 'all 0.3s ease' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+        <div style={{
+          borderBottom: '1px solid var(--border)',
+          background: 'var(--surface)',
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)',
+          paddingRight: 'max(12px, env(safe-area-inset-right, 0px))',
+          paddingBottom: '8px',
+          paddingLeft: 'max(12px, env(safe-area-inset-left, 0px))',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '10px',
+          flexWrap: 'wrap',
+          transition: 'all 0.3s ease'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 280px', minWidth: 0 }}>
             <button onClick={() => router.back()} style={{ color: 'var(--muted)', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '16px' }}>←</button>
             <input
               type="text"
               value={title}
               onChange={(e) => handleTitleChange(e.target.value)}
               placeholder="Untitled Lecture"
-              style={{ border: 'none', background: 'transparent', color: 'var(--ink)', fontSize: '16px', fontWeight: 600, outline: 'none', flex: 1 }}
+              style={{ border: 'none', background: 'transparent', color: 'var(--ink)', fontSize: '16px', fontWeight: 600, outline: 'none', flex: 1, minWidth: 0 }}
             />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '12px', color: 'var(--muted)' }}>
+          <div style={headerActionsStyle}>
+            <button
+              onClick={toggleOutlinePanel}
+              style={panelToggleButton(showInlineOutline || overlayPanel === 'outline')}
+              title={showInlineOutline ? 'Hide outline sidebar' : 'Show outline panel'}
+            >
+              Outline
+            </button>
+            <button
+              onClick={toggleChatPanel}
+              style={panelToggleButton(showInlineChat || overlayPanel === 'chat')}
+              title={showInlineChat ? 'Hide study assistant sidebar' : 'Show study assistant'}
+            >
+              Assistant
+            </button>
             <span style={{ color: statusColor }}>{statusText}</span>
             <div style={{ position: 'relative' }} ref={exportMenuRef}>
               <button onClick={() => setExportMenuOpen(!exportMenuOpen)} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--ink)', padding: '4px 12px', cursor: 'pointer' }}>Export ▼</button>
@@ -369,14 +629,19 @@ function LectureEditorPageInner() {
       {/* Floating Enhanced Toolbar */}
       <div style={{
         position: isPencilMode ? 'fixed' : 'relative',
-        top: isPencilMode ? '20px' : '0',
-        left: isPencilMode ? 'auto' : 'auto',
-        right: isPencilMode ? '20px' : 'auto',
+        top: isPencilMode ? 'calc(env(safe-area-inset-top, 0px) + 8px)' : '0',
+        left: isPencilMode ? 'max(12px, env(safe-area-inset-left, 0px))' : '0',
+        right: isPencilMode ? 'max(12px, env(safe-area-inset-right, 0px))' : '0',
         zIndex: 1100,
         transition: 'all 0.3s ease',
-        background: isPencilMode ? 'transparent' : 'var(--surface)',
+        background: isPencilMode ? 'rgba(255,255,255,0.92)' : 'var(--surface)',
         borderBottom: isPencilMode ? 'none' : '1px solid var(--border)',
-        minHeight: '48px' // Maintain height even if loading
+        minHeight: '48px', // Maintain height even if loading
+        borderRadius: isPencilMode ? '14px' : 0,
+        boxShadow: isPencilMode ? '0 10px 28px rgba(0,0,0,0.12)' : 'none',
+        border: isPencilMode ? '1px solid rgba(0,0,0,0.06)' : 'none',
+        backdropFilter: isPencilMode ? 'blur(12px)' : undefined,
+        overflowX: isPencilMode || isIPadPortrait ? 'auto' : 'visible'
       }}>
         <EnhancedToolbar
           editor={editor}
@@ -398,34 +663,57 @@ function LectureEditorPageInner() {
       </div>
 
       {/* Main Container */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        overflow: 'hidden',
+        position: 'relative',
+        minHeight: 0,
+        paddingTop: isPencilMode ? pencilTopInset : 0,
+        boxSizing: 'border-box'
+      }}>
 
         {/* Outline Sidebar */}
-        {!isPencilMode && (
+        {showInlineOutline && (
           <div style={{
-            width: 'clamp(180px, 18%, 240px)',
+            width: 'clamp(220px, 22vw, 300px)',
             borderRight: '1px solid var(--border)',
             background: 'var(--surface)',
             display: 'flex',
-            flexDirection: 'column'
+            flexDirection: 'column',
+            minHeight: 0,
+            flexShrink: 0
           }}>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontSize: '13px', fontWeight: 600 }}>Outline</div>
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ borderBottom: '1px solid var(--border)' }}>
-                <DocumentOutline editor={editor} content={content} />
-              </div>
-              <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontSize: '13px', fontWeight: 600, background: 'var(--surface)' }}>
-                Linked Concepts
-              </div>
-              <div style={{ flex: 1, overflow: 'auto' }}>
-                <LinkedConceptsList lectureId={lecture?.lecture_id || lectureId || undefined} editor={editor} content={content} />
-              </div>
-            </div>
+            {renderOutlineSidebar()}
           </div>
         )}
 
         {/* Editor Slate */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}>
+          {isPencilMode && !showInlineChat && (
+            <div style={{
+              position: 'absolute',
+              top: '12px',
+              left: '12px',
+              zIndex: 30,
+              display: 'flex',
+              gap: '8px',
+              alignItems: 'center',
+              paddingTop: 'env(safe-area-inset-top, 0px)'
+            }}>
+              <button
+                onClick={toggleChatPanel}
+                style={{
+                  ...panelToggleButton(overlayPanel === 'chat'),
+                  background: 'rgba(255,255,255,0.95)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.12)'
+                }}
+              >
+                Assistant
+              </button>
+            </div>
+          )}
+
           {useNotebookMode ? (
             /* Notebook Mode - Paginated ruled paper */
             <NotebookCanvas
@@ -450,16 +738,16 @@ function LectureEditorPageInner() {
               overflowX: 'hidden',
               display: 'flex',
               justifyContent: 'center',
-              padding: '20px clamp(10px, 3vw, 24px)',
+              padding: unifiedEditorPadding,
               background: 'transparent'
             }}>
               <div
                 className={`lecture-editor-content paper-texture paper-${paperType} ${paperType === 'ruled' ? 'paper-margin' : ''}`}
                 style={{
-                  width: '90%',
-                  maxWidth: '1400px',
+                  width: isCompactScreen ? '100%' : '92%',
+                  maxWidth: showInlineChat || showInlineOutline ? '1400px' : '1600px',
                   background: 'rgb(250, 248, 243)',
-                  padding: '60px clamp(40px, 5vw, 100px)',
+                  padding: unifiedPaperPadding,
                   minHeight: '1000px',
                   borderRadius: '12px',
                   boxShadow: 'var(--shadow)',
@@ -496,14 +784,15 @@ function LectureEditorPageInner() {
           {!useNotebookMode && (
             <div style={{
               position: 'fixed',
-              bottom: '24px',
-              left: '24px',
+              bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
+              left: 'max(12px, env(safe-area-inset-left, 0px))',
               display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
+              flexDirection: isCompactScreen ? 'row' : 'column',
+              alignItems: 'center',
+              gap: isCompactScreen ? '6px' : '8px',
               zIndex: 1200,
               background: 'var(--panel)',
-              padding: '4px',
+              padding: isCompactScreen ? '4px 8px' : '4px',
               borderRadius: '24px',
               boxShadow: 'var(--shadow)',
               border: '1px solid var(--border)'
@@ -516,22 +805,72 @@ function LectureEditorPageInner() {
         </div>
 
         {/* Right Sidebar - Chat & Tools */}
-        <div style={{
-          width: 'clamp(280px, 25%, 360px)',
-          borderLeft: '1px solid var(--border)',
-          background: 'var(--surface)',
-          display: 'flex',
-          flexDirection: 'column',
-          zIndex: 10
-        }}>
-          <FloatingChat
-            lectureId={lecture?.lecture_id || lectureId}
-            lectureTitle={title}
-            triggerMessage={chatTrigger}
-            onTriggerProcessed={() => setChatTrigger(null)}
-            isSidebar={true}
-          />
-        </div>
+        {showInlineChat && (
+          <div style={{
+            width: inlineChatWidth,
+            borderLeft: '1px solid var(--border)',
+            background: 'var(--surface)',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 10,
+            minHeight: 0,
+            flexShrink: 0
+          }}>
+            {renderChatSidebar()}
+          </div>
+        )}
+
+        {showOverlayPanel && (
+          <>
+            <button
+              type="button"
+              aria-label="Close panel"
+              onClick={() => setOverlayPanel(null)}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                border: 'none',
+                background: 'rgba(15, 23, 42, 0.20)',
+                backdropFilter: 'blur(2px)',
+                zIndex: 40,
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            />
+            <div style={overlayPanelStyle}>
+              <div style={{
+                padding: '10px 12px',
+                borderBottom: '1px solid var(--border)',
+                background: 'var(--panel)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px'
+              }}>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                  {overlayPanel === 'outline' ? 'Outline & Concepts' : 'Study Assistant'}
+                </div>
+                <button
+                  onClick={() => setOverlayPanel(null)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    color: 'var(--muted)',
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                {overlayPanel === 'outline' ? renderOutlineSidebar() : renderChatSidebar()}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

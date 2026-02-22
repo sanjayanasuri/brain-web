@@ -5,6 +5,7 @@ import { useChatState } from '../graph/hooks/useChatState';
 import { Concept } from '../../api-client';
 import { useGraph } from '../graph/GraphContext';
 import { normalizeEvidence } from '../../types/evidence';
+import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../../lib/ipadScribble';
 
 interface ConceptChatProps {
     concept: Concept;
@@ -16,7 +17,8 @@ export default function ConceptChat({ concept, onClose }: ConceptChatProps) {
     const { state, actions } = useChatState();
     const graph = useGraph();
     const chatStreamRef = useRef<HTMLDivElement>(null);
-    const inputRef = useRef<HTMLInputElement>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+    const isIPadLike = useIPadLikeDevice();
 
     // Auto-scroll
     useEffect(() => {
@@ -164,30 +166,45 @@ export default function ConceptChat({ concept, onClose }: ConceptChatProps) {
             </div>
 
             {/* Input */}
-            <div style={{ padding: '16px', borderTop: '1px solid var(--border)' }}>
+            <div style={{
+                paddingTop: '16px',
+                paddingRight: '16px',
+                paddingBottom: 'max(16px, env(safe-area-inset-bottom, 0px))',
+                paddingLeft: '16px',
+                borderTop: '1px solid var(--border)'
+            }}>
+                {isIPadLike && (
+                    <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '8px' }}>
+                        Apple Pencil Scribble supported for concept questions.
+                    </div>
+                )}
                 <form onSubmit={(e) => { e.preventDefault(); handleAsk(inputRef.current?.value || ''); if (inputRef.current) inputRef.current.value = ''; }}>
                     <textarea
-                        ref={inputRef as any}
-                        placeholder="Clarify this concept..."
+                        ref={inputRef}
+                        placeholder={isIPadLike ? 'Handwrite a concept question…' : 'Clarify this concept...'}
+                        onPointerDown={focusOnPenPointerDown}
+                        enterKeyHint="send"
+                        {...scribbleInputProps}
                         onInput={(e) => {
                             const target = e.target as HTMLTextAreaElement;
                             target.style.height = 'auto';
-                            target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                            target.style.height = `${Math.min(target.scrollHeight, isIPadLike ? 220 : 200)}px`;
                         }}
                         style={{
                             width: '100%',
-                            padding: '8px 12px',
-                            borderRadius: '8px',
+                            padding: isIPadLike ? '12px 14px' : '8px 12px',
+                            borderRadius: isIPadLike ? '12px' : '8px',
                             border: '1px solid var(--border)',
                             background: 'var(--surface)',
                             color: 'var(--ink)',
                             resize: 'none',
                             fontFamily: 'inherit',
-                            fontSize: '14px',
+                            fontSize: isIPadLike ? '16px' : '14px',
                             lineHeight: '1.5',
-                            minHeight: '40px',
-                            maxHeight: '200px',
-                            outline: 'none'
+                            minHeight: isIPadLike ? '52px' : '40px',
+                            maxHeight: isIPadLike ? '220px' : '200px',
+                            outline: 'none',
+                            ...getScribbleInputStyle(isIPadLike, 'multiline'),
                         }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {

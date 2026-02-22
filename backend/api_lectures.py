@@ -42,12 +42,17 @@ from services_lectures import (
 )
 from services_graph import update_lecture_segment
 from services_lecture_blocks import upsert_lecture_blocks, list_lecture_blocks
-from services_lecture_ingestion import ingest_lecture, ingest_handwriting
+from services_lecture_ingestion import ingest_handwriting
 from services_lecture_mentions import list_lecture_mentions
 from services_lecture_draft import draft_next_lecture
 from services_sync import auto_export_csv
+from services_ingestion_kernel import ingest_artifact
+from models_ingestion_kernel import ArtifactInput, IngestionActions, IngestionPolicy
 from services_branch_explorer import get_active_graph_context
 from cache_utils import get_cached, set_cached, invalidate_cache_pattern
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/lectures", tags=["lectures"])
 
@@ -75,8 +80,8 @@ def ingest_lecture_endpoint(
     Nodes are matched by name (case-insensitive) and optionally domain.
     If a node exists, its description and tags are updated if the new ones are more detailed.
     """
-    # Step 1: Save lecture immediately (prioritize persistence)
     tenant_id = auth.get("tenant_id")
+    # Step 1: Save lecture immediately (prioritize persistence)
     try:
         lecture = create_lecture(
             session=session,
@@ -89,36 +94,57 @@ def ingest_lecture_endpoint(
         )
         print(f"[Lecture Ingestion] ✓ Saved lecture {lecture.lecture_id} immediately")
     except Exception as e:
-        print(f"ERROR: Failed to save lecture: {e}")
+        logger.error(f"Failed to save lecture: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save lecture: {str(e)}")
     
-    # Step 2: Run AI ingestion (synchronous)
-    # NOTE: The frontend expects segments to be available immediately after this call.
-    try:
-        print(f"[Lecture Ingestion] Starting AI processing for lecture {lecture.lecture_id}")
-        result = ingest_lecture(
-            session=session,
-            lecture_title=payload.lecture_title,
-            lecture_text=payload.lecture_text,
-            domain=payload.domain,
-            existing_lecture_id=lecture.lecture_id,  # Use the already-created lecture
-            tenant_id=tenant_id,
+    # Step 2: Construct ArtifactInput for unified kernel
+    artifact_input = ArtifactInput(
+        artifact_type="lecture",
+        title=payload.lecture_title,
+        domain=payload.domain or "General",
+        text=payload.lecture_text,
+        existing_artifact_id=lecture.lecture_id,
+        actions=IngestionActions(
+            run_lecture_extraction=True,
+            run_chunk_and_claims=True,
+            embed_claims=True,
+            create_lecture_node=True,
+            create_artifact_node=False, # Already created by create_lecture
+        ),
+        policy=IngestionPolicy(
+            local_only=True,
+            max_chars=200_000,
+            min_chars=100,
         )
-        print(f"[Lecture Ingestion] ✓ AI processing completed for lecture {lecture.lecture_id}")
-    except ValueError as e:
-        # Treat validation/LLM errors as a bad request
-        raise HTTPException(status_code=400, detail=str(e))
+    )
+    
+    # Step 3: Call unified ingestion kernel
+    try:
+        result = ingest_artifact(session, artifact_input, tenant_id=tenant_id)
     except Exception as e:
-        print(f"[Lecture Ingestion] ✗ AI processing failed for lecture {lecture.lecture_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"AI processing failed: {str(e)}")
+        logger.error(f"Unified ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    # Step 4: Map to LectureIngestResult
+    out = LectureIngestResult(
+        lecture_id=result.lecture_id or lecture.lecture_id,
+        nodes_created=result.nodes_created,
+        nodes_updated=result.nodes_updated,
+        links_created=result.links_created,
+        segments=result.segments,
+        run_id=result.run_id,
+        created_concept_ids=result.created_concept_ids,
+        updated_concept_ids=result.updated_concept_ids,
+        created_relationship_count=result.created_relationship_count,
+        created_claim_ids=result.created_claim_ids,
+        reused_existing=result.reused_existing,
+    )
     
     # Auto-export to CSV after ingestion
     auto_export_csv(background_tasks)
-    
-    # Invalidate lecture-related caches
     invalidate_cache_pattern("lectures")
     
-    return result
+    return out
 
 
 @router.post("/ingest-ink", response_model=LectureIngestResult)

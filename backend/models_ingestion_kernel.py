@@ -35,6 +35,11 @@ class ArtifactInput(BaseModel):
     title: Optional[str] = None
     domain: Optional[str] = None
     text: str
+    selection_text: Optional[str] = None  # Text highlighted/selected by user
+    anchor: Optional[Dict[str, Any]] = None  # Locator for selection (exact, prefix, suffix)
+    trail_id: Optional[str] = None  # Optional trail to append steps to
+    existing_artifact_id: Optional[str] = None  # Use this ID if artifact already exists
+    attach_concept_id: Optional[str] = None  # Link new quotes to this concept
     metadata: Dict[str, Any] = Field(default_factory=dict)
     actions: IngestionActions = Field(default_factory=IngestionActions)
     policy: IngestionPolicy = Field(default_factory=IngestionPolicy)
@@ -44,6 +49,7 @@ class IngestionResult(BaseModel):
     """Result from artifact ingestion."""
     run_id: str
     artifact_id: Optional[str] = None
+    quote_id: Optional[str] = None  # quote_id if a Selection Quote was created
     status: Literal["COMPLETED", "PARTIAL", "FAILED", "SKIPPED"]
     reused_existing: bool = False
     summary_counts: Dict[str, Any] = Field(default_factory=dict)

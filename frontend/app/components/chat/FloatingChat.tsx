@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { MessageCircle, X, Maximize2, Minimize2, Send, Paperclip } from 'lucide-react';
+import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../../lib/ipadScribble';
 // We re-use logic from AIChatSidebar but adapted for floating
 // Ideally we should extract hooks, but for speed we duplicate logic or inline it.
 // Given time constraints, inlining is safer to avoid breaking other chats.
@@ -21,6 +22,8 @@ export function FloatingChat({ lectureId, lectureTitle, triggerMessage, onTrigge
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const isIPadLike = useIPadLikeDevice();
 
     const searchParams = useSearchParams();
     const graphId = searchParams?.get('graph_id');
@@ -94,6 +97,7 @@ export function FloatingChat({ lectureId, lectureTitle, triggerMessage, onTrigge
             setMessages(prev => [...prev, { role: 'assistant', content: "Error: " + String(err) }]);
         } finally {
             setIsLoading(false);
+            textareaRef.current?.focus();
         }
     };
 
@@ -214,29 +218,71 @@ export function FloatingChat({ lectureId, lectureTitle, triggerMessage, onTrigge
             </div>
 
             {/* Input */}
-            <form onSubmit={sendMessage} style={{ padding: '12px', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px' }}>
-                <input
+            <form
+                onSubmit={sendMessage}
+                style={{
+                    paddingTop: '12px',
+                    paddingRight: '12px',
+                    paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+                    paddingLeft: '12px',
+                    borderTop: '1px solid var(--border)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px'
+                }}
+            >
+                {isIPadLike && (
+                    <div style={{ fontSize: '11px', color: 'var(--muted)', padding: '0 2px' }}>
+                        Apple Pencil Scribble supported: handwrite your question in the box below.
+                    </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={e => setInput(e.target.value)}
-                    placeholder="Type a message..."
+                    onPointerDown={focusOnPenPointerDown}
+                    onInput={(e) => {
+                        const target = e.target as HTMLTextAreaElement;
+                        target.style.height = 'auto';
+                        target.style.height = `${Math.min(target.scrollHeight, isIPadLike ? 180 : 140)}px`;
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            sendMessage();
+                        }
+                    }}
+                    placeholder={isIPadLike ? 'Handwrite or type your question…' : 'Type a message...'}
+                    rows={1}
+                    disabled={isLoading}
+                    enterKeyHint="send"
+                    {...scribbleInputProps}
                     style={{
                         flex: 1,
-                        padding: '10px 14px',
-                        borderRadius: '20px',
+                        padding: isIPadLike ? '12px 14px' : '10px 14px',
+                        borderRadius: isIPadLike ? '14px' : '20px',
                         border: '1px solid var(--border)',
                         background: 'var(--background)',
                         color: 'var(--ink)',
-                        fontSize: '14px',
-                        outline: 'none'
+                        fontSize: isIPadLike ? '16px' : '14px',
+                        outline: 'none',
+                        resize: 'none',
+                        minHeight: isIPadLike ? '52px' : '36px',
+                        maxHeight: isIPadLike ? '180px' : '140px',
+                        fontFamily: 'inherit',
+                        lineHeight: '1.45',
+                        ...getScribbleInputStyle(isIPadLike, 'multiline'),
                     }}
                 />
                 <button type="submit" disabled={isLoading} style={{
-                    background: 'var(--accent)', color: 'white', border: 'none', width: '36px', height: '36px', borderRadius: '50%',
+                    background: 'var(--accent)', color: 'white', border: 'none', width: isIPadLike ? '44px' : '36px', height: isIPadLike ? '44px' : '36px', borderRadius: isIPadLike ? '12px' : '50%',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                     opacity: isLoading ? 0.7 : 1
                 }}>
                     <Send size={16} />
                 </button>
+                </div>
             </form>
         </div>
     );

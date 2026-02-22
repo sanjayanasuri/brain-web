@@ -20,6 +20,7 @@ TASK_EXTRACT     = "extract"      # Concept/entity extraction from text
 TASK_SUMMARIZE   = "summarize"    # Summarization tasks
 TASK_SEARCH      = "search"       # Web search synthesis / re-ranking
 TASK_RECOMMEND   = "recommend"    # Recommendation and gap analysis
+TASK_EMBEDDING   = "embedding"    # Semantic search vectors
 
 # ---------------------------------------------------------------------------
 # Model mapping — every model is overridable via an env var.
@@ -35,6 +36,7 @@ DEFAULT_MODELS: Dict[str, str] = {
     TASK_SUMMARIZE:  os.getenv("MODEL_SUMMARIZE",  "gpt-4o-mini"),
     TASK_SEARCH:     os.getenv("MODEL_SEARCH",     "gpt-4o-mini"),
     TASK_RECOMMEND:  os.getenv("MODEL_RECOMMEND",  "gpt-4o-mini"),
+    TASK_EMBEDDING:  os.getenv("MODEL_EMBEDDING",  "text-embedding-3-small"),
 }
 
 # Fallback used if an unknown task type is passed
@@ -103,6 +105,24 @@ class ModelRouter:
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"[model_router] completion failed (task={task_type} model={model}): {e}")
+            raise
+
+    def embed(self, text: Union[str, List[str]], task_type: str = TASK_EMBEDDING) -> Union[List[float], List[List[float]]]:
+        """Generate embeddings for text or list of texts."""
+        if not self.client:
+            raise ValueError("[model_router] OpenAI client not initialised.")
+            
+        model = self.get_model_for_task(task_type)
+        try:
+            response = self.client.embeddings.create(
+                model=model,
+                input=text
+            )
+            if isinstance(text, str):
+                return response.data[0].embedding
+            return [d.embedding for d in response.data]
+        except Exception as e:
+            logger.error(f"[model_router] embedding failed: {e}")
             raise
 
 

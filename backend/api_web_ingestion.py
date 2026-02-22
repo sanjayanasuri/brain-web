@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from typing import List
 
 from db_neo4j import get_neo4j_session
-from services_web_ingestion import ingest_web_payload
 from auth import require_auth
 from config import ENABLE_EXTENSION_DEV
 
@@ -125,28 +124,48 @@ def ingest_web(
     except Exception as e:
         raise HTTPException(status_code=403, detail=f"Origin check failed: {str(e)}")
     
-    # Step 2: Delegate to shared ingestion service
-    out = ingest_web_payload(
-        session=session,
-        url=payload.url,
+    # Step 2: Construct ArtifactInput for unified kernel
+    is_selection = payload.capture_mode == "selection"
+    artifact_input = ArtifactInput(
+        artifact_type="webpage",
+        source_url=payload.url,
         title=payload.title,
-        capture_mode=payload.capture_mode,
+        domain=payload.domain or "General",
         text=payload.text,
-        selection_text=payload.selection_text,
-        anchor=payload.anchor,
-        domain=payload.domain,
-        tags=payload.tags,
-        note=payload.note,
-        metadata=payload.metadata,
+        selection_text=payload.selection_text if is_selection else None,
+        anchor=payload.anchor if is_selection else None,
         trail_id=payload.trail_id,
+        metadata={
+            **payload.metadata,
+            "capture_mode": payload.capture_mode,
+            "note": payload.note,
+            "tags": payload.tags,
+        },
+        actions=IngestionActions(
+            run_lecture_extraction=True,
+            run_chunk_and_claims=True,
+            embed_claims=True,
+            create_lecture_node=True,
+            create_artifact_node=True,
+        ),
+        policy=IngestionPolicy(
+            local_only=True,
+            max_chars=200_000,
+            min_chars=100,
+        )
     )
     
+    # Step 3: Call unified ingestion kernel
+    tenant_id = getattr(request.state, "tenant_id", None)
+    result = ingest_artifact(session, artifact_input, tenant_id=tenant_id)
+    
+    # Step 4: Map to response
     return WebIngestResponse(
-        status=out["status"],
-        artifact_id=out["artifact_id"],
-        quote_id=out.get("quote_id"),
-        run_id=out.get("run_id"),
-        chunks_created=out.get("chunks_created", 0),
-        claims_created=out.get("claims_created", 0),
-        errors=out.get("errors", []),
+        status=result.status,
+        artifact_id=result.artifact_id or "",
+        quote_id=result.quote_id,
+        run_id=result.run_id,
+        chunks_created=result.summary_counts.get("chunks_created", 0),
+        claims_created=result.summary_counts.get("claims_created", 0),
+        errors=result.errors,
     )
