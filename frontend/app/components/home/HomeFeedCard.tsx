@@ -36,7 +36,7 @@ export default function HomeFeedCard() {
   }, []);
 
   if (loading) {
-    return <div style={{ color: 'var(--muted)', fontSize: 14 }}>Loading your daily brief...</div>;
+    return <div className="page-subtitle">Loading your daily brief...</div>;
   }
 
   if (!feed) return null;
@@ -61,7 +61,7 @@ export default function HomeFeedCard() {
 
   return (
     <div style={{ width: '100%', maxWidth: 900, marginTop: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
+      <div className="ui-card" style={{ padding: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
           <div style={{ fontWeight: 600 }}>Quick Capture</div>
           {indexing && (
@@ -72,16 +72,17 @@ export default function HomeFeedCard() {
         </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
           <input
+            className="ui-input"
             value={captureText}
             onChange={(e) => setCaptureText(e.target.value)}
             placeholder="Capture an idea, reminder, or note..."
-            style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)' }}
+            style={{ flex: 1 }}
             onKeyDown={(e) => { if (e.key === 'Enter') submitCapture(); }}
           />
           <button
+            className="ui-button"
             onClick={submitCapture}
             disabled={captureSaving || !captureText.trim()}
-            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12 }}
           >
             {captureSaving ? 'Saving…' : 'Save'}
           </button>
@@ -110,7 +111,7 @@ export default function HomeFeedCard() {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-      <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
+      <div className="ui-card" style={{ padding: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
           <div style={{ fontWeight: 600 }}>Today</div>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>Inbox: {feed.capture_inbox?.new_count ?? 0}</div>
@@ -123,16 +124,10 @@ export default function HomeFeedCard() {
               <div key={t.id} style={{ fontSize: 13, border: '1px solid var(--border)', borderRadius: 8, padding: 10 }}>
                 <div>• {t.title}</div>
                 <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
-                  <button
-                    onClick={() => window.location.assign('/home')}
-                    style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer' }}
-                  >
+                  <button className="ui-button" onClick={() => window.location.assign('/home')}>
                     Focus
                   </button>
-                  <button
-                    onClick={() => window.location.assign('/profile-customization')}
-                    style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer' }}
-                  >
+                  <button className="ui-button" onClick={() => window.location.assign('/profile-customization')}>
                     Plan
                   </button>
                 </div>
@@ -142,7 +137,7 @@ export default function HomeFeedCard() {
         )}
       </div>
 
-      <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
+      <div className="ui-card" style={{ padding: 14 }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>Bujji Picks</div>
         {feed.picks.length === 0 ? (
           <div style={{ color: 'var(--muted)', fontSize: 13 }}>No picks yet. They’ll appear as memory builds.</div>
@@ -153,22 +148,22 @@ export default function HomeFeedCard() {
                 <div>• {p.title}</div>
                 <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
                   <button
+                    className="ui-button"
                     onClick={async () => {
                       if (p.id) await markInterestSuggestionOpened(p.id);
                       const q = p.query || p.title;
                       window.open(`https://duckduckgo.com/?q=${encodeURIComponent(q)}`, '_blank', 'noopener,noreferrer');
                     }}
-                    style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer' }}
                   >
                     Open
                   </button>
                   {p.id && (
                     <button
+                      className="ui-button"
                       onClick={async () => {
                         await dismissInterestSuggestion(p.id!);
                         setFeed((prev) => prev ? { ...prev, picks: prev.picks.filter(x => x.id !== p.id) } : prev);
                       }}
-                      style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer' }}
                     >
                       Dismiss
                     </button>
