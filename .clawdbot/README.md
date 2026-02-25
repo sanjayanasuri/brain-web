@@ -84,6 +84,8 @@ export CLAWDBOT_MAX_RETRIES=3
 export CLAWDBOT_MIN_APPROVALS=3
 export CLAWDBOT_REQUIRE_UI_SCREENSHOT=true
 export CLAWDBOT_AUTO_MERGE=false
+export CLAWDBOT_CLAIM_FEED=true
+export CLAWDBOT_FEED_LABEL=agent-fix
 ```
 
 ## One-command tick
@@ -91,6 +93,12 @@ export CLAWDBOT_AUTO_MERGE=false
 ```bash
 ./.clawdbot/scripts/swarm-start.sh
 ```
+
+Swarm tick order:
+1) optional scout
+2) optional agent-feed claim (`agent-fix`)
+3) dispatch approved ideas
+4) check/retry/notify
 
 ## Quick task submit
 
