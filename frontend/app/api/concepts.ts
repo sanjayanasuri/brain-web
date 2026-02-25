@@ -8,6 +8,7 @@ import {
     ConceptNote,
     GraphData
 } from './types';
+import { getConceptOfflineLazy } from '../../lib/offline/lazy';
 
 export async function getConceptNotes(nodeId: string, limit = 10, offset = 0): Promise<ConceptNote[]> {
     const headers = await getApiHeaders();
@@ -32,25 +33,18 @@ export async function getConceptNotes(nodeId: string, limit = 10, offset = 0): P
  * Fetch a concept by its node_id
  */
 export async function getConcept(nodeId: string): Promise<Concept> {
-    // Try offline cache first if offline
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        const { getConceptOffline } = await import('../../lib/offline/api_wrapper');
-        const cached = await getConceptOffline(nodeId);
-        if (cached) {
-            return cached as Concept;
-        }
-        // If no cache, throw error
+        const getOffline = await getConceptOfflineLazy();
+        const cached = await getOffline(nodeId);
+        if (cached) return cached as Concept;
         throw new Error('Concept not available offline');
     }
 
     const response = await fetch(`${API_BASE_URL}/concepts/${nodeId}`);
     if (!response.ok) {
-        // If online request fails, try offline cache as fallback
-        const { getConceptOffline } = await import('../../lib/offline/api_wrapper');
-        const cached = await getConceptOffline(nodeId);
-        if (cached) {
-            return cached as Concept;
-        }
+        const getOffline = await getConceptOfflineLazy();
+        const cached = await getOffline(nodeId);
+        if (cached) return cached as Concept;
         throw new Error(`Failed to fetch concept: ${response.statusText}`);
     }
     return response.json();

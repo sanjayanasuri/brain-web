@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useEffect, useRef } from 'react';
-import { useStudyStore } from '../../state/studyStore';
+import { useStudyStore, type Interaction } from '../../state/studyStore';
 import Citations from './Citations';
 import TaskCard from './TaskCard';
 import AttemptInput from './AttemptInput';
@@ -274,7 +274,7 @@ export default function StudyPanel() {
                     <>
                         {/* Chat History */}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            {interactionHistory.map((interaction, idx) => (
+                            {interactionHistory.map((interaction: Interaction, idx: number) => (
                                 <React.Fragment key={interaction.taskId || idx}>
                                     {/* AI Question */}
                                     <div style={{ alignSelf: 'flex-start', maxWidth: '90%' }}>

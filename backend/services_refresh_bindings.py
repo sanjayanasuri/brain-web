@@ -531,6 +531,7 @@ async def _run_refresh_check(
             include_domains=params.get("include_domains"),
             exclude_domains=params.get("exclude_domains"),
             prefer_realtime_only=bool(params.get("prefer_realtime_only", False)),
+            use_learning_schema=bool(params.get("use_learning_schema", False)),
         )
         if not answer:
             return {"check_id": check.get("check_id"), "status": "failed", "error": "No Exa answer result"}

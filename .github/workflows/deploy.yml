@@ -2,12 +2,17 @@ name: Deploy to Hetzner
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'scripts/**'
+      - 'docker-compose*.yml'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 concurrency:
-  group: hetzner-deploy
+  group: hetzner-deploy-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -16,10 +21,10 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Deploy to Hetzner
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
@@ -29,7 +34,7 @@ jobs:
             AUTO_STASH_GIT_CHANGES=1 FULL_RESTART=0 BUILD_NO_CACHE=0 ./scripts/deploy.sh production
 
       - name: Verify Deployment
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}

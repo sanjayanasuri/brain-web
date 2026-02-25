@@ -2,6 +2,7 @@
  * Graph and branch related API methods
  */
 
+import { UnauthorizedError } from '../lib/UnauthorizedError';
 import { API_BASE_URL, getApiHeaders } from './base';
 import {
     GraphListResponse,
@@ -16,12 +17,14 @@ import {
     Concept,
     GraphConceptsResponse
 } from './types';
+import { getGraphDataOfflineLazy } from '../../lib/offline/lazy';
 
 export async function listGraphs(): Promise<GraphListResponse> {
     try {
         const response = await fetch(`${API_BASE_URL}/graphs/`, {
             headers: await getApiHeaders(),
         });
+        if (response.status === 401) throw new UnauthorizedError();
         if (!response.ok) {
             throw new Error(`Failed to list graphs: ${response.statusText}`);
         }
@@ -39,6 +42,7 @@ export async function listGraphs(): Promise<GraphListResponse> {
         }
         return data;
     } catch (error) {
+        if (error instanceof UnauthorizedError) throw error;
         console.error('Error fetching graphs:', error);
         // Return demo graph as fallback
         return { active_graph_id: 'demo', active_branch_id: 'main', graphs: [{ graph_id: 'demo', name: 'Demo' }] };
@@ -187,13 +191,10 @@ export async function getGraphOverview(
     limitNodes: number = 300,
     limitEdges: number = 600
 ): Promise<GraphData & { meta?: { node_count?: number; edge_count?: number; sampled?: boolean } }> {
-    // Try offline cache first if offline
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        const { getGraphDataOffline } = await import('../../lib/offline/api_wrapper');
-        const cached = await getGraphDataOffline();
-        if (cached) {
-            return { ...cached, meta: { sampled: true } };
-        }
+        const getOffline = await getGraphDataOfflineLazy();
+        const cached = await getOffline();
+        if (cached) return { ...cached, meta: { sampled: true } };
     }
 
     try {
@@ -204,12 +205,9 @@ export async function getGraphOverview(
             }
         );
         if (!response.ok) {
-            // If online request fails, try offline cache as fallback
-            const { getGraphDataOffline } = await import('../../lib/offline/api_wrapper');
-            const cached = await getGraphDataOffline();
-            if (cached) {
-                return { ...cached, meta: { sampled: true } };
-            }
+            const getOffline = await getGraphDataOfflineLazy();
+            const cached = await getOffline();
+            if (cached) return { ...cached, meta: { sampled: true } };
             throw new Error(`Failed to fetch graph overview: ${response.statusText}`);
         }
         const data = await response.json();

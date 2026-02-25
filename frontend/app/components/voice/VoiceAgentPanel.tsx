@@ -259,6 +259,14 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
     await voiceStream.stop();
   }, [session, voiceStream.isRecording, voiceStream.stop]);
 
+  const lastUserUtterance = [...chatHistory].reverse().find((m) => m.role === 'user')?.text || '';
+  const lastAgentReply = [...chatHistory].reverse().find((m) => m.role === 'agent')?.text || '';
+  const companionBullets = (lastAgentReply || '')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+
   return (
     <GlassCard className={`voice-agent-panel ${session ? 'session-active' : ''} ${isStudyMode ? 'study-mode' : ''} status-${currentStatus.toLowerCase()}`}>
       <div className="voice-agent-header">
@@ -396,6 +404,33 @@ const VoiceAgentPanel: React.FC<VoiceAgentPanelProps> = ({ graphId, branchId, se
           <span>Error: {error}</span>
         </div>
       )}
+
+      <div style={{
+        border: '1px solid var(--border-soft, rgba(0,0,0,0.06))',
+        borderRadius: 12,
+        padding: '10px 12px',
+        background: 'var(--background, #fff)',
+        marginTop: 8,
+        marginBottom: 8,
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', color: 'var(--ink-soft, #666)', marginBottom: 6 }}>
+          LIVE COMPANION
+        </div>
+        {lastUserUtterance ? (
+          <div style={{ fontSize: 12, color: 'var(--ink-soft, #555)', marginBottom: 6 }}>
+            You: {lastUserUtterance.slice(0, 120)}{lastUserUtterance.length > 120 ? '…' : ''}
+          </div>
+        ) : null}
+        {companionBullets.length > 0 ? (
+          <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {companionBullets.map((b, i) => (
+              <li key={`${i}-${b.slice(0, 16)}`} style={{ fontSize: 12, color: 'var(--ink, #333)' }}>{b}</li>
+            ))}
+          </ul>
+        ) : (
+          <div style={{ fontSize: 12, color: 'var(--ink-soft, #888)' }}>I’ll summarize key points here while we talk.</div>
+        )}
+      </div>
 
       <div className="transcript-area" ref={scrollRef}>
         {chatHistory.length === 0 && !hasLiveInput && !isProcessing && (

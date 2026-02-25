@@ -217,14 +217,13 @@ def main(graph_id: str = None, export_per_graph: bool = True):
 
     # If exporting all graphs and per-graph export is enabled, export each graph separately
     if not graph_id and export_per_graph:
-        from services_branch_explorer import list_graphs
-        
+        from services_branch_explorer import list_all_graphs
+
         try:
-            # Get list of graphs (this will create its own session via the decorator)
-            # We need to call it in a way that gets the graphs list
+            # Admin/script use: list all graphs across tenants for full export
             driver = driver_getter()
             with driver.session() as session:
-                graphs = list_graphs(session)
+                graphs = list_all_graphs(session)
             
             logger.debug(f"\n[PER-GRAPH] Exporting {len(graphs)} individual graphs...")
             for graph in graphs:

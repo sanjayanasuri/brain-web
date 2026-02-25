@@ -378,7 +378,12 @@ def _build_canvas_description(
     return description, structured
 
 
-def _merge_metadata_with_phases(existing_metadata_json: Optional[str], phases: List[Dict[str, Any]], run_id: str) -> str:
+def _merge_metadata_with_phases(
+    existing_metadata_json: Optional[str],
+    phases: List[Dict[str, Any]],
+    run_id: str,
+    drawing_blocks: Optional[List[Dict[str, Any]]] = None,
+) -> str:
     metadata: Dict[str, Any] = {}
     if existing_metadata_json:
         try:
@@ -394,6 +399,8 @@ def _merge_metadata_with_phases(existing_metadata_json: Optional[str], phases: L
     freeform_meta["phases"] = phases
     freeform_meta["lastCaptureRunId"] = run_id
     freeform_meta["lastCaptureAt"] = int(time.time() * 1000)
+    if drawing_blocks is not None:
+        freeform_meta["drawingBlocks"] = drawing_blocks
     metadata["freeformCanvas"] = freeform_meta
     return json.dumps(metadata)
 
@@ -439,6 +446,11 @@ def capture_freeform_canvas(
     strokes = _loads_json_list(payload.strokes_json, "strokes_json")
     text_blocks = _loads_json_list(payload.text_blocks_json, "text_blocks_json")
     phases = _loads_json_list(payload.phases_json, "phases_json") if payload.phases_json else []
+    drawing_blocks = (
+        _loads_json_list(payload.drawing_blocks_json, "drawing_blocks_json")
+        if payload.drawing_blocks_json
+        else None
+    )
 
     description, structured = _build_canvas_description(strokes, text_blocks, phases, payload.ocr_hint)
     llm_data = _call_freeform_llm(payload.domain, description, structured)
@@ -471,7 +483,9 @@ def capture_freeform_canvas(
     # Reuse existing lecture if canvas_id maps to one; otherwise create a new lecture.
     lecture = get_lecture_by_id(session, payload.canvas_id)
     if lecture:
-        merged_metadata = _merge_metadata_with_phases(lecture.metadata_json, phases, run_id)
+        merged_metadata = _merge_metadata_with_phases(
+            lecture.metadata_json, phases, run_id, drawing_blocks=drawing_blocks
+        )
         updated = update_lecture(
             session=session,
             lecture_id=lecture.lecture_id,
@@ -490,7 +504,9 @@ def capture_freeform_canvas(
             ),
             tenant_id=tenant_id,
         )
-        merged_metadata = _merge_metadata_with_phases(None, phases, run_id)
+        merged_metadata = _merge_metadata_with_phases(
+            None, phases, run_id, drawing_blocks=drawing_blocks
+        )
         lecture = update_lecture(
             session=session,
             lecture_id=lecture.lecture_id,

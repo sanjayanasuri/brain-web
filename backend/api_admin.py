@@ -1,6 +1,8 @@
 
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
+
+from audit_log import log_export_access, log_audit_event
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from pathlib import Path
@@ -52,6 +54,7 @@ def run_import(auth: dict = Depends(require_auth)):
 
 @router.post("/export")
 def run_export(
+    request: Request,
     per_graph: bool = Query(True, description="Also export separate CSV files for each graph"),
     auth: dict = Depends(require_auth),
 ):
@@ -65,6 +68,7 @@ def run_export(
                   (e.g., nodes_G{graph_id}.csv) in addition to the combined files.
     """
     try:
+        log_export_access(request, "csv_all_graphs", graph_id=None, item_count=None)
         export_csv_from_neo4j.main(graph_id=None, export_per_graph=per_graph)
         return {
             "status": "ok",
@@ -540,7 +544,7 @@ def download_graph_file(filename: str, auth: dict = Depends(require_auth)):
 
 
 @router.get("/graph-files")
-def list_graph_files(auth: dict = Depends(require_auth)):
+def list_graph_files(request: Request, auth: dict = Depends(require_auth)):
     """
     List all files in the graph directory with metadata.
     Useful for development/debugging to see which CSV files make up the knowledge graph.
@@ -557,6 +561,7 @@ def list_graph_files(auth: dict = Depends(require_auth)):
         - description: Description of what the file contains
     """
     try:
+        log_audit_event(request, "ADMIN_LIST_GRAPH_FILES", "graph_files", metadata={"path": "/admin/graph-files"})
         # Get graph directory path (same logic as export script)
         BASE_DIR = Path(__file__).resolve().parent  # /backend
         GRAPH_DIR = BASE_DIR.parent / "graph"       # /graph
@@ -594,10 +599,10 @@ def list_graph_files(auth: dict = Depends(require_auth)):
         def get_graph_name(graph_id: str) -> Optional[str]:
             """Get graph name from graph_id"""
             try:
-                from services_branch_explorer import list_graphs, get_driver
+                from services_branch_explorer import list_all_graphs, get_driver
                 driver = get_driver()
                 with driver.session() as session:
-                    graphs = list_graphs(session)
+                    graphs = list_all_graphs(session)
                     for graph in graphs:
                         if graph.get("graph_id") == graph_id:
                             return graph.get("name")

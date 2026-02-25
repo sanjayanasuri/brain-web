@@ -12,9 +12,10 @@ This script:
 import sys
 from pathlib import Path
 
-# Add backend to path
-backend_path = Path(__file__).parent.parent / "backend"
-sys.path.insert(0, str(backend_path))
+# Add backend to path (works when run from backend/ or repo root)
+_here = Path(__file__).resolve().parent
+_backend = _here.parent if _here.name == "tests" else _here.parent / "backend"
+sys.path.insert(0, str(_backend))
 
 from db_neo4j import get_driver
 from services_graph import create_concept

@@ -1,5 +1,8 @@
 """Unit tests for notes digest merge/refinement helpers."""
+import pytest
 from datetime import datetime
+
+pytestmark = pytest.mark.unit
 
 from models_notes_digest import NotesEntry, NotesSection
 from services_notes_digest import _find_similar_entry, _merge_ids

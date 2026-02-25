@@ -13,11 +13,33 @@ import uuid
 
 from db_neo4j import neo4j_session
 from services_graphrag import retrieve_graphrag_context
+from utils.timestamp import utcnow_ms
 from services_supermemory import search_memories, sync_learning_moment
 from services_usage_tracker import log_usage, check_limit
 from db_postgres import execute_update, execute_query
-from config import VOICE_AGENT_NAME, OPENAI_API_KEY
-from services_graph import create_concept, create_relationship, get_recent_conversation_summaries
+from config import (
+    VOICE_AGENT_NAME, 
+    OPENAI_API_KEY,
+    VOICE_AGENT_CACHE_TTL_SECONDS,
+    VOICE_SESSION_HISTORY_LIMIT,
+    VOICE_CONTEXT_MAX_LENGTH,
+    VOICE_MEMORY_CONTEXT_MAX_LENGTH,
+    VOICE_CONCEPT_EXTRACTION_MAX_TOKENS,
+    VOICE_ARTICLE_TEXT_MAX_LENGTH,
+    VOICE_AGENT_MAX_TOKENS,
+    VOICE_AGENT_TEMPERATURE,
+    VOICE_CONCEPT_CONFIDENCE_THRESHOLD,
+    VOICE_SESSION_HISTORY_LLM_LIMIT,
+    VOICE_MEMORY_CONTEXT_LIMIT,
+    VOICE_SPEECH_RATE_SLOW,
+    VOICE_SPEECH_RATE_NORMAL,
+    VOICE_SPEECH_RATE_FAST,
+    VOICE_SPEECH_CHARS_PER_MS,
+    VOICE_SPEECH_MIN_DURATION_MS,
+    VOICE_STOP_TEXT_MIN_LENGTH,
+    VOICE_INTERRUPT_MAX_WORDS,
+)
+from services_graph import create_concept, create_relationship
 from models import ConceptCreate, RelationshipCreate
 from services_voice_learning_signals import (
     apply_signals_to_policy,
@@ -35,14 +57,9 @@ from services_voice_style_profile import (
     get_voice_response_style_hint,
     get_voice_style_profile_snapshot,
 )
-from api_events import ActivityEventCreate
-
-import json
 import re
-from openai import OpenAI
 
 from services_model_router import model_router, TASK_VOICE, TASK_SYNTHESIS
-from services_agent_memory import read_agent_memory
 
 logger = logging.getLogger("brain_web")
 
@@ -57,12 +74,147 @@ async def _bg_task(coro, label: str = "background") -> None:
     except Exception as e:
         logger.error(f"[voice_agent][{label}] Background task failed: {e}", exc_info=True)
 
+
+async def _index_web_articles_bg(web_results: List[Dict[str, Any]], graph_id: str, branch_id: str, session_id: str) -> None:
+    """
+    Background task to index web search results as SourceDocument nodes.
+    Non-blocking, runs after response is sent.
+    """
+    try:
+        from services_sources import upsert_source_document
+        from db_neo4j import neo4j_session
+        
+        with neo4j_session() as neo_sess:
+            for result in web_results:
+                url = result.get("url") or result.get("link", "")
+                title = result.get("title", "")
+                content = result.get("content") or result.get("snippet", "")
+                
+                if not url:
+                    continue
+                
+                try:
+                    upsert_source_document(
+                        session=neo_sess,
+                        graph_id=graph_id,
+                        branch_id=branch_id,
+                        source="WEB",
+                        external_id=url,
+                        url=url,
+                        doc_type="web_article",
+                        text=content[:VOICE_ARTICLE_TEXT_MAX_LENGTH] if content else None,
+                        metadata={
+                            "title": title,
+                            "indexed_from": "voice_session",
+                            "session_id": session_id,
+                            "source_engine": "exa"
+                        }
+                    )
+                    logger.debug(f"[voice_agent] Indexed web article: {title[:50]}")
+                except Exception as e:
+                    logger.warning(f"[voice_agent] Failed to index article {url}: {e}")
+    except Exception as e:
+        logger.error(f"[voice_agent] Article indexing background task failed: {e}", exc_info=True)
+
+
+async def _extract_concepts_realtime_bg(
+    transcript: str,
+    agent_reply: str,
+    graph_id: str,
+    branch_id: str,
+    session_id: str,
+    user_id: str,
+    tenant_id: str
+) -> None:
+    """
+    Background task to extract and save concepts discussed in real-time during conversation.
+    Non-blocking, runs after response is sent.
+    """
+    try:
+        from services_model_router import model_router, TASK_SYNTHESIS
+        from services_graph import create_concept
+        from models import ConceptCreate
+        from db_neo4j import neo4j_session
+        import json as _json
+        
+        # Extract concepts from the conversation turn
+        extraction_prompt = f"""Extract distinct concepts or topics mentioned in this conversation turn.
+        
+User: "{transcript}"
+Assistant: "{agent_reply}"
+
+Return a JSON object with a "concepts" array. Each concept should have:
+- name: short, precise concept name (e.g., "Watson X", "Backpropagation")
+- description: 1-2 sentences about what was discussed
+- confidence: 0.0-1.0 (how confident you are this is a real concept vs filler)
+
+Only extract concepts that are:
+1. Named entities or specific topics (not generic words like "thing", "stuff")
+2. Meaningfully discussed (not just mentioned in passing)
+3. Have confidence >= 0.7
+
+Return format: {{"concepts": [{{"name": "...", "description": "...", "confidence": 0.8}}]}}
+"""
+        
+        try:
+            raw = model_router.completion(
+                task_type=TASK_SYNTHESIS,
+                messages=[
+                    {"role": "system", "content": "You extract concepts from conversations. Return only valid JSON."},
+                    {"role": "user", "content": extraction_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+                max_tokens=VOICE_CONCEPT_EXTRACTION_MAX_TOKENS
+            )
+            
+            parsed = _json.loads(raw) if raw else {}
+            concepts = parsed.get("concepts", [])
+            
+            if not concepts:
+                return
+            
+            with neo4j_session() as neo_sess:
+                for concept_data in concepts:
+                    name = (concept_data.get("name") or "").strip()
+                    description = (concept_data.get("description") or "").strip()
+                    confidence = float(concept_data.get("confidence", 0.5))
+                    
+                    if not name or len(name) < 2 or confidence < VOICE_CONCEPT_CONFIDENCE_THRESHOLD:
+                        continue
+                    
+                    try:
+                        # MERGE on name so repeated discussions reinforce the same node
+                        payload = ConceptCreate(
+                            name=name,
+                            domain="learning",
+                            type="concept",
+                            description=description,
+                            tags=["voice-extracted", "realtime"],
+                            created_by=f"voice-agent-{user_id}",
+                        )
+                        node = create_concept(neo_sess, payload, tenant_id=tenant_id)
+                        logger.debug(f"[voice_agent] Extracted realtime concept: {name}")
+                    except Exception as e:
+                        logger.debug(f"[voice_agent] Failed to create concept '{name}': {e}")
+                        
+        except Exception as e:
+            logger.warning(f"[voice_agent] Concept extraction failed: {e}")
+            
+    except Exception as e:
+        logger.error(f"[voice_agent] Realtime concept extraction background task failed: {e}", exc_info=True)
+
 class VoiceAgentOrchestrator:
     def __init__(self, user_id: str, tenant_id: str):
         self.user_id = user_id
         self.tenant_id = tenant_id
         # In-memory history cache: avoids a Postgres round-trip on every turn
         self._session_history: Dict[str, list] = {}
+        # Cache for tutor profile and style hints (per-user, not per-session)
+        self._tutor_profile_cache: Optional[Any] = None
+        self._style_hint_cache: Optional[str] = None
+        self._cache_timestamp: float = 0.0
+        self._CACHE_TTL_SECONDS = VOICE_AGENT_CACHE_TTL_SECONDS
 
 
     async def start_session(self, graph_id: str, branch_id: str, metadata: Optional[Dict[str, Any]] = None, companion_session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -397,8 +549,8 @@ Transcript with timestamps:
 
         messages = [{"role": "system", "content": system_prompt}]
         
-        # Add history (last 5 interactions for token efficiency)
-        for entry in history[-5:]:
+        # Add history (last N interactions for token efficiency)
+        for entry in history[-VOICE_SESSION_HISTORY_LLM_LIMIT:]:
             user_turn = str(entry.get("user") or "").strip()
             assistant_turn = str(entry.get("agent") or "").strip()
             if user_turn:
@@ -412,8 +564,8 @@ Transcript with timestamps:
             return model_router.completion(
                 task_type=TASK_VOICE, # Fast model
                 messages=messages,
-                temperature=0.7,
-                max_tokens=220
+                temperature=VOICE_AGENT_TEMPERATURE,
+                max_tokens=VOICE_AGENT_MAX_TOKENS
             )
 
         except Exception as e:
@@ -712,7 +864,7 @@ Transcript with timestamps:
         # In-memory update is instant — safe to read on next turn without a DB hit
         cache = self._session_history.setdefault(session_id, [])
         cache.append(entry)
-        self._session_history[session_id] = cache[-20:]
+        self._session_history[session_id] = cache[-VOICE_SESSION_HISTORY_LIMIT:]
 
         query = """
         UPDATE voice_sessions
@@ -749,7 +901,7 @@ Transcript with timestamps:
         if should_stop:
             logger.info(f"[voice_agent] User requested STOP/HOLD for session {session_id}. Remaining: '{remaining_text}'")
             # If there's NO remaining text, just acknowledge the stop.
-            if not remaining_text or len(remaining_text) < 3:
+            if not remaining_text or len(remaining_text) < VOICE_STOP_TEXT_MIN_LENGTH:
                 return {
                     "agent_response": "Sure, holding.",
                     "should_speak": True,
@@ -780,13 +932,20 @@ Transcript with timestamps:
             else:
                 logger.debug(f"[voice_agent] Skipping memories_task for low-complexity turn: '{last_transcript}'")
 
-            style_hint_task = asyncio.create_task(
-                asyncio.to_thread(
-                    get_voice_response_style_hint,
-                    user_id=self.user_id,
-                    tenant_id=self.tenant_id,
+            # Use cached style hint if available and fresh
+            import time as _time
+            current_time = _time.time()
+            if self._style_hint_cache and (current_time - self._cache_timestamp) < self._CACHE_TTL_SECONDS:
+                learned_style_hint = self._style_hint_cache
+                style_hint_task = None
+            else:
+                style_hint_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        get_voice_response_style_hint,
+                        user_id=self.user_id,
+                        tenant_id=self.tenant_id,
+                    )
                 )
-            )
 
             search_task = None
             thinking_bit = ""
@@ -823,181 +982,6 @@ Transcript with timestamps:
             policy, policy_changed = apply_signals_to_policy(policy, extracted_signals)
             action_summaries = await self.execute_voice_commands(actions)
 
-            # 3. Fetch Context (Neo4j — still needs to be serial due to shared session)
-            # unified_context = {} # Moved into streamer
-            # tutor_profile = None # Moved into streamer
-            # graph_context = "" # Moved into streamer
-
-            # with neo4j_session() as neo_session: # Moved into streamer
-            #     try:
-            #         from services_memory_orchestrator import get_unified_context, get_active_lecture_id
-
-            #         # Use the voice session_id if provided, otherwise a stable
-            #         # per-user voice thread so all voice turns accumulate in one
-            #         # chat history that other surfaces can see.
-            #         # "voice_default" was shared across ALL users — bug.
-            #         voice_chat_id = session_id or f"voice_{self.user_id}"
-
-            #         unified_context = get_unified_context(
-            #             user_id=self.user_id,
-            #             tenant_id=self.tenant_id,
-            #             chat_id=voice_chat_id,
-            #             query=last_transcript,
-            #             session=neo_session,
-            #             active_lecture_id=graph_id,
-            #             include_chat_history=True,
-            #             include_lecture_context=True,
-            #             include_user_facts=True,
-            #             include_study_context=True,
-            #             include_recent_topics=True,  # pull in Explorer/Lecture Studio context
-            #         )
-            #         logger.info(
-            #             f"Voice session {session_id} loaded unified context: "
-            #             f"{len(unified_context.get('chat_history', []))} messages, "
-            #             f"user_facts={'yes' if unified_context.get('user_facts') else 'no'}"
-            #         )
-            #     except Exception as e:
-            #         logger.warning(f"Failed to load unified context for voice: {e}")
-            #         unified_context = {"user_facts": "", "lecture_context": "", "chat_history": []}
-
-            #     try:
-            #         tutor_profile = get_tutor_profile_service(neo_session, user_id=self.user_id)
-            #     except Exception:
-            #         tutor_profile = None
-
-            #     try:
-            #         graphrag_data = {}
-            #         if not is_low_complexity:
-            #             graphrag_data = retrieve_graphrag_context(
-            #                 session=neo_session,
-            #                 graph_id=graph_id,
-            #                 branch_id=branch_id,
-            #                 question=last_transcript,
-            #             )
-            #         else:
-            #             logger.debug(f"[voice_agent] Skipping GraphRAG for low-complexity turn: '{last_transcript}'")
-            #         graph_context = graphrag_data.get("context_text", "")
-            #     except Exception as e:
-            #         logger.warning(f"GraphRAG context failed: {e}")
-            #         graph_context = ""
-
-            # 4. Handle Fog Clearing if student is confused
-            # fog_result = None # Moved into streamer
-            # if is_confused: # Moved into streamer
-            #     fog_result = await self.handle_fog_clearing(graph_id, last_transcript, graph_context) # Moved into streamer
-
-            # memory_context = "" # Moved into streamer
-            # if personal_memories: # Moved into streamer
-            #     memory_context = "\nPersonal Memory Context:\n" + "\n".join([m.get("content", "") for m in personal_memories]) # Moved into streamer
-
-            # 5b. Resolve Study Context for Prompt # Moved into streamer
-            # study_instruction = "" # Moved into streamer
-            # try: # Moved into streamer
-            #     from services_memory_orchestrator import build_system_prompt_with_memory # Moved into streamer
-            #     # We reuse the logic from the orchestrator's prompt builder # Moved into streamer
-            #     temp_prompt = build_system_prompt_with_memory("", unified_context, ["study_context"]) # Moved into streamer
-            #     # Extract just the added part # Moved into streamer
-            #     study_instruction = temp_prompt.replace("\n\n", "", 1) # Moved into streamer
-            # except: # Moved into streamer
-            #     pass # Moved into streamer
-
-            # 5c. Detect if user is responding to a task (Voice) # Moved into streamer
-            # task_signal = "" # Moved into streamer
-            # try: # Moved into streamer
-            #     if session_history: # Moved into streamer
-            #         last_ast = session_history[-1].get("agent", "") # Moved into streamer
-            #         if "[STUDY_TASK:" in last_ast: # Moved into streamer
-            #             task_signal = "\nSTIMULUS: The student is answering a previous STUDY_TASK verbally. Listen carefully and evaluate their understanding." # Moved into streamer
-            # except: # Moved into streamer
-            #     pass # Moved into streamer
-
-            # 6. Construct system prompt # Moved into streamer
-            # mode_desc = "SCRIBE MODE" if is_scribe_mode else ("FOG-CLEARER MODE" if is_confused else "CONVERSATIONAL MODE") # Moved into streamer
-
-            # Phase F/v2: apply TutorProfile parameters (Clean Break) # Moved into streamer
-            # tutor_layer = "" # Moved into streamer
-            # try: # Moved into streamer
-            #     if tutor_profile: # Moved into streamer
-            #         # If custom_instructions (God Mode) is set, it overrides structured settings # Moved into streamer
-            #         if tutor_profile.custom_instructions: # Moved into streamer
-            #             tutor_layer = f"\nAI PERSONA OVERRIDE:\n{tutor_profile.custom_instructions}" # Moved into streamer
-            #         else: # Moved into streamer
-            #             tutor_layer = "\n".join([ # Moved into streamer
-            #                 "## AI Tutor Persona (v2)", # Moved into streamer
-            #                 f"- Comprehension Level: {tutor_profile.comprehension_level} (Target {tutor_profile.comprehension_level} level explanations)", # Moved into streamer
-            #                 f"- Tone: {tutor_profile.tone}", # Moved into streamer
-            #                 f"- Pacing: {tutor_profile.pacing}", # Moved into streamer
-            #                 f"- Turn-Taking Style: {tutor_profile.turn_taking}", # Moved into streamer
-            #                 f"- Response Length: {tutor_profile.response_length}", # Moved into streamer
-            #                 f"- Behavioral: {'Direct feedback, no glaze' if tutor_profile.no_glazing else 'Supportive guide'}", # Moved into streamer
-            #                 f"- Completion Rule: {'Always end with a suggested next step' if tutor_profile.end_with_next_step else 'Natural flow'}" # Moved into streamer
-            #             ]) # Moved into streamer
-
-            #         # Sync pacing/turn-taking to session policy if not explicitly set by signals # Moved into streamer
-            #         if isinstance(policy, dict): # Moved into streamer
-            #             if tutor_profile.pacing and "pacing" not in policy: # Moved into streamer
-            #                 policy["pacing"] = tutor_profile.pacing # Moved into streamer
-            #             if tutor_profile.turn_taking and "turn_taking" not in policy: # Moved into streamer
-            #                 policy["turn_taking"] = tutor_profile.turn_taking # Moved into streamer
-            # except Exception as e: # Moved into streamer
-            #     logger.debug(f"Failed to apply TutorProfile v2 layer: {e}") # Moved into streamer
-            #     tutor_layer = "" # Moved into streamer
-            
-            # Unified memory sections # Moved into streamer
-            # memory_sections = [] # Moved into streamer
-            # if unified_context.get("user_facts"): # Moved into streamer
-            #     memory_sections.append(f"## About This User\n{unified_context['user_facts']}") # Moved into streamer
-            # if unified_context.get("lecture_context"): # Moved into streamer
-            #     memory_sections.append(f"## Current Study Material\n{unified_context['lecture_context']}") # Moved into streamer
-            
-            # agent_memory = "\n".join(memory_sections) # Moved into streamer
-
-            # Active Personality Tuning: Occasionally probe for style feedback # Moved into streamer
-            # style_probe = "" # Moved into streamer
-            # try: # Moved into streamer
-            #     snapshot = get_voice_style_profile_snapshot(user_id=self.user_id, tenant_id=self.tenant_id) # Moved into streamer
-            #     scount = snapshot.get("sample_count", 0) # Moved into streamer
-            #     # Probe at specific milestones: 10th and 30th turn to calibrate # Moved into streamer
-            #     if scount in {10, 30}: # Moved into streamer
-            #         style_probe = "PERSONALITY PROBE: After you finish your explanation, briefly ask the user if they'd like you to be more or less verbose, or if the current tone works for them. Keep it natural." # Moved into streamer
-            # except Exception: # Moved into streamer
-            #     pass # Moved into streamer
-
-            # system_prompt = f""" # Moved into streamer
-            # You are {VOICE_AGENT_NAME}, a knowledgeable learning companion. # Moved into streamer
-            # Current Mode: {mode_desc} # Moved into streamer
-            
-            # ## Persistent Memory & Context # Moved into streamer
-            # {agent_memory} # Moved into streamer
-            # {study_instruction} # Moved into streamer
-            # {task_signal} # Moved into streamer
-            
-            # Your goal is to help the user explore the knowledge graph and reflect on their learning. # Moved into streamer
-            # {tutor_layer} # Moved into streamer
-            # {learned_style_hint} # Moved into streamer
-            # {style_probe} # Moved into streamer
-            # {f"STIMULUS: The student is confused. Your reply should be derived from this explanation: {fog_result['explanation']}" if fog_result else ""} # Moved into streamer
-            
-            # Knowledge Graph Context: # Moved into streamer
-            # {graph_context} # Moved into streamer
-            # {memory_context} # Moved into streamer
-            
-            # Recent Actions Executed: # Moved into streamer
-            # {", ".join(action_summaries) if action_summaries else "None"} # Moved into streamer
-
-            # Instructions: # Moved into streamer
-            # - Keep responses concise, direct, and conversational. # Moved into streamer
-            # - ABSOLUTELY FORBIDDEN: Do not say "I'm here to help", "Goodbye", "Take care", or use generic customer service pleasantries. # Moved into streamer
-            # - Be kind, but do not glaze: if the user asks whether something is correct, say yes/no and correct it if needed. # Moved into streamer
-            # - Once user intent is clear, answer directly with concrete steps or details. # Moved into streamer
-            # - Ask a clarifying question only if required details are missing; never ask the same clarification twice. # Moved into streamer
-            # - If the user confirms with phrases like "yes", "go ahead", or "exactly", start the explanation immediately. # Moved into streamer
-            # - If policy says no interruption, only speak when the user yields (asks a question or requests a response). # Moved into streamer
-            # - CONVERSATIONAL STYLE: Never use bullet points, numbered lists, or bold keys/headers. Write in short, one-breath conversational sentences. # Moved into streamer
-            # - Avoid lengthy paragraphs. If you have a lot to say, say the first bit and invite the user into the turn. # Moved into streamer
-            # - Do not use any markdown formatting (bold, italics, bullets). # Moved into streamer
-            # """ # Moved into streamer
-
             # Turn-taking gate: optionally wait silently unless user yields
             should_speak = True
             if policy.get("turn_taking") == "no_interrupt":
@@ -1009,9 +993,34 @@ Transcript with timestamps:
                 should_speak = bool(yield_turn or ack_turn)
 
             # If the utterance looks unfinished, wait for continuation rather than replying too early.
+            # Also check for natural interruption patterns
             if should_speak:
                 if self._is_likely_incomplete_utterance(last_transcript) and not is_yield_turn(last_transcript):
                     should_speak = False
+                
+                # Enhanced interruption detection: if user says "wait", "hold on", etc., acknowledge and pause
+                interrupt_patterns = [
+                    r"\b(wait|hold on|stop|pause|hang on|one sec|give me a sec)\b",
+                    r"\b(actually|never mind|forget it|skip that)\b"
+                ]
+                import re
+                for pattern in interrupt_patterns:
+                    if re.search(pattern, last_transcript, re.IGNORECASE):
+                        # If it's just an interruption command with no follow-up, acknowledge and stop
+                        if len(last_transcript.split()) <= VOICE_INTERRUPT_MAX_WORDS:
+                            return {
+                                "agent_response": "Sure, holding.",
+                                "should_speak": True,
+                                "speech_rate": 1.0,
+                                "learning_signals": extracted_signals,
+                                "policy": policy,
+                                "actions": [],
+                                "action_summaries": [],
+                                "is_eureka": False,
+                                "is_fog_clearing": False,
+                                "fog_node_id": None
+                            }
+                        break
 
             agent_reply = ""
             if should_speak:
@@ -1072,13 +1081,29 @@ Transcript with timestamps:
                             
                             web_results = slow_results[0] if search_task and not isinstance(slow_results[0], Exception) else []
                             personal_memories = slow_results[1] if memories_task and not isinstance(slow_results[1], Exception) else []
-                            learned_style_hint = slow_results[2] if style_hint_task and not isinstance(slow_results[2], Exception) else ""
+                            
+                            # Update style hint cache if we fetched it
+                            if style_hint_task:
+                                learned_style_hint = slow_results[2] if not isinstance(slow_results[2], Exception) else ""
+                                if learned_style_hint:
+                                    self._style_hint_cache = learned_style_hint
+                                    self._cache_timestamp = current_time
+                            else:
+                                learned_style_hint = self._style_hint_cache or ""
+                            
+                            # Index articles as sources in background (non-blocking)
+                            if web_results and session_id and not is_incognito:
+                                asyncio.create_task(_bg_task(
+                                    _index_web_articles_bg(web_results, graph_id, branch_id, session_id),
+                                    "index_web_articles"
+                                ))
                             
                             web_context = ""
                             if web_results:
                                 web_context = "\n".join([f"## Web Source: {r.get('title')}\n{r.get('content') or r.get('snippet')}" for r in web_results])
 
                             # Offload heavy context gathering to a thread
+                            # Use cached tutor profile if available
                             def _gather_heavy_context():
                                 ctx = {}
                                 profile = None
@@ -1092,9 +1117,15 @@ Transcript with timestamps:
                                             active_lecture_id=graph_id, include_chat_history=True, include_lecture_context=True, include_user_facts=True,
                                             include_study_context=True, include_recent_topics=True
                                         )
-                                        profile = get_tutor_profile_service(neo_session, user_id=self.user_id)
+                                        # Use cached profile if available and fresh
+                                        if self._tutor_profile_cache and (current_time - self._cache_timestamp) < self._CACHE_TTL_SECONDS:
+                                            profile = self._tutor_profile_cache
+                                        else:
+                                            profile = get_tutor_profile_service(neo_session, user_id=self.user_id)
+                                            if profile:
+                                                self._tutor_profile_cache = profile
+                                                self._cache_timestamp = current_time
                                         if not is_low_complexity:
-                                            from services_voice_agent import retrieve_graphrag_context
                                             grag = retrieve_graphrag_context(session=neo_session, graph_id=graph_id, branch_id=branch_id, question=last_transcript)
                                             g_ctx = grag.get("context_text", "")
                                 except Exception as e:
@@ -1120,18 +1151,50 @@ Transcript with timestamps:
                                 else:
                                     tutor_layer = f"\nAI Tutor Persona: Tone={tutor_profile.tone}, Pacing={tutor_profile.pacing}"
 
+                            assistant_style_prompt = ""
+                            try:
+                                from services_assistant_profile import build_assistant_style_prompt
+                                assistant_style_prompt = build_assistant_style_prompt(
+                                    user_id=str(self.user_id),
+                                    tenant_id=str(self.tenant_id),
+                                )
+                            except Exception as e:
+                                logger.debug(f"Failed to load assistant style prompt for voice: {e}")
+
+                            # Build enhanced system prompt with conversation quality improvements
+                            memory_context = ""
+                            if personal_memories:
+                                memory_context = "\nPersonal Memory Context:\n" + "\n".join([m.get("content", "") for m in personal_memories[:VOICE_MEMORY_CONTEXT_LIMIT]])
+                            
+                            # Enhanced instructions for natural conversation
+                            conversation_instructions = """
+                            CONVERSATION QUALITY RULES:
+                            - Match the user's energy and tone. If they're excited, be enthusiastic. If they're calm, be measured.
+                            - Use their vocabulary and jargon when appropriate. If they say "GraphRAG" or "K8s", use those terms.
+                            - Provide reasonable amounts of information - not an information dump. 2-3 sentences per point is usually enough.
+                            - If interrupted mid-sentence, acknowledge naturally ("Sure, go ahead" or "What's up?") and don't resume unless asked.
+                            - Be conversational, not formal. Write like you're talking to a friend, not writing a report.
+                            - Don't switch voices or personas mid-conversation. Stay consistent.
+                            - Natural gaps are fine - you don't need to fill every silence.
+                            - If the user asks a quick question, give a quick answer. Match their pace.
+                            """
+                            
                             system_prompt_final = f"""
                             You are {VOICE_AGENT_NAME}, a knowledgeable learning companion.
                             Mode: {mode_desc}
                             {tutor_layer}
                             {learned_style_hint}
+                            {assistant_style_prompt}
                             {f"STIMULUS: The student is confused. Derivation: {fog_res['explanation']}" if fog_res else ""}
                             
-                            Context:
-                            {graph_context}
-                            {web_context}
+                            Knowledge Context:
+                            {graph_context[:VOICE_CONTEXT_MAX_LENGTH] if graph_context else "No graph context available."}
+                            {web_context[:VOICE_CONTEXT_MAX_LENGTH] if web_context else ""}
+                            {memory_context[:VOICE_MEMORY_CONTEXT_MAX_LENGTH] if memory_context else ""}
                             
-                            Instructions: Keep it concise and conversational.
+                            {conversation_instructions}
+                            
+                            CRITICAL: Keep responses concise (2-4 sentences typically). Be natural, not verbose.
                             """
                             
                             messages = [{"role": "system", "content": system_prompt_final}]
@@ -1162,14 +1225,14 @@ Transcript with timestamps:
                     return {
                         "reply_stream": _reply_streamer(),
                         "should_speak": True,
-                        "speech_rate": 0.9 if policy.get("pacing") == "slow" else (1.6 if policy.get("pacing") == "fast" else 1.15),
+                        "speech_rate": VOICE_SPEECH_RATE_SLOW if policy.get("pacing") == "slow" else (VOICE_SPEECH_RATE_FAST if policy.get("pacing") == "fast" else VOICE_SPEECH_RATE_NORMAL),
                         "learning_signals": extracted_signals,
                         "policy": policy,
                         "actions": actions,
                         "action_summaries": action_summaries,
                         "is_eureka": is_eureka,
                         "is_fog_clearing": is_confused,
-                        "fog_node_id": fog_result["node_id"] if fog_result else None
+                        "fog_node_id": fog_res["node_id"] if fog_res else None
                     }
 
             # 8. Persist artifacts — fire as background tasks so the reply isn't blocked
@@ -1206,6 +1269,60 @@ Transcript with timestamps:
                             logger.warning(f"Fact extraction failed in voice: {e}")
 
                     asyncio.create_task(_bg_task(_extract_facts_bg(), "extract_facts"))
+                    
+                    # REALTIME CONCEPT EXTRACTION — extract concepts discussed during conversation
+                    asyncio.create_task(_bg_task(
+                        _extract_concepts_realtime_bg(
+                            transcript=last_transcript,
+                            agent_reply=agent_reply,
+                            graph_id=graph_id,
+                            branch_id=branch_id,
+                            session_id=session_id,
+                            user_id=self.user_id,
+                            tenant_id=self.tenant_id
+                        ),
+                        "extract_concepts_realtime"
+                    ))
+                    
+                    # PERSIST TO CHAT HISTORY — save conversation to chat_messages for recent logs
+                    try:
+                        from services_chat_history import save_message
+                        from services_conversation_memory_events import record_conversation_turn
+
+                        voice_chat_id = session_id or f"voice_{self.user_id}"
+                        # Save user message
+                        save_message(
+                            chat_id=voice_chat_id,
+                            user_id=self.user_id,
+                            tenant_id=self.tenant_id,
+                            role="user",
+                            content=last_transcript,
+                            metadata={"source": "voice", "session_id": session_id, "graph_id": graph_id}
+                        )
+                        # Save assistant reply
+                        save_message(
+                            chat_id=voice_chat_id,
+                            user_id=self.user_id,
+                            tenant_id=self.tenant_id,
+                            role="assistant",
+                            content=agent_reply,
+                            metadata={"source": "voice", "session_id": session_id, "graph_id": graph_id}
+                        )
+
+                        # Canonical event stream for memory promotion + analytics
+                        record_conversation_turn(
+                            user_id=self.user_id,
+                            tenant_id=self.tenant_id,
+                            session_id=voice_chat_id,
+                            graph_id=graph_id,
+                            branch_id=branch_id,
+                            source="voice",
+                            user_text=last_transcript,
+                            assistant_text=agent_reply,
+                            metadata={"voice_session_id": session_id},
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to persist voice conversation to chat history/events: {e}")
 
                 # Persist transcript chunks + extracted learning signals as artifacts (additive)
                 try:
@@ -1214,7 +1331,7 @@ Transcript with timestamps:
                         user_id=self.user_id,
                         tenant_id=self.tenant_id,
                     )
-                    now_ms = int(datetime.utcnow().timestamp() * 1000)
+                    now_ms = utcnow_ms()
                     session_offset_now = max(0, now_ms - started_at_ms) if started_at_ms else 0
 
                     # Convert client epoch ms to session-relative ms
@@ -1243,8 +1360,8 @@ Transcript with timestamps:
                     assistant_chunk = None
                     if agent_reply:
                         assist_start = max(user_end + 1, session_offset_now)
-                        # rough estimate: 55ms/char + a floor
-                        est_duration = max(800, int(len(agent_reply) * 55))
+                        # rough estimate: chars_per_ms * char_count + minimum duration
+                        est_duration = max(VOICE_SPEECH_MIN_DURATION_MS, int(len(agent_reply) * VOICE_SPEECH_CHARS_PER_MS))
                         assistant_chunk = record_voice_transcript_chunk(
                             voice_session_id=session_id,
                             user_id=self.user_id,
@@ -1273,8 +1390,7 @@ Transcript with timestamps:
             return {
                 "agent_response": agent_reply,
                 "should_speak": should_speak,
-                # 1.15x is the sweet spot for learning: noticeably faster without feeling rushed
-                "speech_rate": 0.9 if policy.get("pacing") == "slow" else (1.6 if policy.get("pacing") == "fast" else 1.15),
+                "speech_rate": VOICE_SPEECH_RATE_SLOW if policy.get("pacing") == "slow" else (VOICE_SPEECH_RATE_FAST if policy.get("pacing") == "fast" else VOICE_SPEECH_RATE_NORMAL),
                 "learning_signals": extracted_signals,
                 "policy": policy,
                 "user_transcript_chunk": user_transcript_chunk,
@@ -1283,7 +1399,7 @@ Transcript with timestamps:
                 "action_summaries": action_summaries,
                 "is_eureka": is_eureka,
                 "is_fog_clearing": is_confused,
-                "fog_node_id": fog_result["node_id"] if fog_result else None
+                "fog_node_id": None  # fog_res not available in this code path
             }
         except Exception as e:
             import traceback

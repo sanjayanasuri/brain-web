@@ -8,25 +8,25 @@ import {
   getOrCreateBrowserSessionId,
 } from "../../lib/observability/correlation";
 import {
-  getFocusAreas,
-  listGraphs,
+  selectGraph,
   type FocusArea,
   type GraphSummary,
   type CalendarEvent,
   type LocationSuggestion,
 } from "../api-client";
 import SessionDrawer from "../components/navigation/SessionDrawer";
-import { fetchRecentSessions, type SessionSummary } from "../lib/eventsClient";
+import { type SessionSummary } from "../lib/eventsClient";
 import {
   getChatSessions,
   setCurrentSessionId,
   createChatSession,
   addMessageToSession,
   deleteChatSession,
-  fetchChatSessions,
   fetchChatHistory,
   type ChatSession,
 } from "../lib/chatSessions";
+import { useListGraphs, useFocusAreas, useRecentSessions, useChatSessions, APP_QUERY_KEYS } from "../hooks/useAppQueries";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   BranchProvider,
   useBranchContext,
@@ -37,6 +37,7 @@ import { consumeLectureLinkReturn } from "../lib/lectureLinkNavigation";
 import { createBranch } from "../lib/branchUtils";
 import { getAuthHeaders } from "../lib/authToken";
 import { useSidebar } from "../components/context-providers/SidebarContext";
+import { useSession } from "next-auth/react";
 import type { ChatMessage } from "../types/chat";
 import ContextPanel from "../components/context/ContextPanel";
 import DeepResearchWidget from "../components/DeepResearchWidget";
@@ -46,26 +47,42 @@ import ChatMessagesList from "../components/chat/ChatMessagesList";
 import StudyPanel from "../components/dashboard/StudyPanel";
 import VoiceAgentPanel from "../components/voice/VoiceAgentPanel";
 import { ActionButtons } from "../components/chat/ActionButtons";
+import HomeFeedCard from "../components/home/HomeFeedCard";
 
 function HomePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+  const { data: session } = useSession();
+  const rawName = (session?.user?.name ?? "").trim();
+  const firstName = rawName ? rawName.split(/\s+/)[0] : null;
+  const graphsQuery = useListGraphs();
+  const focusAreasQuery = useFocusAreas();
+  const recentSessionsQuery = useRecentSessions(10);
+  const chatSessionsQuery = useChatSessions();
+
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
-  const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);
-  const [activeGraphId, setActiveGraphId] = useState<string>("");
+  const focusAreas = focusAreasQuery.data ?? [];
+  const graphsData = graphsQuery.data;
+  const activeGraphIdFromApi = graphsData?.active_graph_id || graphsData?.graphs?.[0]?.graph_id || "";
+  const [activeGraphIdOverride, setActiveGraphIdOverride] = useState<string | null>(null);
+  const activeGraphId = activeGraphIdOverride ?? activeGraphIdFromApi;
+  const _graphs = graphsData?.graphs ?? [];
   const [_suggestedQuestions, setSuggestedQuestions] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [_graphs, setGraphs] = useState<GraphSummary[]>([]);
+  const recentSessions = recentSessionsQuery.data ?? [];
+  const chatSessions = (chatSessionsQuery.data ?? getChatSessions())
+    .slice()
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 5);
+  const sessionsLoading = graphsQuery.isLoading || focusAreasQuery.isLoading || recentSessionsQuery.isLoading || chatSessionsQuery.isLoading;
   const { isSidebarCollapsed, setIsSidebarCollapsed, showVoiceAgent, setShowVoiceAgent } = useSidebar();
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(false);
   const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(
     null,
   );
@@ -113,49 +130,23 @@ function HomePageInner() {
     return () => window.removeEventListener('brainweb:resetHome', handleReset);
   }, []);
 
-  // Load focus areas and active graph
+  // Restore current session ID from localStorage on mount
   useEffect(() => {
-    async function loadData() {
-      try {
-        const [areas, graphsData] = await Promise.all([
-          getFocusAreas().catch(() => []),
-          listGraphs().catch(() => ({ graphs: [], active_graph_id: "" })),
-        ]);
-        setFocusAreas(areas);
-        setActiveGraphId(
-          graphsData.active_graph_id || graphsData.graphs[0]?.graph_id || "",
-        );
-        setGraphs(graphsData.graphs || []);
-
-        // Load sessions
-        const sessions = await fetchRecentSessions(10);
-        setRecentSessions(sessions);
-
-        // Load chat sessions
-        const chats = await fetchChatSessions();
-        const sortedChats = [...chats].sort(
-          (a, b) => b.updatedAt - a.updatedAt,
-        );
-        setChatSessions(sortedChats.slice(0, 5));
-
-        // Load current session ID if exists (from localStorage)
-        if (typeof window !== "undefined") {
-          const storedSessionId = localStorage.getItem(
-            "brainweb:currentChatSession",
-          );
-          if (storedSessionId) {
-            setCurrentSessionIdState(storedSessionId);
-          }
-        }
-
-        setSessionsLoading(false);
-      } catch (err) {
-        console.error("Failed to load data:", err);
-        setSessionsLoading(false);
-      }
+    if (typeof window !== "undefined") {
+      const storedSessionId = localStorage.getItem("brainweb:currentChatSession");
+      if (storedSessionId) setCurrentSessionIdState(storedSessionId);
     }
-    loadData();
   }, []);
+
+  // Prefill query and enable web search when opened from extension "Search Brain Web for this"
+  useEffect(() => {
+    if (!searchParams) return;
+    const q = searchParams.get("web_search");
+    if (q != null && q.trim()) {
+      setQuery(q.trim());
+      setIsWebSearchEnabled(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const handleWindowClick = () => setContextMenu(null);
@@ -165,14 +156,14 @@ function HomePageInner() {
 
   const handleDeleteSession = useCallback((sessionId: string) => {
     deleteChatSession(sessionId);
-    setChatSessions(prev => prev.filter(s => s.id !== sessionId));
+    queryClient.invalidateQueries({ queryKey: APP_QUERY_KEYS.chatSessions });
     if (currentSessionId === sessionId) {
       setMessages([]);
       setQuery("");
       setCurrentSessionIdState(null);
     }
     setContextMenu(null);
-  }, [currentSessionId]);
+  }, [currentSessionId, queryClient]);
 
   const handleContextMenu = (e: React.MouseEvent, sessionId: string) => {
     e.preventDefault();
@@ -296,19 +287,16 @@ function HomePageInner() {
         setIsStreaming(false);
         setTimeout(() => setStatusMessages([]), 700);
 
-        // Auto-refresh graphs if a graph was created
+        // Auto-refresh graphs and select new graph if one was created
         if (receivedActions.some(action => action.type === 'view_graph')) {
-          try {
-            const graphsData = await listGraphs();
-            setGraphs(graphsData.graphs || []);
-
-            // Auto-select newly created graph if present
-            const newGraphAction = receivedActions.find(a => a.type === 'view_graph');
-            if (newGraphAction?.graph_id) {
-              setActiveGraphId(newGraphAction.graph_id);
+          const newGraphAction = receivedActions.find(a => a.type === 'view_graph');
+          if (newGraphAction?.graph_id) {
+            try {
+              await selectGraph(newGraphAction.graph_id);
+              await queryClient.invalidateQueries({ queryKey: ['graphs'] });
+            } catch (err) {
+              console.error("Failed to refresh graphs:", err);
             }
-          } catch (err) {
-            console.error("Failed to refresh graphs:", err);
           }
         }
 
@@ -336,24 +324,17 @@ function HomePageInner() {
             setCurrentSessionIdState(newSession.id);
             setCurrentSessionId(newSession.id);
 
-            // Refresh chat sessions list
-            const chats = getChatSessions();
-            const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
-            setChatSessions(sortedChats.slice(0, 5));
+            queryClient.invalidateQueries({ queryKey: APP_QUERY_KEYS.chatSessions });
           } else {
             addMessageToSession(
               currentSessionId,
               userMessage.content,
               answer,
               streamedAnswerId,
-              [], // suggestedQuestions not available in streaming
-              [], // evidenceUsed not available in streaming
+              [],
+              [],
             );
-
-            // Refresh chat sessions list
-            const chats = getChatSessions();
-            const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
-            setChatSessions(sortedChats.slice(0, 5));
+            queryClient.invalidateQueries({ queryKey: APP_QUERY_KEYS.chatSessions });
           }
         } catch (err) {
           console.error("Failed to save chat session:", err);
@@ -412,7 +393,7 @@ function HomePageInner() {
     async (chatSession: ChatSession) => {
       setCurrentSessionIdState(chatSession.id);
       setCurrentSessionId(chatSession.id);
-      setActiveGraphId(chatSession.graphId || "");
+      setActiveGraphIdOverride(chatSession.graphId || null);
 
       try {
         setLoading(true);
@@ -563,10 +544,12 @@ function HomePageInner() {
           <div
             style={{
               width: "100%",
+              maxWidth: "1120px",
               display: "flex",
               flexDirection: "column",
-              gap: "24px",
-              alignItems: "center",
+              gap: "20px",
+              alignItems: "stretch",
+              margin: "0 auto",
             }}
           >
             {messages.length === 0 && (
@@ -574,36 +557,26 @@ function HomePageInner() {
                 style={{
                   display: "flex",
                   flexDirection: "column",
-                  alignItems: "center",
-                  gap: "24px",
+                  alignItems: "stretch",
+                  gap: "16px",
                   width: "100%",
                   paddingTop: "0",
                 }}
               >
-                <div
-                  onClick={() => setShowVoiceAgent(true)}
-                  style={{
-                    width: "120px",
-                    height: "120px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    marginBottom: "0"
-                  }}
-                  title="Start Voice Session"
-                >
-                  <div style={{
-                    width: "80px",
-                    height: "80px",
-                    borderRadius: "50%",
-                    background: "var(--accent-gradient)",
-                    animation: "pulse 3s infinite ease-in-out",
-                    boxShadow: "0 0 50px rgba(37, 99, 235, 0.4)"
-                  }} />
-                </div>
-
-                <div style={{ textAlign: "center" }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                  <div style={{ textAlign: "left" }}>
+                  {firstName && (
+                    <div
+                      style={{
+                        fontSize: "clamp(1rem, 2vw, 1.25rem)",
+                        color: "var(--muted)",
+                        marginBottom: "8px",
+                        fontWeight: 500,
+                      }}
+                    >
+                      Hi, {firstName}.
+                    </div>
+                  )}
                   <div
                     style={{
                       fontSize: "clamp(32px, 5vw, 48px)",
@@ -627,7 +600,30 @@ function HomePageInner() {
                   >
                     Explore your knowledge graph or the web with agentic research.
                   </div>
+
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button className="ui-button" onClick={() => router.push('/explorer')}>Explorer</button>
+                    <button className="ui-button" onClick={() => router.push('/learn')}>Quiz Me</button>
+                    <button className="ui-button" onClick={() => router.push('/web-reader')}>Reader</button>
+                  </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowVoiceAgent(true)}
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: '50%',
+                      border: '1px solid var(--border)',
+                      background: 'var(--accent-gradient)',
+                      boxShadow: '0 6px 20px rgba(37,99,235,0.25)',
+                      cursor: 'pointer'
+                    }}
+                    title="Start Voice Session"
+                  />
                 </div>
+
+                <HomeFeedCard />
 
                 <form onSubmit={handleSubmit} style={{ width: "100%", maxWidth: "1000px", marginTop: "10px" }}>
                   <div
@@ -684,8 +680,8 @@ function HomePageInner() {
                 </form>
 
                 {/* Recent Conversations: Compact Vertical List */}
-                <div style={{ width: "100%", maxWidth: "600px", marginTop: "30px" }}>
-                  <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: "16px", textAlign: "center" }}>
+                <div style={{ width: "100%", maxWidth: "1000px", marginTop: "22px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: "12px", textAlign: "left" }}>
                     Recent Conversations
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>

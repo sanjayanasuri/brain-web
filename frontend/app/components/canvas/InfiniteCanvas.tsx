@@ -3,14 +3,22 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import getStroke from 'perfect-freehand';
-import { useFreeformCanvasStore } from '../../state/freeformCanvasStore';
-import { CanvasStroke, FPoint, TextBlock, ToolType } from '../../types/freeform-canvas';
+import { useFreeformCanvasStore, type InternalStore } from '../../state/freeformCanvasStore';
+import {
+  CanvasStroke,
+  DrawingBlock,
+  DrawingBlockStroke,
+  FPoint,
+  TextBlock,
+  ToolType,
+} from '../../types/freeform-canvas';
 
 interface InfiniteCanvasProps {
   activeTool: ToolType;
   activeColor: string;
   brushSize: number;
   onDirtyChange?: (dirtyAt: number) => void;
+  onDrawingBlockCreated?: () => void;
 }
 
 const WORLD_W = 8000;
@@ -81,6 +89,39 @@ function strokeDistanceAtPoint(stroke: CanvasStroke, x: number, y: number, thres
   return best;
 }
 
+function strokeDistanceAtPointBlockStroke(
+  stroke: DrawingBlockStroke,
+  localX: number,
+  localY: number,
+  threshold: number,
+): number {
+  const pts = stroke.points;
+  if (!pts.length) return Number.POSITIVE_INFINITY;
+  const bbox = getBoundingBox(pts);
+  const minX = bbox.x - threshold;
+  const minY = bbox.y - threshold;
+  const maxX = bbox.x + bbox.w + threshold;
+  const maxY = bbox.y + bbox.h + threshold;
+  if (localX < minX || localX > maxX || localY < minY || localY > maxY) {
+    return Number.POSITIVE_INFINITY;
+  }
+  if (pts.length === 1) return Math.hypot(localX - pts[0].x, localY - pts[0].y);
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 1; i < pts.length; i++) {
+    const d = distancePointToSegment(
+      localX,
+      localY,
+      pts[i - 1].x,
+      pts[i - 1].y,
+      pts[i].x,
+      pts[i].y,
+    );
+    if (d < best) best = d;
+    if (best <= threshold * 0.5) break;
+  }
+  return best;
+}
+
 function isClosedLoop(points: FPoint[]): boolean {
   if (points.length < 10) return false;
   const first = points[0];
@@ -139,6 +180,39 @@ function makePath(stroke: CanvasStroke) {
   return getSvgPathFromStroke(pfStroke);
 }
 
+function makePathForBlockStroke(stroke: DrawingBlockStroke): string {
+  const points = stroke.points.map((p) => [p.x, p.y, p.pressure ?? 0.5] as [number, number, number]);
+  if (points.length < 2) return '';
+  const pfStroke = getStroke(points, {
+    size: stroke.width,
+    thinning: stroke.tool === 'highlighter' ? 0 : 0.5,
+    smoothing: 0.5,
+    streamline: 0.35,
+    simulatePressure: true,
+  }) as number[][];
+  return getSvgPathFromStroke(pfStroke);
+}
+
+function drawingBlockToDataUrl(block: DrawingBlock): string {
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = block.w * scale;
+  canvas.height = block.h * scale;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, block.w, block.h);
+  for (const s of block.strokes) {
+    const pathStr = makePathForBlockStroke(s);
+    if (!pathStr) continue;
+    const path = new Path2D(pathStr);
+    ctx.fillStyle = s.tool === 'highlighter' ? hexToRgba(s.color, 0.35) : s.color;
+    ctx.fill(path);
+  }
+  return canvas.toDataURL('image/png');
+}
+
 function getArrowHead(points: FPoint[]) {
   if (points.length < 2) return null;
   let end = points[points.length - 1];
@@ -164,6 +238,7 @@ export default function InfiniteCanvas({
   activeColor,
   brushSize,
   onDirtyChange,
+  onDrawingBlockCreated,
 }: InfiniteCanvasProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const textRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -194,6 +269,7 @@ export default function InfiniteCanvas({
     startViewY: 0,
   });
   const draftStrokeRef = useRef<FPoint[]>([]);
+  const drawingBlockIdRef = useRef<string | null>(null);
   const textDragRef = useRef<{
     blockId: string;
     pointerId: number;
@@ -207,19 +283,25 @@ export default function InfiniteCanvas({
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [pendingFocusTextId, setPendingFocusTextId] = useState<string | null>(null);
   const [dragTextPreview, setDragTextPreview] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [ingestingBlockId, setIngestingBlockId] = useState<string | null>(null);
 
-  const strokes = useFreeformCanvasStore((s) => s.strokes);
-  const textBlocks = useFreeformCanvasStore((s) => s.textBlocks);
-  const viewX = useFreeformCanvasStore((s) => s.viewX);
-  const viewY = useFreeformCanvasStore((s) => s.viewY);
-  const zoom = useFreeformCanvasStore((s) => s.zoom);
-  const setView = useFreeformCanvasStore((s) => s.setView);
-  const addStroke = useFreeformCanvasStore((s) => s.addStroke);
-  const deleteStroke = useFreeformCanvasStore((s) => s.deleteStroke);
-  const addTextBlock = useFreeformCanvasStore((s) => s.addTextBlock);
-  const updateTextBlock = useFreeformCanvasStore((s) => s.updateTextBlock);
-  const patchTextBlock = useFreeformCanvasStore((s) => s.patchTextBlock);
-  const deleteTextBlock = useFreeformCanvasStore((s) => s.deleteTextBlock);
+  const strokes = useFreeformCanvasStore((s: InternalStore) => s.strokes);
+  const textBlocks = useFreeformCanvasStore((s: InternalStore) => s.textBlocks);
+  const drawingBlocks = useFreeformCanvasStore((s: InternalStore) => s.drawingBlocks);
+  const viewX = useFreeformCanvasStore((s: InternalStore) => s.viewX);
+  const viewY = useFreeformCanvasStore((s: InternalStore) => s.viewY);
+  const zoom = useFreeformCanvasStore((s: InternalStore) => s.zoom);
+  const setView = useFreeformCanvasStore((s: InternalStore) => s.setView);
+  const addStroke = useFreeformCanvasStore((s: InternalStore) => s.addStroke);
+  const deleteStroke = useFreeformCanvasStore((s: InternalStore) => s.deleteStroke);
+  const addTextBlock = useFreeformCanvasStore((s: InternalStore) => s.addTextBlock);
+  const updateTextBlock = useFreeformCanvasStore((s: InternalStore) => s.updateTextBlock);
+  const patchTextBlock = useFreeformCanvasStore((s: InternalStore) => s.patchTextBlock);
+  const deleteTextBlock = useFreeformCanvasStore((s: InternalStore) => s.deleteTextBlock);
+  const addDrawingBlock = useFreeformCanvasStore((s: InternalStore) => s.addDrawingBlock);
+  const addStrokeToDrawingBlock = useFreeformCanvasStore((s: InternalStore) => s.addStrokeToDrawingBlock);
+  const removeStrokeFromDrawingBlock = useFreeformCanvasStore((s: InternalStore) => s.removeStrokeFromDrawingBlock);
+  const deleteDrawingBlock = useFreeformCanvasStore((s: InternalStore) => s.deleteDrawingBlock);
 
   useEffect(() => {
     if (!pendingFocusTextId) return;
@@ -343,6 +425,36 @@ export default function InfiniteCanvas({
     }
 
     if (activeTool === 'eraser') {
+      const world = toWorld(e.clientX, e.clientY);
+      const block = [...drawingBlocks]
+        .reverse()
+        .find(
+          (b: DrawingBlock) =>
+            world.x >= b.x &&
+            world.x <= b.x + b.w &&
+            world.y >= b.y &&
+            world.y <= b.y + b.h,
+        );
+      if (block) {
+        const localX = world.x - block.x;
+        const localY = world.y - block.y;
+        const threshold = Math.max(10, brushSize * 1.15);
+        let bestIndex = -1;
+        let bestDist = Number.POSITIVE_INFINITY;
+        block.strokes.forEach((s: DrawingBlockStroke, idx: number) => {
+          const d = strokeDistanceAtPointBlockStroke(s, localX, localY, threshold);
+          if (d <= threshold && d < bestDist) {
+            bestDist = d;
+            bestIndex = idx;
+          }
+        });
+        if (bestIndex >= 0) {
+          removeStrokeFromDrawingBlock(block.id, bestIndex);
+          onDirtyChange?.(Date.now());
+          e.preventDefault();
+          return;
+        }
+      }
       gestureRef.current = {
         mode: 'erase',
         pointerId: e.pointerId,
@@ -369,7 +481,9 @@ export default function InfiniteCanvas({
       return;
     }
 
-    if (activeTool === 'text') {
+    // Pen = draw; touch/finger with text tool = don't create text block (so finger can pan elsewhere)
+    // Only mouse + text tool creates a text block on tap
+    if (activeTool === 'text' && e.pointerType === 'mouse') {
       const world = toWorld(e.clientX, e.clientY);
       const id = addTextBlock({
         text: '',
@@ -387,7 +501,36 @@ export default function InfiniteCanvas({
       return;
     }
 
+    if (activeTool === 'drawingBox') {
+      const world = toWorld(e.clientX, e.clientY);
+      addDrawingBlock({
+        x: world.x,
+        y: world.y,
+        w: 280,
+        h: 180,
+        strokes: [],
+        timestamp: Date.now(),
+      });
+      onDirtyChange?.(Date.now());
+      onDrawingBlockCreated?.();
+      e.preventDefault();
+      return;
+    }
+
     const world = toWorld(e.clientX, e.clientY);
+    if (activeTool === 'pen' || activeTool === 'highlighter') {
+      const block = [...drawingBlocks]
+        .reverse()
+        .find(
+          (b: DrawingBlock) =>
+            world.x >= b.x &&
+            world.x <= b.x + b.w &&
+            world.y >= b.y &&
+            world.y <= b.y + b.h,
+        );
+      if (block) drawingBlockIdRef.current = block.id;
+    }
+
     const p: FPoint = {
       x: world.x,
       y: world.y,
@@ -468,18 +611,38 @@ export default function InfiniteCanvas({
   function finalizeGesture(e?: ReactPointerEvent<HTMLDivElement>) {
     const gesture = gestureRef.current;
     if (gesture.mode === 'draw' && draftStrokeRef.current.length > 1) {
-      const bbox = getBoundingBox(draftStrokeRef.current);
-      addStroke({
-        tool: activeTool,
-        color: activeColor,
-        width: brushSize,
-        points: draftStrokeRef.current,
-        timestamp: Date.now(),
-        canvasX: bbox.x,
-        canvasY: bbox.y,
-        canvasW: bbox.w,
-        canvasH: bbox.h,
-      });
+      const blockId = drawingBlockIdRef.current;
+      if (blockId) {
+        const block = drawingBlocks.find((b: DrawingBlock) => b.id === blockId);
+        if (block) {
+          const localPoints: FPoint[] = draftStrokeRef.current.map((p) => ({
+            x: p.x - block.x,
+            y: p.y - block.y,
+            pressure: p.pressure ?? 0.5,
+          }));
+          addStrokeToDrawingBlock(blockId, {
+            tool: activeTool as 'pen' | 'highlighter',
+            color: activeColor,
+            width: brushSize,
+            points: localPoints,
+            timestamp: Date.now(),
+          });
+        }
+        drawingBlockIdRef.current = null;
+      } else {
+        const bbox = getBoundingBox(draftStrokeRef.current);
+        addStroke({
+          tool: activeTool,
+          color: activeColor,
+          width: brushSize,
+          points: draftStrokeRef.current,
+          timestamp: Date.now(),
+          canvasX: bbox.x,
+          canvasY: bbox.y,
+          canvasW: bbox.w,
+          canvasH: bbox.h,
+        });
+      }
       onDirtyChange?.(Date.now());
     }
     draftStrokeRef.current = [];
@@ -599,7 +762,7 @@ export default function InfiniteCanvas({
           viewBox={`0 0 ${WORLD_W} ${WORLD_H}`}
           style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible' }}
         >
-          {strokes.map((stroke) => {
+          {strokes.map((stroke: CanvasStroke) => {
             const path = makePath(stroke);
             if (!path) return null;
             const closed = isClosedLoop(stroke.points);
@@ -658,7 +821,7 @@ export default function InfiniteCanvas({
           )}
         </svg>
 
-        {textBlocks.map((block) => {
+        {textBlocks.map((block: TextBlock) => {
           const previewPos = dragTextPreview?.id === block.id ? dragTextPreview : null;
           const blockX = previewPos?.x ?? block.x;
           const blockY = previewPos?.y ?? block.y;
@@ -757,6 +920,122 @@ export default function InfiniteCanvas({
                 }}
               >
                 {block.text}
+              </div>
+            </div>
+          );
+        })}
+
+        {drawingBlocks.map((block: DrawingBlock) => {
+          const isIngesting = ingestingBlockId === block.id;
+          return (
+            <div
+              key={block.id}
+              style={{
+                position: 'absolute',
+                left: block.x,
+                top: block.y,
+                width: block.w,
+                height: block.h,
+                pointerEvents: 'none',
+                background: 'rgba(255,255,255,0.92)',
+                border: '1px solid rgba(107,114,128,0.25)',
+                borderRadius: 10,
+                boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+                overflow: 'hidden',
+              }}
+            >
+              <svg
+                width={block.w}
+                height={block.h}
+                viewBox={`0 0 ${block.w} ${block.h}`}
+                style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+              >
+                {block.strokes.map((s: DrawingBlockStroke, idx: number) => {
+                  const path = makePathForBlockStroke(s);
+                  if (!path) return null;
+                  const fillColor =
+                    s.tool === 'highlighter' ? hexToRgba(s.color, 0.35) : s.color;
+                  return (
+                    <path
+                      key={idx}
+                      d={path}
+                      fill={fillColor}
+                      stroke="none"
+                      opacity={s.tool === 'highlighter' ? 0.45 : 1}
+                    />
+                  );
+                })}
+              </svg>
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 6,
+                  right: 6,
+                  display: 'flex',
+                  gap: 6,
+                  pointerEvents: 'auto',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={async (ev) => {
+                    ev.stopPropagation();
+                    if (isIngesting || block.strokes.length === 0) return;
+                    setIngestingBlockId(block.id);
+                    try {
+                      const dataUrl = drawingBlockToDataUrl(block);
+                      await fetch('/api/lectures/ingest-ink', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          image_data: dataUrl,
+                          lecture_title: 'Freeform drawing',
+                        }),
+                      });
+                      deleteDrawingBlock(block.id);
+                      onDirtyChange?.(Date.now());
+                    } catch (err) {
+                      console.error('Ingest drawing block failed:', err);
+                    } finally {
+                      setIngestingBlockId(null);
+                    }
+                  }}
+                  disabled={isIngesting || block.strokes.length === 0}
+                  title="Ingest into knowledge graph"
+                  style={{
+                    padding: '6px 10px',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: isIngesting ? 'var(--muted)' : 'var(--surface)',
+                    color: 'var(--ink)',
+                    cursor: isIngesting || block.strokes.length === 0 ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {isIngesting ? '…' : 'Ingest'}
+                </button>
+                <button
+                  type="button"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    deleteDrawingBlock(block.id);
+                    onDirtyChange?.(Date.now());
+                  }}
+                  title="Remove drawing box"
+                  style={{
+                    padding: 6,
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'var(--surface)',
+                    color: 'var(--muted)',
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    lineHeight: 1,
+                  }}
+                >
+                  ×
+                </button>
               </div>
             </div>
           );

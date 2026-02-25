@@ -9,7 +9,7 @@ const handler = NextAuth({
                 email: { label: "Email", type: "email", placeholder: "you@example.com" },
                 password: { label: "Password", type: "password" }
             },
-            async authorize(credentials) {
+            async authorize(credentials: { email?: string; password?: string } | undefined) {
                 if (!credentials?.email || !credentials?.password) {
                     console.log('[NextAuth] Missing credentials');
                     return null;
@@ -56,7 +56,7 @@ const handler = NextAuth({
         })
     ],
     callbacks: {
-        async jwt({ token, user, account }) {
+        async jwt({ token, user, account }: { token: any; user?: any; account?: any }) {
             // Persist the OAuth access_token and or the user id to the token
             if (user) {
                 token.id = user.id;
@@ -65,7 +65,7 @@ const handler = NextAuth({
             }
             return token;
         },
-        async session({ session, token }) {
+        async session({ session, token }: { session: any; token: any }) {
             // Send properties to the client
             if (token) {
                 (session as any).user.id = token.id;

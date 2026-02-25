@@ -9,6 +9,7 @@ import logging
 from typing import List, Dict, Optional
 from datetime import datetime
 from pydantic import BaseModel
+from services_memory_promotion import MemorySignal, promote_memory_signal
 
 logger = logging.getLogger("brain_web")
 
@@ -201,6 +202,24 @@ async def store_facts_in_neo4j(
             )
             
             logger.info(f"Stored fact: {fact.content} (type: {fact.fact_type})")
+
+            # Promote into active/long-term memory when signal quality is high.
+            try:
+                explicit = fact.fact_type in {"goal", "preference", "personal_info"}
+                promote_memory_signal(
+                    MemorySignal(
+                        user_id=user_id,
+                        tenant_id=tenant_id,
+                        source="fact_extractor",
+                        memory_type=fact.fact_type,
+                        content=fact.content,
+                        confidence=float(fact.confidence or 0.5),
+                        explicit=explicit,
+                        metadata={"chat_id": chat_id, "related_concepts": fact.related_concepts or []},
+                    )
+                )
+            except Exception as promo_err:
+                logger.debug(f"Memory promotion skipped: {promo_err}")
             
         except Exception as e:
             logger.error(f"Failed to store fact in Neo4j: {e}")

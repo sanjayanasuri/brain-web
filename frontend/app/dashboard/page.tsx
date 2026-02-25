@@ -6,6 +6,7 @@ import ExamManager from '../components/dashboard/ExamManager';
 import SignalsView from '../components/dashboard/SignalsView';
 import WorkflowStatusView from '../components/dashboard/WorkflowStatusView';
 import SuggestedPlan from '../components/dashboard/SuggestedPlan';
+import InterestSuggestionsView from '../components/dashboard/InterestSuggestionsView';
 import TaskQuickAdd from '../components/dashboard/TaskQuickAdd';
 import { useState, useEffect } from 'react';
 
@@ -51,6 +52,7 @@ export default function DashboardPage() {
             <TaskQuickAdd onTaskCreated={handleTaskCreated} />
           </div>
           <StudyDashboard />
+          <InterestSuggestionsView />
           <SignalsView />
           <SuggestedPlan key={refreshKey} daysAhead={7} />
         </div>

@@ -1,4 +1,5 @@
 import { getApiHeaders } from '../api/base';
+import { UnauthorizedError } from './UnauthorizedError';
 
 export interface ChatSession {
   id: string;
@@ -57,6 +58,7 @@ export async function fetchChatSessions(): Promise<ChatSession[]> {
   try {
     const headers = await getApiHeaders();
     const response = await fetch('/api/brain-web/ai/chat/sessions', { headers });
+    if (response.status === 401) throw new UnauthorizedError();
     if (!response.ok) throw new Error('Failed to fetch sessions');
     const data = await response.json();
 
@@ -67,6 +69,7 @@ export async function fetchChatSessions(): Promise<ChatSession[]> {
     }
     return sessions;
   } catch (err) {
+    if (err instanceof UnauthorizedError) throw err;
     console.warn('Failed to fetch sessions from backend, using local:', err);
     return getChatSessions();
   }

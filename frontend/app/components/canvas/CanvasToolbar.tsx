@@ -140,6 +140,7 @@ export default function CanvasToolbar({
             ['highlighter', 'H'],
             ['eraser', 'E'],
             ['text', 'T'],
+            ['drawingBox', 'B'],
             ['select', 'V'],
           ] as [ToolType, string][]).map(([tool, shortcut]) => (
             <button

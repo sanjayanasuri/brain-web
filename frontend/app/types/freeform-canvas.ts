@@ -1,4 +1,4 @@
-export type ToolType = 'pen' | 'highlighter' | 'eraser' | 'text' | 'select';
+export type ToolType = 'pen' | 'highlighter' | 'eraser' | 'text' | 'select' | 'drawingBox';
 
 export interface FPoint {
   x: number;
@@ -41,9 +41,29 @@ export interface CanvasPhase {
   createdAt: number;
 }
 
+/** Stroke inside a drawing block; points are in block-local coordinates (0..w, 0..h). */
+export interface DrawingBlockStroke {
+  tool: 'pen' | 'highlighter' | 'eraser';
+  color: string;
+  width: number;
+  points: FPoint[];
+  timestamp: number;
+}
+
+export interface DrawingBlock {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  strokes: DrawingBlockStroke[];
+  timestamp: number;
+}
+
 export interface FreeformCanvasState {
   strokes: CanvasStroke[];
   textBlocks: TextBlock[];
+  drawingBlocks: DrawingBlock[];
   phases: CanvasPhase[];
   viewX: number;
   viewY: number;

@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from services_feedback_classifier import (
     infer_feedback_signals,
     should_run_feedback_classifier,

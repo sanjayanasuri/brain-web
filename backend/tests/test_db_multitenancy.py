@@ -7,8 +7,10 @@ Tests concept creation and isolation without requiring the API server.
 import os
 import sys
 
-# Set up path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
+# Set up path so config/neo4j are importable when run from backend/ or repo root
+_here = os.path.dirname(os.path.abspath(__file__))
+_backend = os.path.join(_here, "..") if os.path.basename(_here) == "tests" else os.path.join(_here, "backend")
+sys.path.insert(0, os.path.abspath(_backend))
 
 def test_multitenancy():
     """Test multi-tenancy by directly using Neo4j driver."""

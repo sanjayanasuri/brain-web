@@ -49,7 +49,12 @@
       "content_mode": "text",
       "content_max_characters": 16000,
       "max_age_hours": 24,
-      "include_domains": ["github.com", "stackoverflow.com", "developer.mozilla.org", "docs.python.org"]
+      "include_domains": [
+        "github.com",
+        "stackoverflow.com",
+        "developer.mozilla.org",
+        "docs.python.org"
+      ]
     },
     "wiki_lookup": {
       "type": "auto",
@@ -57,44 +62,125 @@
       "content_mode": "text",
       "content_max_characters": 14000,
       "max_age_hours": 168,
-      "include_domains": ["wikipedia.org"]
+      "include_domains": [
+        "wikipedia.org"
+      ]
+    },
+    "learning_docs": {
+      "type": "auto",
+      "category": null,
+      "content_mode": "text",
+      "content_max_characters": 16000,
+      "max_age_hours": null,
+      "include_domains": [
+        "wikipedia.org",
+        "developer.mozilla.org",
+        "docs.python.org",
+        "khanacademy.org",
+        "arxiv.org",
+        "edu",
+        "learn.microsoft.com",
+        "react.dev"
+      ]
     }
   },
   "rules": [
     {
       "name": "explicit_wikipedia",
       "profile": "wiki_lookup",
-      "match_any": ["wikipedia", "wiki"]
+      "match_any": [
+        "wikipedia",
+        "wiki"
+      ]
     },
     {
       "name": "breaking_news",
       "profile": "news_live",
-      "match_any": ["breaking", "latest", "news", "today", "announced", "update", "headline"]
+      "match_any": [
+        "breaking",
+        "latest",
+        "news",
+        "today",
+        "announced",
+        "update",
+        "headline"
+      ]
     },
     {
       "name": "research_papers",
       "profile": "research_paper",
-      "match_any": ["research paper", "paper", "arxiv", "preprint", "study"]
+      "match_any": [
+        "research paper",
+        "paper",
+        "arxiv",
+        "preprint",
+        "study"
+      ]
     },
     {
       "name": "people_profiles",
       "profile": "people_entity",
-      "match_any": ["who is", "founder", "ceo", "linkedin profile", "researcher", "profile"]
+      "match_any": [
+        "who is",
+        "founder",
+        "ceo",
+        "linkedin profile",
+        "researcher",
+        "profile"
+      ]
     },
     {
       "name": "company_lookup",
       "profile": "company_entity",
-      "match_any": ["company", "startup", "firm", "business", "organization"]
+      "match_any": [
+        "company",
+        "startup",
+        "firm",
+        "business",
+        "organization"
+      ]
     },
     {
       "name": "social_posts",
       "profile": "tweet_social",
-      "match_any": ["tweet", "twitter", "x post"]
+      "match_any": [
+        "tweet",
+        "twitter",
+        "x post"
+      ]
     },
     {
       "name": "coding_docs",
       "profile": "code_docs",
-      "match_any": ["stackoverflow", "github repo", "docs", "api docs", "python docs", "typescript docs", "reference implementation"]
+      "match_any": [
+        "stackoverflow",
+        "github repo",
+        "docs",
+        "api docs",
+        "python docs",
+        "typescript docs",
+        "reference implementation"
+      ]
+    },
+    {
+      "name": "learning_explain",
+      "profile": "learning_docs",
+      "match_any": [
+        "explain",
+        "how does",
+        "how do",
+        "what is",
+        "what are",
+        "tutorial",
+        "learn",
+        "prerequisite",
+        "prerequisites",
+        "example",
+        "examples",
+        "definition",
+        "step by step",
+        "beginners guide"
+      ]
     }
   ]
 }

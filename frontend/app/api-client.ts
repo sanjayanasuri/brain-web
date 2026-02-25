@@ -29,6 +29,14 @@ export * from './api/refresh';
 export * from './api/templates';
 export * from './api/note-images';
 export * from './api/fill';
+export * from './api/assistant';
+export * from './api/home';
+export * from './api/capture';
+export * from './api/indexing';
+export * from './api/reader';
+export * from './api/reader-annotations';
+export * from './api/learning';
+export * from './api/agent-ops';
 
 export async function createAnchorBranch(payload: {
     artifact: any;

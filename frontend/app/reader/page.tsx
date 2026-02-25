@@ -46,12 +46,12 @@ export default function ReaderPage() {
         setLoading(true);
         setError(null);
 
-        // Load concept
-        const conceptData = await getConcept(conceptId);
+        // Load concept and resources in parallel (avoid waterfall)
+        const [conceptData, resourcesData] = await Promise.all([
+          getConcept(conceptId),
+          getResourcesForConcept(conceptId),
+        ]);
         setConcept(conceptData);
-
-        // Load resources for concept
-        const resourcesData = await getResourcesForConcept(conceptId);
         setResources(resourcesData);
 
         // Select the specified resource, or default to newest

@@ -77,8 +77,10 @@ export default function ContinueBlock({ graphId, onPathResume }: ContinueBlockPr
         return '📌';
       case 'START_PATH':
         return '→';
-      default:
+      default: {
+        const _: never = kind;
         return '•';
+      }
     }
   };
 

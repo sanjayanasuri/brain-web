@@ -41,9 +41,11 @@ interface SearchBoxProps {
   onSelectResult?: (result: SearchResult) => void;
   placeholder?: string;
   style?: React.CSSProperties;
+  /** For Playwright and tests; e.g. "explorer-toolbar-search-input" */
+  dataTestId?: string;
 }
 
-export default function SearchBox({ activeGraphId, graphs, onSelectResult, placeholder = "Search or type a command…", style }: SearchBoxProps) {
+export default function SearchBox({ activeGraphId, graphs, onSelectResult, placeholder = "Search or type a command…", style, dataTestId }: SearchBoxProps) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -74,40 +76,31 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Load recents when query is empty
+  // Load recents when query is empty (fetch concepts in parallel)
   const loadRecents = useCallback(async () => {
     try {
       const recentConceptViews = getRecentConceptViews().slice(0, 6);
-      const recentConcepts: ConceptSearchResult[] = [];
+      let conceptIds: string[] = [];
 
       try {
         const events = await fetchRecentEvents({ limit: 20, graph_id: activeGraphId || undefined });
-        const conceptEvents = events
-          .filter(e => e.type === 'CONCEPT_VIEWED' && e.concept_id)
-          .slice(0, 6);
-
-        for (const event of conceptEvents) {
-          if (event.concept_id) {
-            try {
-              const concept = await getConcept(event.concept_id);
-              recentConcepts.push({ type: 'concept', concept });
-            } catch {
-              // Skip if concept not found
-            }
-          }
-        }
+        conceptIds = events
+          .filter((e): e is typeof e & { concept_id: string } => e.type === 'CONCEPT_VIEWED' && !!e.concept_id)
+          .slice(0, 6)
+          .map(e => e.concept_id);
       } catch {
-        // Fallback to localStorage
-        for (const view of recentConceptViews) {
-          try {
-            const concept = await getConcept(view.id);
-            recentConcepts.push({ type: 'concept', concept });
-          } catch {
-            // Skip if concept not found
-          }
-        }
+        conceptIds = recentConceptViews.map(v => v.id);
       }
 
+      if (conceptIds.length === 0) {
+        setSearchResults([]);
+        return;
+      }
+
+      const results = await Promise.allSettled(conceptIds.map(id => getConcept(id)));
+      const recentConcepts: ConceptSearchResult[] = results
+        .filter((r): r is PromiseFulfilledResult<Concept> => r.status === 'fulfilled')
+        .map(r => ({ type: 'concept' as const, concept: r.value }));
       setSearchResults(recentConcepts);
     } catch (err) {
       console.warn('Failed to load recents:', err);
@@ -503,11 +496,12 @@ export default function SearchBox({ activeGraphId, graphs, onSelectResult, place
   }, [searchFocused]);
 
   return (
-    <div style={{ position: 'relative', ...style }}>
+    <div style={{ position: 'relative', ...style }} data-testid={dataTestId ? `${dataTestId}-wrapper` : undefined}>
       <input
         ref={searchInputRef}
         type="text"
         placeholder={placeholder}
+        data-testid={dataTestId}
         value={searchQuery}
         onChange={(e) => {
           setSearchQuery(e.target.value);

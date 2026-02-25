@@ -38,7 +38,8 @@ import {
   createSnapshot,
   listSnapshots,
   restoreSnapshot,
-  listGraphs
+  listGraphs,
+  createAnchorBranch
 } from '../../api-client';
 
 import { useGraphData } from './hooks/useGraphData';
@@ -265,44 +266,36 @@ function GraphVisualizationInner() {
       const snippetUrl = intent.snippetUrl;
 
       // Create anchor branch
-      import('../../api-client').then(({ createAnchorBranch }) => {
-        createAnchorBranch({
-          artifact: {
-            namespace: 'global',
-            type: 'whiteboard',
-            id: 'main-graph-whiteboard', // TODO: support multiple whiteboards
-            graph_id: activeGraphId
-          },
-          bbox: {
-            kind: 'bbox',
-            x: bounds.x,
-            y: bounds.y,
-            w: bounds.w,
-            h: bounds.h,
-            unit: 'px',
-            image_width: intent.canvas?.width,
-            image_height: intent.canvas?.height
-          },
-          snippet_image_data_url: snippetUrl,
-          preview: "Graph Annotation",
-          context: "User created a thread from a graph annotation."
-        }).then(response => {
-          if (response.branch) {
-            // Switch to new branch
-            setActiveBranchId(response.branch.branch_id);
-            // Open chat panel (if not already)
-            // We need to ensure chat is visible. 
-            // GraphChatPanel is always rendered but maybe collapsed?
-            if (chat.state.isChatCollapsed) {
-              chat.actions.setChatCollapsed(false);
-            }
-            // Maybe set InteractionMode back to select?
-            setInteractionMode('select');
+      createAnchorBranch({
+        artifact: {
+          namespace: 'global',
+          type: 'whiteboard',
+          id: 'main-graph-whiteboard', // TODO: support multiple whiteboards
+          graph_id: activeGraphId
+        },
+        bbox: {
+          kind: 'bbox',
+          x: bounds.x,
+          y: bounds.y,
+          w: bounds.w,
+          h: bounds.h,
+          unit: 'px',
+          image_width: intent.canvas?.width,
+          image_height: intent.canvas?.height
+        },
+        snippet_image_data_url: snippetUrl,
+        preview: "Graph Annotation",
+        context: "User created a thread from a graph annotation."
+      }).then(response => {
+        if (response.branch) {
+          setActiveBranchId(response.branch.branch_id);
+          if (chat.state.isChatCollapsed) {
+            chat.actions.setChatCollapsed(false);
           }
-        }).catch(err => {
-          console.error("Failed to create whiteboard branch:", err);
-          // alert("Failed to create thread.");
-        });
+          setInteractionMode('select');
+        }
+      }).catch(err => {
+        console.error("Failed to create whiteboard branch:", err);
       });
       return;
     }
@@ -419,8 +412,9 @@ function GraphVisualizationInner() {
   }, [graphData.nodes, router, searchParams]);
 
   return (
-    <div className="app-shell" style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', padding: 0, margin: 0 }}>
+    <div className="app-shell" data-testid="explorer-page" style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', padding: 0, margin: 0 }}>
       {/* Background layer: Graph */}
+      <div data-testid="explorer-graph-area" style={{ position: 'absolute', inset: 0 }}>
       <GraphCanvas
         graphRef={graphRef}
         graphCanvasRef={graphCanvasRef}
@@ -446,6 +440,7 @@ function GraphVisualizationInner() {
         recomputeDomainBubbles={interactionHook.recomputeDomainBubbles}
         hoveredNodeId={hoveredNodeId}
       />
+      </div>
 
       {/* UI Overlay layer */}
       <div className="explorer-overlay-container" style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: 0, margin: 0, pointerEvents: 'none', zIndex: 10 }}>
@@ -595,7 +590,7 @@ function GraphVisualizationInner() {
         <div className="explorer-panels-layout">
           {/* Legend - Moved to Top Left underneath toolbar or absolute */}
           {showLegend && (
-            <div style={{
+            <div data-testid="explorer-legend" style={{
               position: 'absolute',
               top: '120px',
               left: '20px',

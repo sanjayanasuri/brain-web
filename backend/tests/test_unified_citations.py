@@ -1,6 +1,9 @@
 """
 Unit tests for services_unified_citations (Phase C).
 """
+import pytest
+
+pytestmark = pytest.mark.unit
 
 from services_unified_citations import build_retrieval_citations
 

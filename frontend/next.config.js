@@ -1,4 +1,9 @@
-const { withSentryConfig } = require('@sentry/nextjs');
+let withSentryConfig = (config) => config;
+try {
+  withSentryConfig = require('@sentry/nextjs').withSentryConfig;
+} catch {
+  // Sentry optional: app can build/run without it (e.g. CI, minimal install)
+}
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -14,7 +19,6 @@ const nextConfig = {
     // your project has type errors.
     // ignoreBuildErrors: false, // Keep this false to catch type errors
   },
-  // Performance optimizations
   swcMinify: true,
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? {
@@ -23,7 +27,7 @@ const nextConfig = {
   },
   // Experimental features for faster compilation
   experimental: {
-    // Enable faster refresh
+    // Tree-shake large packages (smaller client bundles)
     optimizePackageImports: [
       '@tanstack/react-query',
       '@tiptap/react',
@@ -31,6 +35,7 @@ const nextConfig = {
       'react-force-graph-2d',
       'react-force-graph-3d',
       'd3-force',
+      'lucide-react',
     ],
   },
   // Allow loading external modules for graph visualization
@@ -77,7 +82,6 @@ module.exports = withSentryConfig(nextConfig, {
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
 }, {
-  // Hide source maps from client bundles while still uploading when auth token is set.
   hideSourceMaps: true,
   disableLogger: true,
 });

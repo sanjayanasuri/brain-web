@@ -5,6 +5,8 @@
  */
 
 import { create } from 'zustand';
+import type { StoreApi } from 'zustand/vanilla';
+import type { UseBoundStore } from 'zustand/react';
 
 export interface PerformanceTrend {
     date: string;
@@ -84,7 +86,8 @@ interface AnalyticsState {
     clearAnalytics: () => void;
 }
 
-export const useAnalyticsStore = create<AnalyticsState>((set) => ({
+export const useAnalyticsStore = create(
+  (set: StoreApi<AnalyticsState>['setState']) => ({
     // Initial state
     trends: [],
     mastery: [],
@@ -97,26 +100,26 @@ export const useAnalyticsStore = create<AnalyticsState>((set) => ({
     selectedDateRange: 30,
 
     // Actions
-    setTrends: (trends) => set({ trends }),
+    setTrends: (trends: PerformanceTrend[]) => set({ trends }),
 
-    setMastery: (mastery) => set({ mastery }),
+    setMastery: (mastery: ConceptMastery[]) => set({ mastery }),
 
-    setVelocity: (velocity) => set({ velocity }),
+    setVelocity: (velocity: LearningVelocity) => set({ velocity }),
 
-    setWeakAreas: (areas) => set({ weakAreas: areas }),
+    setWeakAreas: (areas: { weak_concepts: WeakArea[]; weak_task_types: WeakArea[] }) => set({ weakAreas: areas }),
 
-    setRecommendations: (recs) => set({ recommendations: recs }),
+    setRecommendations: (recs: Recommendation[]) => set({ recommendations: recs }),
 
-    setStats: (stats) => set({ stats }),
+    setStats: (stats: SessionStats) => set({ stats }),
 
-    setLoading: (loading) => set({ isLoading: loading }),
+    setLoading: (loading: boolean) => set({ isLoading: loading }),
 
-    setError: (error) => set({ error }),
+    setError: (error: string | null) => set({ error }),
 
-    setDateRange: (days) => set({ selectedDateRange: days }),
+    setDateRange: (days: number) => set({ selectedDateRange: days }),
 
-    removeRecommendation: (id) => set((state) => ({
-        recommendations: state.recommendations.filter(r => r.id !== id)
+    removeRecommendation: (id: string) => set((state: AnalyticsState) => ({
+        recommendations: state.recommendations.filter((r: Recommendation) => r.id !== id)
     })),
 
     clearAnalytics: () => set({
@@ -128,4 +131,5 @@ export const useAnalyticsStore = create<AnalyticsState>((set) => ({
         stats: null,
         error: null
     }),
-}));
+  }),
+) as unknown as UseBoundStore<StoreApi<AnalyticsState>>;

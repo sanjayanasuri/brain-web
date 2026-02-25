@@ -69,8 +69,10 @@ export function isItemSaved(kind: SavedItemKind, id: string): boolean {
         return item.path_id === id;
       case 'CONCEPT':
         return item.concept_id === id;
-      default:
+      default: {
+        const _: never = kind;
         return false;
+      }
     }
   });
 }
@@ -89,8 +91,10 @@ export function getSavedItem(kind: SavedItemKind, id: string): SavedItem | null 
         return item.path_id === id;
       case 'CONCEPT':
         return item.concept_id === id;
-      default:
+      default: {
+        const _: never = kind;
         return false;
+      }
     }
   }) || null;
 }

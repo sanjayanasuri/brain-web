@@ -1,5 +1,7 @@
 """Tests for event system."""
 import pytest
+
+pytestmark = pytest.mark.unit
 import os
 import tempfile
 from datetime import datetime

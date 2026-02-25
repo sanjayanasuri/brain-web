@@ -43,8 +43,11 @@ def _require_uuid(value: str, *, field_name: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid {field_name} (expected UUID)")
 
 
-def _enforce_ingest_rate_limit(*, user_id: str) -> None:
-    allowed = allow_fixed_window(key=f"ingest:{user_id}", limit_per_min=int(INGEST_RATE_LIMIT_PER_MINUTE))
+def _enforce_ingest_rate_limit(*, tenant_id: str, user_id: str) -> None:
+    allowed = allow_fixed_window(
+        key=f"ingest:{tenant_id}:{user_id}",
+        limit_per_min=int(INGEST_RATE_LIMIT_PER_MINUTE),
+    )
     if not allowed:
         raise HTTPException(status_code=429, detail="Rate limited")
 
@@ -66,7 +69,7 @@ def ingest_url(payload: IngestUrlRequest, auth: dict = Depends(require_auth)) ->
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
-    _enforce_ingest_rate_limit(user_id=user_id)
+    _enforce_ingest_rate_limit(tenant_id=tenant_id, user_id=user_id)
 
     content_type = payload.type_hint or ContentItemType.article
     content_item_id = create_content_item(
@@ -104,7 +107,7 @@ def ingest_text(payload: IngestTextRequest, auth: dict = Depends(require_auth)) 
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
-    _enforce_ingest_rate_limit(user_id=user_id)
+    _enforce_ingest_rate_limit(tenant_id=tenant_id, user_id=user_id)
 
     content_item_id = create_content_item(
         user_id=user_id,
@@ -139,7 +142,7 @@ async def ingest_upload(
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Tenant context missing")
 
-    _enforce_ingest_rate_limit(user_id=user_id)
+    _enforce_ingest_rate_limit(tenant_id=tenant_id, user_id=user_id)
 
     content = await file.read()
     if not content:

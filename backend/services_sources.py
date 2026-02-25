@@ -3,11 +3,11 @@ Service for managing SourceDocument nodes in Neo4j.
 SourceDocument represents external documents (web pages, uploads, etc.) before ingestion.
 """
 from typing import Optional, Dict, Any
-from datetime import datetime
 from neo4j import Session
 import hashlib
 import json
 
+from utils.timestamp import utcnow_ms
 from services_branch_explorer import (
     ensure_graph_scoping_initialized,
     get_active_graph_context,
@@ -63,7 +63,7 @@ def upsert_source_document(
     doc_id = _generate_doc_id(source, external_id)
     checksum = _compute_checksum(text) if text else None
     metadata_str = json.dumps(metadata) if metadata else None
-    now_ts = int(datetime.utcnow().timestamp() * 1000)  # milliseconds
+    now_ts = utcnow_ms()
     
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
@@ -138,7 +138,7 @@ def mark_source_document_status(
     """
     ensure_graph_scoping_initialized(session)
     
-    now_ts = int(datetime.utcnow().timestamp() * 1000)
+    now_ts = utcnow_ms()
     
     query = """
     MATCH (d:SourceDocument {graph_id: $graph_id, doc_id: $doc_id})

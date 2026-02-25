@@ -2,6 +2,8 @@
 Event schema for event-driven integration.
 
 Defines typed event envelopes, event types, and object references.
+OpenTelemetry: set trace_id (e.g. request_id or OTEL trace id) and correlation_id
+on EventEnvelope so events can be correlated in traces and logs.
 """
 from enum import Enum
 from typing import Any, Dict, Optional

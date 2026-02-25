@@ -72,6 +72,8 @@ def get_unified_context(
     """
     context = {
         "user_facts": "",
+        "promoted_memories": "",
+        "recent_memory_events": "",
         "user_identity": {}, # Goals, Background
         "tutor_persona": {}, # Personality parameters
         "lecture_context": "",
@@ -80,24 +82,71 @@ def get_unified_context(
         "recent_topics": "",  # cross-surface ambient context
     }
     
-    # 1. Long-term memory: User facts from Neo4j
+    # 1. Long-term memory: User facts from Neo4j + consolidated profile facts (Postgres)
     if include_user_facts:
+        facts_chunks = []
         try:
             from services_fact_extractor import get_user_facts, format_user_facts_for_prompt
-            
+
             facts = get_user_facts(
                 user_id=user_id,
                 tenant_id=tenant_id,
                 session=session,
                 limit=5
             )
-            
+
             if facts:
-                context["user_facts"] = format_user_facts_for_prompt(facts)
-                logger.debug(f"Loaded {len(facts)} user facts")
+                facts_chunks.append(format_user_facts_for_prompt(facts))
+                logger.debug(f"Loaded {len(facts)} neo4j user facts")
         except Exception as e:
-            logger.warning(f"Failed to load user facts: {e}")
+            logger.warning(f"Failed to load neo4j user facts: {e}")
+
+        try:
+            rows = execute_query(
+                """
+                SELECT fact_type, fact_value, confidence
+                FROM user_profile_facts
+                WHERE user_id=%s AND tenant_id=%s AND active=TRUE
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT 8
+                """,
+                (str(user_id), str(tenant_id)),
+            ) or []
+            if rows:
+                lines = [f"- [{r.get('fact_type')}] {r.get('fact_value')}" for r in rows]
+                facts_chunks.append("\n".join(lines))
+                logger.debug(f"Loaded {len(rows)} consolidated profile facts")
+        except Exception as e:
+            logger.warning(f"Failed to load consolidated profile facts: {e}")
+
+        context["user_facts"] = "\n\n".join([c for c in facts_chunks if c]).strip()
     
+    # 1b. Promoted memory tiers (active/long-term)
+    if include_user_facts:
+        try:
+            from services_memory_promotion import get_promoted_memories_for_prompt
+            promoted = get_promoted_memories_for_prompt(user_id=user_id, tenant_id=tenant_id, limit=8)
+            if promoted:
+                lines = [f"- [{m.get('tier')}] {m.get('content')}" for m in promoted]
+                context["promoted_memories"] = "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Failed to load promoted memories: {e}")
+
+    # 1c. Canonical recent conversation events
+    if include_chat_history:
+        try:
+            from services_conversation_memory_events import get_recent_conversation_memory_events
+            events = get_recent_conversation_memory_events(user_id=user_id, tenant_id=tenant_id, limit=6)
+            if events:
+                lines = []
+                for e in events:
+                    u = (e.get("user_text") or "").strip()
+                    if u:
+                        lines.append(f"- {u[:140]}{'...' if len(u) > 140 else ''}")
+                context["recent_memory_events"] = "\n".join(lines[:6])
+        except Exception as e:
+            logger.warning(f"Failed to load recent conversation events: {e}")
+
     # 2. Working memory: Current lecture context from Qdrant
     if include_lecture_context and active_lecture_id:
         try:
@@ -366,7 +415,7 @@ def build_system_prompt_with_memory(
         Enhanced system prompt with memory context
     """
     if include_sections is None:
-        include_sections = ["user_facts", "lecture_context", "study_context", "recent_topics"]
+        include_sections = ["user_facts", "promoted_memories", "recent_memory_events", "lecture_context", "study_context", "recent_topics"]
     
     memory_sections = []
     
@@ -377,6 +426,21 @@ def build_system_prompt_with_memory(
 {context["user_facts"]}
 """)
     
+    # Add promoted memory tiers
+    if "promoted_memories" in include_sections and context.get("promoted_memories"):
+        memory_sections.append(f"""
+## Active + Long-Term Memory
+{context["promoted_memories"]}
+""")
+
+    # Add recent canonical conversation memory events
+    if "recent_memory_events" in include_sections and context.get("recent_memory_events"):
+        memory_sections.append(f"""
+## Recent Conversation Memory Events
+{context["recent_memory_events"]}
+Use these for continuity and personalization; avoid verbatim repetition unless user asks.
+""")
+
     # Add lecture context
     if "lecture_context" in include_sections and context.get("lecture_context"):
         memory_sections.append(f"""

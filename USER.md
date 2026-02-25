@@ -1,0 +1,19 @@
+# USER.md - About Your Human
+
+_Learn about the person you're helping. Update this as you go._
+
+- **Name: Sanjay Anasuri
+- **What to call them:** sanjay
+- **Pronouns:** he/him
+- **Timezone:** est
+- **Notes:** im a senior at purdue university. During execution, prefers concise milestone-only updates and autonomous progress unless blocked. Autonomous release mode is ON: continue until code is pushed, CI is green, and demo is live; only interrupt for true blockers.
+
+## Context
+
+_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+
+i care about getting my degree but more so using ai to improve my chances in the workplace. i care about system design and infrastructure. trying to figure out how to improve brain web which is my personal project about building a second brain but more importantly about ingesting content and building on existing ideas.
+
+Brain Web vision (important): keep it minimalistic. Product feel should blend GoodNotes + Notion note-taking with ChatGPT Voice-style constant conversational learning. The assistant should feel personalized across voice/text (knows user style, adapts tone/pacing, continuity across surfaces). Avoid UI bloat and over-engineered flows.
+
+Outside Brain Web: I’m also a DJ and I’ve been exploring a separate project to build a better interface for Rekordbox, especially around SoundCloud track matching. Key pain points: no clear visual dashboard of matched tracks, and weak visual filtering/navigation for library management. There is an existing repo for this on my computer (name currently unknown).

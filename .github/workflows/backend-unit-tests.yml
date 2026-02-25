@@ -1,0 +1,39 @@
+name: Backend unit tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-unit-tests.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-unit-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-unit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup backend
+        uses: ./.github/actions/setup-backend
+
+      - name: Run unit tests (no Neo4j)
+        working-directory: backend
+        env:
+          ENABLE_SQLITE_FALLBACK: 'true'
+          OPENAI_API_KEY: 'test-key'
+          NEO4J_URI: 'bolt://localhost:7687'
+          NEO4J_USER: 'neo4j'
+          NEO4J_PASSWORD: 'test-password'
+        run: |
+          # Unit-only test files (@pytest.mark.unit); add new unit test files here
+          pytest tests/test_voice_style_profile.py tests/test_voice_learning_signals.py tests/test_services_vad.py tests/test_events.py tests/test_unified_primitives.py tests/test_unified_citations.py tests/test_feedback_classifier.py tests/test_notes_digest_merge_unit.py -m unit -q --tb=short

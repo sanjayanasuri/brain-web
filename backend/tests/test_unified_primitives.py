@@ -4,6 +4,9 @@ Unit tests for unified_primitives (ArtifactRef / AnchorRef).
 These primitives are intended to be used as adapters across existing systems
 without breaking current endpoints.
 """
+import pytest
+
+pytestmark = pytest.mark.unit
 
 from unified_primitives import (
     AnchorRef,

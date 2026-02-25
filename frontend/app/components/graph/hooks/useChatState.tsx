@@ -227,8 +227,10 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         isChatCollapsed: state.isChatCollapsed,
         chatHistory: [],
       };
-    default:
+    default: {
+      const _: never = action;
       return state;
+    }
   }
 }
 

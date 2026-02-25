@@ -93,53 +93,54 @@ export function generateConceptObservation(
   return null;
 }
 
+export type GapType = 'missing_description' | 'low_connectivity' | 'high_interest_low_coverage';
+
 /**
  * Generate observation text for gaps
  */
 export function generateGapObservation(
   gapName: string,
-  gapType: string,
+  gapType: GapType | string,
   domain?: string
 ): string {
   switch (gapType) {
     case 'missing_description':
       return `"${gapName}" appears without an anchor in your graph. It's referenced but lacks a clear definition.`;
-    
     case 'low_connectivity':
       return `"${gapName}" is loosely connected to nearby ideas. It could benefit from stronger connections to related concepts.`;
-    
     case 'high_interest_low_coverage':
       return `A bridge is forming near "${gapName}". This area is gaining attention but needs more exploration.`;
-    
     default:
       return `"${gapName}" appears in your graph but remains underexplored.`;
   }
 }
 
+export type SuggestionType =
+  | 'GAP_DEFINE'
+  | 'GAP_EVIDENCE'
+  | 'COVERAGE_LOW'
+  | 'EVIDENCE_STALE'
+  | 'REVIEW_RELATIONSHIPS';
+
 /**
  * Generate observation text for suggestions
  */
 export function generateSuggestionObservation(
-  suggestionType: string,
+  suggestionType: SuggestionType | string,
   conceptName: string,
   rationale?: string
 ): string {
   switch (suggestionType) {
     case 'GAP_DEFINE':
       return `You've been referencing ${conceptName} a lot lately. Want to dive deeper into what it means?`;
-    
     case 'GAP_EVIDENCE':
       return `You've been exploring ${conceptName} recently. Want to add some examples or sources?`;
-    
     case 'COVERAGE_LOW':
       return `You've mentioned ${conceptName} in several places, but haven't explored it directly yet.`;
-    
     case 'EVIDENCE_STALE':
       return `You looked into ${conceptName} a while back. Want to refresh your understanding?`;
-    
     case 'REVIEW_RELATIONSHIPS':
       return `There are some connections around ${conceptName} that might need your attention.`;
-    
     default:
       return rationale || `Something to notice about ${conceptName}.`;
   }

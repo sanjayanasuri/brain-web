@@ -8,6 +8,7 @@ import {
     Claim,
     Source
 } from './types';
+import { getResourcesForConceptOfflineLazy } from '../../lib/offline/lazy';
 
 /**
  * Search for resources by title or caption
@@ -72,13 +73,10 @@ export async function getSourcesForConcept(nodeId: string, limit: number = 100):
  * Fetch all resources attached to a concept
  */
 export async function getResourcesForConcept(conceptId: string): Promise<Resource[]> {
-    // Try offline cache first if offline
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        const { getResourcesForConceptOffline } = await import('../../lib/offline/api_wrapper');
-        const cached = await getResourcesForConceptOffline(conceptId);
-        if (cached.length > 0) {
-            return cached as Resource[];
-        }
+        const getOffline = await getResourcesForConceptOfflineLazy();
+        const cached = await getOffline(conceptId);
+        if (cached.length > 0) return cached as Resource[];
         return [];
     }
 
@@ -86,17 +84,15 @@ export async function getResourcesForConcept(conceptId: string): Promise<Resourc
         const headers = await getApiHeaders();
         const res = await fetch(`${API_BASE_URL}/resources/by-concept/${encodeURIComponent(conceptId)}`, { headers });
         if (!res.ok) {
-            const { getResourcesForConceptOffline } = await import('../../lib/offline/api_wrapper');
-            const cached = await getResourcesForConceptOffline(conceptId);
-            if (cached.length > 0) {
-                return cached as Resource[];
-            }
+            const getOffline = await getResourcesForConceptOfflineLazy();
+            const cached = await getOffline(conceptId);
+            if (cached.length > 0) return cached as Resource[];
             throw new Error(`Failed to fetch resources for concept ${conceptId}: ${res.statusText}`);
         }
         return res.json();
     } catch {
-        const { getResourcesForConceptOffline } = await import('../../lib/offline/api_wrapper');
-        const cached = await getResourcesForConceptOffline(conceptId);
+        const getOffline = await getResourcesForConceptOfflineLazy();
+        const cached = await getOffline(conceptId);
         return cached as Resource[];
     }
 }

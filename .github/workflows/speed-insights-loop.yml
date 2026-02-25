@@ -1,0 +1,41 @@
+# Speed Insights loop: run Lighthouse on production, open a GitHub issue on regression.
+# Set Repository variable PRODUCTION_URL (Settings → Secrets and variables → Variables).
+# Optional: create label "performance-regression" for filtering. Issues get label "automated".
+name: speed-insights-loop
+
+on:
+  schedule:
+    # Weekdays at 14:00 UTC
+    - cron: '0 14 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      production_url:
+        description: 'Production URL to audit (default: use PRODUCTION_URL from vars)'
+        required: false
+        type: string
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Lighthouse deps
+        working-directory: .github/scripts
+        run: npm ci 2>/dev/null || npm install
+
+      - name: Run Lighthouse and create issue on regression
+        working-directory: .github/scripts
+        env:
+          PRODUCTION_URL: ${{ inputs.production_url || vars.PRODUCTION_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node lighthouse-regression.mjs

@@ -1,0 +1,179 @@
+// voiceWidget.js: Injected into the current page to provide the floating Brain Web audio assistant
+
+if (!document.getElementById("brainweb-voice-widget")) {
+    const style = document.createElement("style");
+    style.innerHTML = `
+      #brainweb-voice-widget {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        width: 60px;
+        height: 60px;
+        background: linear-gradient(135deg, #007bff, #00d4ff);
+        border-radius: 50%;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        cursor: pointer;
+        z-index: 1000000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s, box-shadow 0.2s;
+        border: 2px solid white;
+      }
+      #brainweb-voice-widget:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+      }
+      #brainweb-voice-widget.recording {
+        animation: pulse 1.5s infinite;
+        background: linear-gradient(135deg, #ff416c, #ff4b2b);
+      }
+      #brainweb-voice-widget svg {
+        width: 30px;
+        height: 30px;
+        fill: white;
+      }
+      @keyframes pulse {
+        0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 65, 108, 0.7); }
+        70% { transform: scale(1.05); box-shadow: 0 0 0 15px rgba(255, 65, 108, 0); }
+        100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 65, 108, 0); }
+      }
+      #brainweb-voice-status {
+        position: absolute;
+        top: -30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0,0,0,0.8);
+        color: white;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-family: sans-serif;
+        white-space: nowrap;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+      #brainweb-voice-widget:hover #brainweb-voice-status {
+        opacity: 1;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const container = document.createElement("div");
+    container.id = "brainweb-voice-widget";
+    container.innerHTML = `
+      <div id="brainweb-voice-status">Ready</div>
+      <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+    `;
+    document.body.appendChild(container);
+
+    let isRecording = false;
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let mediaRecorder = null;
+    const statusEl = document.getElementById("brainweb-voice-status");
+
+    async function startVoiceSession() {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        }
+
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 } });
+        } catch (e) {
+            alert("Microphone access denied or error: " + e.message);
+            return;
+        }
+
+        // Try to get backend URL from storage first
+        let backendUrl = "wss://demo.sanjayanasuri.com";
+        try {
+            const stored = await chrome.storage.local.get(["BW_BACKEND_URL", "bw_api_base"]);
+            const url = stored.BW_BACKEND_URL || stored.bw_api_base;
+            if (url) {
+                backendUrl = url.replace(/^http/, "ws");
+            }
+        } catch (e) {
+            console.warn("[Brain Web] Could not access chrome.storage, using default URL");
+        }
+
+        console.log("[Brain Web] Connecting to voice session at:", backendUrl);
+        ws = new WebSocket(`${backendUrl}/voice/session?user_id=guest&tenant_id=demo`);
+
+        ws.onopen = () => {
+            statusEl.innerText = "Connecting...";
+            // Send page context once connected
+            const pageContext = document.body.innerText.substring(0, 5000);
+            const msg = {
+                type: "context",
+                content: {
+                    title: document.title,
+                    url: window.location.href,
+                    text: pageContext
+                }
+            };
+            ws.send(JSON.stringify(msg));
+            statusEl.innerText = "Listening...";
+        };
+
+        ws.onmessage = async (e) => {
+            // Audio playback handling
+            if (e.data instanceof Blob) {
+                const arrayBuffer = await e.data.arrayBuffer();
+                audioContext.decodeAudioData(arrayBuffer, (buffer) => {
+                    const source = audioContext.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioContext.destination);
+                    source.start();
+                });
+            } else {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.type === "agent_status") {
+                        statusEl.innerText = typeof data.status === "string" ? data.status : "Speaking...";
+                    }
+                } catch (err) { }
+            }
+        };
+
+        ws.onclose = () => { stopVoiceSession(); };
+
+        mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' });
+        mediaRecorder.ondataavailable = async (e) => {
+            if (e.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
+                // Ensure we send binary blob
+                ws.send(e.data);
+            }
+        };
+        mediaRecorder.start(250); // Send chunks every 250ms
+
+        container.classList.add("recording");
+        isRecording = true;
+    }
+
+    function stopVoiceSession() {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+        }
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(t => t.stop());
+        }
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+        container.classList.remove("recording");
+        statusEl.innerText = "Ready";
+        isRecording = false;
+    }
+
+    container.addEventListener("click", () => {
+        if (isRecording) {
+            stopVoiceSession();
+        } else {
+            startVoiceSession();
+        }
+    });
+}
