@@ -82,23 +82,44 @@ def get_unified_context(
         "recent_topics": "",  # cross-surface ambient context
     }
     
-    # 1. Long-term memory: User facts from Neo4j
+    # 1. Long-term memory: User facts from Neo4j + consolidated profile facts (Postgres)
     if include_user_facts:
+        facts_chunks = []
         try:
             from services_fact_extractor import get_user_facts, format_user_facts_for_prompt
-            
+
             facts = get_user_facts(
                 user_id=user_id,
                 tenant_id=tenant_id,
                 session=session,
                 limit=5
             )
-            
+
             if facts:
-                context["user_facts"] = format_user_facts_for_prompt(facts)
-                logger.debug(f"Loaded {len(facts)} user facts")
+                facts_chunks.append(format_user_facts_for_prompt(facts))
+                logger.debug(f"Loaded {len(facts)} neo4j user facts")
         except Exception as e:
-            logger.warning(f"Failed to load user facts: {e}")
+            logger.warning(f"Failed to load neo4j user facts: {e}")
+
+        try:
+            rows = execute_query(
+                """
+                SELECT fact_type, fact_value, confidence
+                FROM user_profile_facts
+                WHERE user_id=%s AND tenant_id=%s AND active=TRUE
+                ORDER BY confidence DESC, updated_at DESC
+                LIMIT 8
+                """,
+                (str(user_id), str(tenant_id)),
+            ) or []
+            if rows:
+                lines = [f"- [{r.get('fact_type')}] {r.get('fact_value')}" for r in rows]
+                facts_chunks.append("\n".join(lines))
+                logger.debug(f"Loaded {len(rows)} consolidated profile facts")
+        except Exception as e:
+            logger.warning(f"Failed to load consolidated profile facts: {e}")
+
+        context["user_facts"] = "\n\n".join([c for c in facts_chunks if c]).strip()
     
     # 1b. Promoted memory tiers (active/long-term)
     if include_user_facts:

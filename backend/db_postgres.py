@@ -248,6 +248,25 @@ def init_postgres_db():
         );
         """,
 
+        # Consolidated user profile facts (USER.md-equivalent, DB-native)
+        """
+        CREATE TABLE IF NOT EXISTS user_profile_facts (
+            id TEXT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            fact_type VARCHAR(64) NOT NULL,
+            fact_value TEXT NOT NULL,
+            confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            source VARCHAR(64) NOT NULL DEFAULT 'memory_consolidation',
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (user_id, tenant_id, fact_type, fact_value)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_user_profile_facts_user_active ON user_profile_facts(user_id, tenant_id, active, updated_at DESC);",
+
         # Study Sessions Table
         """
         CREATE TABLE IF NOT EXISTS study_sessions (

@@ -127,6 +127,13 @@ Swarm tick order:
 # runs: backend/jobs/refresh_interest_suggestions.py
 ```
 
+## Memory consolidation (SOUL/USER/MEMORY behavior, DB-native)
+
+```bash
+./.clawdbot/scripts/install-memory-consolidation-cron.sh "*/20 * * * *"
+# runs: backend/jobs/memory_consolidation_job.py
+```
+
 ## Example cron
 
 ```bash
