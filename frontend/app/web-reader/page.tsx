@@ -2,19 +2,24 @@
 
 import { useState } from 'react';
 import { getReaderView, type ReaderResponse } from '../api/reader';
+import { createReaderAnnotation, listReaderAnnotations } from '../api/reader-annotations';
 
 export default function ReaderPage() {
   const [url, setUrl] = useState('');
   const [query, setQuery] = useState('what matters for me?');
   const [data, setData] = useState<ReaderResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [annotations, setAnnotations] = useState<any[]>([]);
 
   const run = async () => {
     if (!url.trim() || !query.trim()) return;
     setLoading(true);
     try {
-      const out = await getReaderView({ url: url.trim(), query: query.trim(), limit: 5 });
+      const targetUrl = url.trim();
+      const out = await getReaderView({ url: targetUrl, query: query.trim(), limit: 5 });
       setData(out);
+      const anns = await listReaderAnnotations({ doc_id: out.document?.doc_id, url: targetUrl, limit: 20 }).catch(() => []);
+      setAnnotations(Array.isArray(anns) ? anns : []);
     } finally {
       setLoading(false);
     }
@@ -59,8 +64,57 @@ export default function ReaderPage() {
                       <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>{s.text}</div>
                       {(s.why || []).length > 0 && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>Why: {s.why.join(' · ')}</div>}
                       {(s.claims || []).length > 0 && <div style={{ marginTop: 6, fontSize: 12 }}>Claims: {(s.claims || []).slice(0, 2).join(' | ')}</div>}
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                        <button
+                          onClick={async () => {
+                            await createReaderAnnotation({
+                              doc_id: data.document?.doc_id,
+                              url: data.document?.url,
+                              chunk_id: s.chunk_id,
+                              annotation_type: 'highlight',
+                              note: s.text.slice(0, 220),
+                            });
+                            const anns = await listReaderAnnotations({ doc_id: data.document?.doc_id, url: data.document?.url || url, limit: 20 }).catch(() => []);
+                            setAnnotations(Array.isArray(anns) ? anns : []);
+                          }}
+                          style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                        >
+                          Highlight
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await createReaderAnnotation({
+                              doc_id: data.document?.doc_id,
+                              url: data.document?.url,
+                              chunk_id: s.chunk_id,
+                              annotation_type: 'save_memory',
+                              note: s.text.slice(0, 220),
+                            });
+                            const anns = await listReaderAnnotations({ doc_id: data.document?.doc_id, url: data.document?.url || url, limit: 20 }).catch(() => []);
+                            setAnnotations(Array.isArray(anns) ? anns : []);
+                          }}
+                          style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                        >
+                          Save Memory
+                        </button>
+                      </div>
                     </div>
                   ))}
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Annotations</div>
+                  {annotations.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No annotations yet.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {annotations.slice(0, 8).map((a, idx) => (
+                        <div key={`${a.id || idx}`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, fontSize: 12, background: 'var(--surface)' }}>
+                          <strong>{a.annotation_type}</strong>{a.note ? ` · ${String(a.note).slice(0, 140)}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}

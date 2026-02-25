@@ -496,6 +496,24 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_capture_inbox_user_status ON capture_inbox(user_id, tenant_id, status, created_at DESC);",
 
+        # Web reader annotations
+        """
+        CREATE TABLE IF NOT EXISTS web_reader_annotations (
+            id TEXT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            doc_id TEXT,
+            url TEXT,
+            chunk_id TEXT,
+            annotation_type VARCHAR(32) NOT NULL,
+            note TEXT,
+            concept_id TEXT,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_web_reader_annotations_user_created ON web_reader_annotations(user_id, tenant_id, created_at DESC);",
+
         # -------------------------------------------------------------------
         # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
         # -------------------------------------------------------------------
