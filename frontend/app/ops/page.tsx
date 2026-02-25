@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import AppTopNav from '../components/layout/AppTopNav';
 import {
   getAgentOpsState,
+  getAgentOpsConfig,
   spawnAgentTask,
   steerAgentTask,
   killAgentTask,
@@ -11,15 +12,26 @@ import {
   updateIdeaStatus,
   type AgentRun,
   type AgentIdea,
+  type AgentOpsConfig,
 } from '../api/agent-ops';
+
+function agentLabel(cmd: string | undefined): string {
+  if (!cmd) return '—';
+  if (cmd.includes('codex')) return 'Codex';
+  if (cmd.includes('cursor')) return 'Cursor';
+  if (cmd.includes('claude')) return 'Claude';
+  return cmd.split(/\s/)[0] || '—';
+}
 
 export default function OpsPage() {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [ideas, setIdeas] = useState<AgentIdea[]>([]);
+  const [config, setConfig] = useState<AgentOpsConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState('');
   const [scope, setScope] = useState('frontend/app');
   const [desc, setDesc] = useState('');
+  const [agent, setAgent] = useState<'auto' | 'codex' | 'cursor'>('auto');
   const [steerText, setSteerText] = useState('');
   const [steerSession, setSteerSession] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -27,9 +39,10 @@ export default function OpsPage() {
   const activeRuns = useMemo(() => runs.filter(r => (r.status || '') === 'running'), [runs]);
 
   async function refresh() {
-    const state = await getAgentOpsState();
+    const [state, cfg] = await Promise.all([getAgentOpsState(), getAgentOpsConfig()]);
     setRuns(state.runs || []);
     setIdeas(state.ideas || []);
+    setConfig(cfg);
   }
 
   useEffect(() => {
@@ -63,6 +76,19 @@ export default function OpsPage() {
           <AppTopNav />
         </div>
 
+        {config && (
+          <div className="ui-card" style={{ display: 'grid', gap: 6 }}>
+            <div style={{ fontWeight: 600 }}>Orchestrator</div>
+            <div style={{ fontSize: 13, color: 'var(--muted)' }}>
+              CLIs: {config.available_clis.length ? config.available_clis.join(', ') : 'none detected'}
+              {' · '}
+              max concurrent: {config.max_concurrent}
+              {' · '}
+              routing: {config.routing}
+            </div>
+          </div>
+        )}
+
         <div className="ui-card" style={{ display: 'grid', gap: 8 }}>
           <div style={{ fontWeight: 600 }}>Spawn Task</div>
           <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 220px' }}>
@@ -70,10 +96,21 @@ export default function OpsPage() {
             <input className="ui-input" placeholder="Scope" value={scope} onChange={(e) => setScope(e.target.value)} />
           </div>
           <input className="ui-input" placeholder="Description (optional)" value={desc} onChange={(e) => setDesc(e.target.value)} />
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 13 }}>Agent:</label>
+            <select
+              className="ui-input"
+              value={agent}
+              onChange={(e) => setAgent(e.target.value as 'auto' | 'codex' | 'cursor')}
+              style={{ width: 'auto', minWidth: 100 }}
+            >
+              <option value="auto">Auto (router)</option>
+              <option value="codex">Codex</option>
+              <option value="cursor">Cursor</option>
+            </select>
             <button className="ui-button" onClick={async () => {
               setError(null);
-              await spawnAgentTask({ title, scope, desc });
+              await spawnAgentTask({ title, scope, desc, agent });
               setTitle('');
               setDesc('');
               await refresh();
@@ -98,7 +135,12 @@ export default function OpsPage() {
                 <div key={`${r.task_id || r.id || i}`} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, background: 'var(--surface)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{r.task_id || r.id}</div>
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{r.status || 'unknown'}</div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 6, background: 'var(--border)', color: 'var(--muted)' }}>
+                        {agentLabel(r.agent_cmd)}
+                      </span>
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>{r.status || 'unknown'}</span>
+                    </div>
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{(r.description || '').split('\n')[0]}</div>
                   <div style={{ fontSize: 12, marginTop: 6 }}>Session: {r.tmux_session || '-'}</div>

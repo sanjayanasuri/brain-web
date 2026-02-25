@@ -10,6 +10,13 @@ export type AgentRun = {
   pr_number?: number;
   pr_url?: string;
   updated_at?: string;
+  agent_cmd?: string;
+};
+
+export type AgentOpsConfig = {
+  available_clis: string[];
+  max_concurrent: number;
+  routing: string;
 };
 
 export type AgentIdea = {
@@ -25,7 +32,19 @@ export async function getAgentOpsState(): Promise<{ runs: AgentRun[]; ideas: Age
   return res.json();
 }
 
-export async function spawnAgentTask(payload: { title: string; scope: string; desc?: string; lane?: string }) {
+export async function getAgentOpsConfig(): Promise<AgentOpsConfig> {
+  const res = await fetch(`${API_BASE_URL}/agent-ops/config`, { headers: await getApiHeaders() });
+  if (!res.ok) throw new Error('Failed to load agent ops config');
+  return res.json();
+}
+
+export async function spawnAgentTask(payload: {
+  title: string;
+  scope: string;
+  desc?: string;
+  lane?: string;
+  agent?: 'auto' | 'codex' | 'cursor';
+}) {
   const res = await fetch(`${API_BASE_URL}/agent-ops/spawn`, {
     method: 'POST',
     headers: await getApiHeaders(),

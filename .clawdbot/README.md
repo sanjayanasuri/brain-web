@@ -6,6 +6,7 @@ This folder runs a deterministic multi-agent coding loop on top of OpenClaw.
 
 - `ideas.json` — proposed/approved work items
 - `active-tasks.json` — runtime task registry
+- `config.json` — optional: `max_concurrent` (default 1) for orchestrator
 - `scripts/spawn.sh` — creates worktree + tmux session + registry entry
 - `scripts/dispatch.sh` — starts approved ideas (auto-routes agent by task)
 - `scripts/task-router.sh` — chooses Cursor vs Codex vs Claude command
@@ -76,6 +77,14 @@ Force one command for all tasks:
 ```bash
 export DISPATCH_AGENT_CMD='claude -p'
 ```
+
+Per-task agent (Brain Web Ops / submit-task):
+
+```bash
+./.clawdbot/scripts/submit-task.sh --title "..." --scope "..." --agent codex   # or cursor | auto
+```
+
+Ideas with `preferred_agent` (codex|cursor|auto) are respected by `dispatch.sh`; otherwise the router picks.
 
 ## Gates/tuning
 

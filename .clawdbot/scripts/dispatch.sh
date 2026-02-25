@@ -24,7 +24,12 @@ ensure_ideas_file
 ensure_tasks_file
 
 # How many tasks can be "running" at once (from our queue)
-max_concurrent="${DISPATCH_MAX_CONCURRENT:-1}"
+# Prefer .clawdbot/config.json max_concurrent so dashboard and runner stay in sync
+max_concurrent=""
+if [[ -f "$CLAWDBOT_DIR/config.json" ]]; then
+  max_concurrent=$(jq -r '.max_concurrent // empty' "$CLAWDBOT_DIR/config.json" 2>/dev/null)
+fi
+max_concurrent="${max_concurrent:-${DISPATCH_MAX_CONCURRENT:-1}}"
 agent_cmd="${DISPATCH_AGENT_CMD:-auto}"
 
 # Count running tasks that we spawned from the ideas queue (have matching idea with status=building)
@@ -69,7 +74,12 @@ task_description="${title}
 ${description}
 Scope: ${suggested_scope}"
 
-if [[ "$agent_cmd" == "auto" ]]; then
+preferred_agent=$(echo "$candidate" | jq -r '.preferred_agent // "auto"')
+if [[ "$preferred_agent" == "codex" ]] && [[ -n "${CODEX_AGENT_CMD:-}" ]]; then
+  agent_cmd="${CODEX_AGENT_CMD}"
+elif [[ "$preferred_agent" == "cursor" ]] && [[ -n "${CURSOR_AGENT_CMD:-}" ]]; then
+  agent_cmd="${CURSOR_AGENT_CMD}"
+elif [[ "$agent_cmd" == "auto" ]]; then
   agent_cmd="$($ROUTER_SCRIPT "$title" "$description" "$suggested_scope" "$lane")"
 fi
 

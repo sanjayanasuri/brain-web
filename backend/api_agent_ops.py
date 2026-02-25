@@ -5,7 +5,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import require_auth
-from services_agent_ops import list_runs, list_ideas, spawn_task, steer_run, kill_run, run_tick, update_idea_status
+from services_agent_ops import (
+    list_runs,
+    list_ideas,
+    spawn_task,
+    steer_run,
+    kill_run,
+    run_tick,
+    update_idea_status,
+    get_agent_ops_config,
+)
 
 router = APIRouter(prefix='/agent-ops', tags=['agent-ops'])
 
@@ -15,6 +24,7 @@ class SpawnReq(BaseModel):
     scope: str = Field(..., min_length=2)
     desc: str = ''
     lane: str = 'A'
+    agent: str = Field(default='auto', pattern='^(auto|codex|cursor)$')
 
 
 class SteerReq(BaseModel):
@@ -35,9 +45,20 @@ def get_runs(_: Any = Depends(require_auth)) -> Dict[str, List[Dict[str, Any]]]:
     return {'runs': list_runs(), 'ideas': list_ideas()}
 
 
+@router.get('/config')
+def get_config(_: Any = Depends(require_auth)) -> Dict[str, Any]:
+    return get_agent_ops_config()
+
+
 @router.post('/spawn')
 def post_spawn(payload: SpawnReq, _: Any = Depends(require_auth)):
-    out = spawn_task(payload.title, payload.scope, payload.desc, payload.lane)
+    out = spawn_task(
+        payload.title,
+        payload.scope,
+        payload.desc,
+        payload.lane,
+        payload.agent,
+    )
     if not out.get('ok'):
         raise HTTPException(status_code=500, detail=out)
     return out

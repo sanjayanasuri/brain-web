@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
@@ -9,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CLAWDBOT_DIR = REPO_ROOT / '.clawdbot'
 TASKS_PATH = CLAWDBOT_DIR / 'active-tasks.json'
 IDEAS_PATH = CLAWDBOT_DIR / 'ideas.json'
+CONFIG_PATH = CLAWDBOT_DIR / 'config.json'
 
 
 def _read_json(path: Path, default):
@@ -30,20 +32,31 @@ def list_ideas() -> List[Dict[str, Any]]:
     return data if isinstance(data, list) else []
 
 
-def spawn_task(title: str, scope: str, desc: str = '', lane: str = 'A') -> Dict[str, Any]:
+def spawn_task(
+    title: str,
+    scope: str,
+    desc: str = '',
+    lane: str = 'A',
+    agent: str = 'auto',
+) -> Dict[str, Any]:
+    if agent not in ('auto', 'codex', 'cursor'):
+        agent = 'auto'
     script = CLAWDBOT_DIR / 'scripts' / 'submit-task.sh'
+    args = [
+        str(script),
+        '--title',
+        title,
+        '--scope',
+        scope,
+        '--desc',
+        desc,
+        '--lane',
+        lane,
+    ]
+    if agent != 'auto':
+        args.extend(['--agent', agent])
     proc = subprocess.run(
-        [
-            str(script),
-            '--title',
-            title,
-            '--scope',
-            scope,
-            '--desc',
-            desc,
-            '--lane',
-            lane,
-        ],
+        args,
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
@@ -51,8 +64,32 @@ def spawn_task(title: str, scope: str, desc: str = '', lane: str = 'A') -> Dict[
     return {
         'ok': proc.returncode == 0,
         'code': proc.returncode,
-        'stdout': proc.stdout[-2000:],
-        'stderr': proc.stderr[-2000:],
+        'stdout': proc.stdout[-2000:] if proc.stdout else '',
+        'stderr': proc.stderr[-2000:] if proc.stderr else '',
+    }
+
+
+def get_agent_ops_config() -> Dict[str, Any]:
+    """Return orchestrator config: available CLIs, max_concurrent, routing."""
+    available = []
+    if shutil.which('codex'):
+        available.append('codex')
+    if shutil.which('cursor'):
+        available.append('cursor')
+    if shutil.which('claude'):
+        available.append('claude')
+    max_concurrent = 1
+    if CONFIG_PATH.exists():
+        try:
+            data = json.loads(CONFIG_PATH.read_text())
+            if isinstance(data, dict) and 'max_concurrent' in data:
+                max_concurrent = max(1, int(data['max_concurrent']))
+        except Exception:
+            pass
+    return {
+        'available_clis': available,
+        'max_concurrent': max_concurrent,
+        'routing': 'auto',
     }
 
 
