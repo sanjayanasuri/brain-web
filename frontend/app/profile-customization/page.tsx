@@ -16,12 +16,16 @@ import {
   getUIPreferences,
   updateUIPreferences,
   getGraphOverview,
+  getAssistantProfile,
+  patchAssistantProfile,
+  getAssistantStylePrompt,
   ResponseStyleProfileWrapper,
   FocusArea,
   UserProfile,
   type TutorProfile,
   type UIPreferences,
   type ReminderPreferences,
+  type AssistantProfile,
 } from '../api-client';
 import { getLastSession } from '../lib/sessionState';
 
@@ -59,6 +63,10 @@ export default function ControlPanelPage() {
   const [addingFocus, setAddingFocus] = useState(false);
   const [uiPreferences, setUIPreferences] = useState<UIPreferences | null>(null);
   const [savingReminders, setSavingReminders] = useState(false);
+  const [assistantProfile, setAssistantProfile] = useState<AssistantProfile | null>(null);
+  const [assistantStylePreview, setAssistantStylePreview] = useState('');
+  const [savingAssistantProfile, setSavingAssistantProfile] = useState(false);
+  const [loadingAssistantPreview, setLoadingAssistantPreview] = useState(false);
 
   const [newFocusName, setNewFocusName] = useState('');
   const [newFocusDescription, setNewFocusDescription] = useState('');
@@ -85,12 +93,14 @@ export default function ControlPanelPage() {
           profileRes,
           tutorProfileRes,
           uiPrefsRes,
+          assistantRes,
         ] = await Promise.allSettled([
           getResponseStyle(),
           getFocusAreas(),
           getUserProfile(),
           getTutorProfile(),
           getUIPreferences(),
+          getAssistantProfile(),
         ]);
 
         if (styleRes.status === 'fulfilled') {
@@ -107,6 +117,9 @@ export default function ControlPanelPage() {
         }
         if (uiPrefsRes.status === 'fulfilled') {
           setUIPreferences(uiPrefsRes.value);
+        }
+        if (assistantRes.status === 'fulfilled') {
+          setAssistantProfile(assistantRes.value.profile);
         }
       } catch (err) {
         setError(
@@ -235,6 +248,35 @@ export default function ControlPanelPage() {
     }
   }
 
+  async function handleSaveAssistantProfile() {
+    if (!assistantProfile) return;
+    try {
+      setSavingAssistantProfile(true);
+      setError(null);
+      const updated = await patchAssistantProfile(assistantProfile);
+      setAssistantProfile(updated.profile);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to save assistant profile',
+      );
+    } finally {
+      setSavingAssistantProfile(false);
+    }
+  }
+
+  async function handleLoadAssistantStylePreview() {
+    try {
+      setLoadingAssistantPreview(true);
+      setError(null);
+      const prompt = await getAssistantStylePrompt();
+      setAssistantStylePreview(prompt);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load style preview');
+    } finally {
+      setLoadingAssistantPreview(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="app-shell">
@@ -291,6 +333,121 @@ export default function ControlPanelPage() {
       >
         {/* LEFT COLUMN: Voice + Profile */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* Assistant Persona (OpenClaw-style per-user profile) */}
+          <section className="control-card">
+            <div className="control-header" style={{ marginBottom: 8 }}>
+              <div>
+                <span>Assistant Persona</span>
+                <p className="subtitle" style={{ marginTop: 4 }}>
+                  This is your in-product Bujji style across text and voice.
+                </p>
+              </div>
+            </div>
+
+            {assistantProfile && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label className="field-label">
+                  Assistant name
+                  <input
+                    className="chat-input"
+                    value={assistantProfile.assistant_name ?? ''}
+                    onChange={e => setAssistantProfile(prev => (prev ? { ...prev, assistant_name: e.target.value } : prev))}
+                  />
+                </label>
+
+                <label className="field-label">
+                  Tone
+                  <input
+                    className="chat-input"
+                    value={assistantProfile.tone ?? ''}
+                    onChange={e => setAssistantProfile(prev => (prev ? { ...prev, tone: e.target.value } : prev))}
+                  />
+                </label>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <label className="field-label">
+                    Verbosity
+                    <select
+                      className="chat-input"
+                      value={assistantProfile.verbosity ?? 'balanced'}
+                      onChange={e => setAssistantProfile(prev => (prev ? { ...prev, verbosity: e.target.value } : prev))}
+                    >
+                      <option value="concise">Concise</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="detailed">Detailed</option>
+                    </select>
+                  </label>
+                  <label className="field-label">
+                    Teaching mode
+                    <select
+                      className="chat-input"
+                      value={assistantProfile.teaching_mode ?? 'practical'}
+                      onChange={e => setAssistantProfile(prev => (prev ? { ...prev, teaching_mode: e.target.value } : prev))}
+                    >
+                      <option value="practical">Practical</option>
+                      <option value="socratic">Socratic</option>
+                      <option value="deep_dive">Deep dive</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="field-label">
+                  Voice style
+                  <input
+                    className="chat-input"
+                    value={assistantProfile.voice_style ?? ''}
+                    onChange={e => setAssistantProfile(prev => (prev ? { ...prev, voice_style: e.target.value } : prev))}
+                  />
+                </label>
+
+                <label className="field-label">
+                  Constraints (comma-separated)
+                  <input
+                    className="chat-input"
+                    value={listToString(assistantProfile.constraints ?? [])}
+                    onChange={e => setAssistantProfile(prev => (prev ? { ...prev, constraints: stringToList(e.target.value) } : prev))}
+                  />
+                </label>
+
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                  <button
+                    className="send-btn"
+                    onClick={handleSaveAssistantProfile}
+                    disabled={savingAssistantProfile}
+                  >
+                    {savingAssistantProfile ? 'Saving…' : 'Save assistant persona'}
+                  </button>
+                  <button
+                    className="pill pill--ghost"
+                    onClick={handleLoadAssistantStylePreview}
+                    disabled={loadingAssistantPreview}
+                  >
+                    {loadingAssistantPreview ? 'Loading…' : 'Preview style prompt'}
+                  </button>
+                </div>
+
+                {assistantStylePreview && (
+                  <div style={{ marginTop: 8 }}>
+                    <div className="field-label" style={{ marginBottom: 6 }}>Style preview</div>
+                    <pre style={{
+                      whiteSpace: 'pre-wrap',
+                      fontSize: 12,
+                      lineHeight: 1.4,
+                      padding: 10,
+                      borderRadius: 8,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                      maxHeight: 180,
+                      overflow: 'auto',
+                    }}>
+                      {assistantStylePreview}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
           {/* Tutor Profile (Phase F) */}
           <section className="control-card">
             <div className="control-header" style={{ marginBottom: 8 }}>
