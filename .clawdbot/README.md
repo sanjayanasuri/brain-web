@@ -32,7 +32,9 @@ What it does:
 2. checks PR existence by branch (`gh pr list --head`)
 3. checks CI status (`gh pr checks`)
 4. checks mergeability (`gh pr view --json mergeStateStatus`)
-5. marks task `ready` only when all gates pass
+5. checks approval count gate (`CLAWDBOT_MIN_APPROVALS`, default `1`)
+6. if UI files changed, checks PR body includes screenshot evidence
+7. marks task `ready` only when all gates pass
 
 ## Notifications
 
@@ -53,8 +55,24 @@ Tune max retries with:
 export CLAWDBOT_MAX_RETRIES=3
 ```
 
+## Gates/tuning
+
+```bash
+export CLAWDBOT_MAX_RETRIES=3
+export CLAWDBOT_MIN_APPROVALS=3
+export CLAWDBOT_REQUIRE_UI_SCREENSHOT=true
+```
+
+## One-command tick
+
+```bash
+./.clawdbot/scripts/swarm-start.sh
+```
+
 ## Example cron
 
 ```bash
-*/10 * * * * cd /Users/sanjayanasuri/brain-web && ./.clawdbot/check-agents.sh >> /tmp/clawdbot-check.log 2>&1
+./.clawdbot/scripts/install-cron.sh "*/10 * * * *"
+# or manually:
+# */10 * * * * cd /Users/sanjayanasuri/brain-web && ./.clawdbot/check-agents.sh >> /tmp/clawdbot-check.log 2>&1
 ```

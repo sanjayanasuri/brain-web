@@ -3,6 +3,7 @@
 # - checks tmux session
 # - checks PR + CI via gh
 # - optional auto-respawn on dead tmux (max retries)
+# - optional approval/screenshot gates
 # - emits notification when merge-ready
 set -euo pipefail
 
@@ -14,6 +15,8 @@ require_cmd jq
 NOTIFY_SCRIPT="$SCRIPT_DIR/notify.sh"
 UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 MAX_RETRIES_DEFAULT="${CLAWDBOT_MAX_RETRIES:-3}"
+MIN_APPROVALS="${CLAWDBOT_MIN_APPROVALS:-1}"
+REQUIRE_UI_SCREENSHOT="${CLAWDBOT_REQUIRE_UI_SCREENSHOT:-true}"
 
 running_tasks=$(jq -c '[.[] | select(.status == "running")]' "$TASKS_FILE")
 count=$(echo "$running_tasks" | jq 'length')
@@ -38,16 +41,42 @@ for i in $(seq 0 $((count - 1))); do
   pr_url=""
   mergeable=false
   ci_passed=false
+  approval_count=0
+  approvals_ok=false
+  ui_changed=false
+  screenshot_present=true
 
   if command -v gh >/dev/null 2>&1; then
     pr_line=$(gh pr list --head "$branch_name" --json number,url --jq '.[0] | "\(.number) \(.url)"' 2>/dev/null || true)
     if [[ -n "$pr_line" ]]; then
       pr_number="${pr_line%% *}"
       pr_url="${pr_line#* }"
+
       merge_state=$(gh pr view "$pr_number" --json mergeStateStatus --jq '.mergeStateStatus' 2>/dev/null || echo "")
       [[ "$merge_state" == "CLEAN" ]] && mergeable=true
+
       if gh pr checks "$pr_number" >/dev/null 2>&1; then
         ci_passed=true
+      fi
+
+      approval_count=$(gh api graphql -f query='query($owner:String!, $repo:String!, $number:Int!){ repository(owner:$owner, name:$repo){ pullRequest(number:$number){ reviews(states: APPROVED, first:100){ totalCount } } } }' \
+        -F owner="$(gh repo view --json owner --jq '.owner.login')" \
+        -F repo="$(gh repo view --json name --jq '.name')" \
+        -F number="$pr_number" \
+        --jq '.data.repository.pullRequest.reviews.totalCount' 2>/dev/null || echo 0)
+      [[ "$approval_count" -ge "$MIN_APPROVALS" ]] && approvals_ok=true
+
+      pr_body=$(gh pr view "$pr_number" --json body --jq '.body // ""' 2>/dev/null || echo "")
+      changed_files=$(gh pr view "$pr_number" --json files --jq '.files[].path' 2>/dev/null || true)
+      if echo "$changed_files" | grep -E '^(frontend/|browser-extension/|.*\.(tsx|jsx|css|scss)$)' >/dev/null 2>&1; then
+        ui_changed=true
+      fi
+      if [[ "$ui_changed" == "true" ]]; then
+        if [[ "$REQUIRE_UI_SCREENSHOT" == "true" ]]; then
+          if ! echo "$pr_body" | grep -E '(!\[.*\]\(|<img|screenshot)' -i >/dev/null 2>&1; then
+            screenshot_present=false
+          fi
+        fi
       fi
     fi
   fi
@@ -77,7 +106,11 @@ for i in $(seq 0 $((count - 1))); do
     --argjson prCreated "$( [[ -n "$pr_number" ]] && echo true || echo false )" \
     --argjson ciPassed "$( [[ "$ci_passed" == "true" ]] && echo true || echo false )" \
     --argjson mergeable "$( [[ "$mergeable" == "true" ]] && echo true || echo false )" \
-    '{prCreated: $prCreated, ciPassed: $ciPassed, mergeable: $mergeable}')
+    --argjson approvalsOk "$( [[ "$approvals_ok" == "true" ]] && echo true || echo false )" \
+    --argjson approvalsCount "$approval_count" \
+    --argjson uiChanged "$( [[ "$ui_changed" == "true" ]] && echo true || echo false )" \
+    --argjson screenshotPresent "$( [[ "$screenshot_present" == "true" ]] && echo true || echo false )" \
+    '{prCreated: $prCreated, ciPassed: $ciPassed, mergeable: $mergeable, approvalsOk: $approvalsOk, approvalsCount: $approvalsCount, uiChanged: $uiChanged, screenshotPresent: $screenshotPresent}')
 
   update_payload=$(jq -n \
     --arg updated "$UPDATED_AT" \
@@ -90,7 +123,7 @@ for i in $(seq 0 $((count - 1))); do
   update_task "$task_id" "$update_payload"
 
   # Merge-ready gate
-  if [[ -n "$pr_number" && "$ci_passed" == "true" && "$mergeable" == "true" ]]; then
+  if [[ -n "$pr_number" && "$ci_passed" == "true" && "$mergeable" == "true" && "$approvals_ok" == "true" && "$screenshot_present" == "true" ]]; then
     update_task "$task_id" "{\"status\": \"ready\", \"updated_at\": \"$UPDATED_AT\", \"completedAt\": $(date +%s)000}"
     notified=$(echo "$task" | jq -r '.notified // false')
     if [[ "$notified" != "true" ]]; then
