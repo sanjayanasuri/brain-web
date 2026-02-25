@@ -168,10 +168,10 @@ export default function IngestionHubPage() {
             ← Back to Graph
           </Link>
           <h1 style={{ fontSize: '32px', fontWeight: '700', margin: '12px 0', color: 'var(--ink)' }}>
-            Ingestion Hub
+            Import &amp; Extract
           </h1>
           <p style={{ color: 'var(--muted)', fontSize: '14px' }}>
-            Upload PDFs, review and manage ingestion runs
+            Upload documents and automatically extract concepts into your study map
           </p>
         </div>
 

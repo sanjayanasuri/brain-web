@@ -641,7 +641,7 @@ function MiniStarterSeedPreview({
           Starter seed preview{templateLabel ? ` · ${templateLabel}` : ''}
         </div>
         <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
-          {seed.nodes.length} nodes · {seed.edges.length} links
+          {seed.nodes.length} topics · {seed.edges.length} connections
         </div>
       </div>
 
@@ -1058,7 +1058,9 @@ function renderGroupedResults(
           {graphs.map((result) => {
             const idx = currentIndex++;
             const graph = result.graph;
-            const metaLine = `${graph.node_count ?? 0} nodes · ${graph.edge_count ?? 0} edges`;
+            const nc = graph.node_count ?? 0;
+            const ec = graph.edge_count ?? 0;
+            const metaLine = `${nc} topic${nc !== 1 ? 's' : ''} · ${ec} connection${ec !== 1 ? 's' : ''}`;
             return (
               <div
                 key={`graph-${graph.graph_id}`}
@@ -1401,7 +1403,9 @@ function renderPreviewPanel(
 
   if (selectedResult.type === 'graph') {
     const graph = selectedResult.graph;
-    const metaLine = `${graph.node_count ?? 0} nodes · ${graph.edge_count ?? 0} edges`;
+    const _nc = graph.node_count ?? 0;
+    const _ec = graph.edge_count ?? 0;
+    const metaLine = `${_nc} topic${_nc !== 1 ? 's' : ''} · ${_ec} connection${_ec !== 1 ? 's' : ''}`;
     const updated = formatRelativeTime(graph.updated_at);
 
     return (
@@ -2733,14 +2737,14 @@ export default function TopBar() {
         : null;
     return resolveTemplateStarterSeed({ builtInTemplate, customTemplate });
   }, [selectedCreateTemplateOption]);
-  const graphDisplayName = currentGraph?.name || activeGraphId || 'Default Graph';
+  const graphDisplayName = currentGraph?.name || activeGraphId || 'My Study Map';
 
   // Format metadata line for graph
   const getGraphMetaLine = (graph: GraphSummary): string => {
     const nodes = graph.node_count ?? 0;
     const edges = graph.edge_count ?? 0;
     const updated = formatRelativeTime(graph.updated_at);
-    return `${nodes} nodes · ${edges} edges · updated ${updated}`;
+    return `${nodes} topic${nodes !== 1 ? 's' : ''} · ${edges} connection${edges !== 1 ? 's' : ''} · updated ${updated}`;
   };
 
   return (
@@ -3235,7 +3239,7 @@ export default function TopBar() {
               }}>
                 <div
                   onClick={() => {
-                    router.push('/source-management');
+                    router.push('/ingest');
                     setNewMenuOpen(false);
                   }}
                   style={{
@@ -3251,7 +3255,7 @@ export default function TopBar() {
                   }}
                   className="menu-item-hover"
                 >
-                  <span style={{ fontSize: '16px' }}>📄</span> Add Source
+                  <span style={{ fontSize: '16px' }}>📄</span> Import Document
                 </div>
                 <div
                   onClick={() => {
@@ -3331,7 +3335,7 @@ export default function TopBar() {
                   }}
                   className="menu-item-hover"
                 >
-                  <span style={{ fontSize: '16px' }}>🕸️</span> New Knowledge Graph
+                  <span style={{ fontSize: '16px' }}>🕸️</span> New Study Map
                 </div>
                 <div
                   onClick={() => {
