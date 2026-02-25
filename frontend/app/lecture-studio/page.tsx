@@ -478,12 +478,29 @@ function LectureStudioPageInner() {
                 padding: '80px 40px',
                 textAlign: 'center',
               }}>
-                <div style={{ fontSize: '18px', color: 'var(--muted)', marginBottom: '12px', fontWeight: '600' }}>
+                <div style={{ fontSize: '32px', marginBottom: '12px' }}>📚</div>
+                <div style={{ fontSize: '18px', color: 'var(--muted)', marginBottom: '8px', fontWeight: '600' }}>
                   {searchQuery ? 'No results match your search' : 'Your studio is empty'}
                 </div>
                 {!searchQuery && (
-                  <div style={{ fontSize: '14px', color: 'var(--muted)' }}>
-                    Start by writing a new note or uploading a document for AI ingestion.
+                  <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '20px' }}>
+                    Create notes, upload documents, or draw on the freeform canvas to start building your knowledge.
+                  </div>
+                )}
+                {!searchQuery && (
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => router.push('/lecture-editor')}
+                      style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 600, background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '10px', cursor: 'pointer' }}
+                    >
+                      ✏️ Write Your First Note
+                    </button>
+                    <button
+                      onClick={() => router.push('/ingest')}
+                      style={{ padding: '10px 20px', fontSize: '14px', fontWeight: 500, background: 'var(--panel)', color: 'var(--ink)', border: '1px solid var(--border)', borderRadius: '10px', cursor: 'pointer' }}
+                    >
+                      📄 Import a Document
+                    </button>
                   </div>
                 )}
               </div>

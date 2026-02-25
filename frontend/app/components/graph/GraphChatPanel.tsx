@@ -304,9 +304,32 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                 textAlign: 'center',
                                 padding: '40px'
                             }}>
-                                <div style={{ fontSize: '32px', marginBottom: '16px' }}></div>
-                                <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginBottom: '8px' }}>Explore your knowledge graph</div>
-                                <div style={{ fontSize: '13px', lineHeight: '1.5' }}>Ask about connections, summarize clusters, or find gaps in your research.</div>
+                                <div style={{ fontSize: '32px', marginBottom: '16px' }}>🧭</div>
+                                <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginBottom: '8px' }}>Your Study Map Assistant</div>
+                                <div style={{ fontSize: '13px', lineHeight: '1.6', marginBottom: '16px' }}>Ask questions about your topics, find connections between ideas, or discover gaps in your understanding.</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
+                                    {['What topics am I studying?', 'What are the gaps in my knowledge?', 'How are my concepts connected?'].map(q => (
+                                        <button
+                                            key={q}
+                                            onClick={() => onAsk(q)}
+                                            style={{
+                                                padding: '8px 12px',
+                                                fontSize: '12px',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: '8px',
+                                                cursor: 'pointer',
+                                                color: 'var(--accent)',
+                                                textAlign: 'left',
+                                                transition: 'all 0.15s',
+                                            }}
+                                            onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent-faint, rgba(37,99,235,0.08))'; }}
+                                            onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; }}
+                                        >
+                                            {q}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         )}
 

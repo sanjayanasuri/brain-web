@@ -625,9 +625,40 @@ function HomePageInner() {
                       lineHeight: "1.4",
                     }}
                   >
-                    Explore your knowledge graph or the web with agentic research.
+                    Explore your study map, ask questions, or import your notes.
                   </div>
                 </div>
+
+                {/* Quick-start actions for new users */}
+                {chatSessions.length === 0 && messages.length === 0 && (
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '8px', marginBottom: '-4px' }}>
+                    {[
+                      { label: '📝 Write Notes', href: '/lecture-editor' },
+                      { label: '📄 Import a PDF', href: '/ingest' },
+                      { label: '🗺️ View Study Map', href: '/explorer' },
+                    ].map(a => (
+                      <button
+                        key={a.label}
+                        onClick={() => router.push(a.href)}
+                        style={{
+                          padding: '8px 16px',
+                          fontSize: '13px',
+                          fontWeight: 500,
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '20px',
+                          cursor: 'pointer',
+                          color: 'var(--ink)',
+                          transition: 'all 0.15s',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--ink)'; }}
+                      >
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <form onSubmit={handleSubmit} style={{ width: "100%", maxWidth: "1000px", marginTop: "10px" }}>
                   <div
