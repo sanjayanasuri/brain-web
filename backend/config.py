@@ -89,6 +89,33 @@ NEO4J_QUERY_TIMEOUT_SECONDS = float(os.getenv("NEO4J_QUERY_TIMEOUT_SECONDS", "60
 DEFAULT_PAGE_SIZE = int(os.getenv("DEFAULT_PAGE_SIZE", "20"))
 MAX_PAGE_SIZE = int(os.getenv("MAX_PAGE_SIZE", "100"))
 
+# Voice agent performance configuration
+VOICE_AGENT_CACHE_TTL_SECONDS = int(os.getenv("VOICE_AGENT_CACHE_TTL_SECONDS", "300"))  # 5 minutes
+VOICE_SESSION_HISTORY_LIMIT = int(os.getenv("VOICE_SESSION_HISTORY_LIMIT", "20"))  # Keep last 20 interactions
+VOICE_CONTEXT_MAX_LENGTH = int(os.getenv("VOICE_CONTEXT_MAX_LENGTH", "2000"))  # Max context chars
+VOICE_MEMORY_CONTEXT_MAX_LENGTH = int(os.getenv("VOICE_MEMORY_CONTEXT_MAX_LENGTH", "1000"))  # Max memory context chars
+VOICE_CONCEPT_EXTRACTION_MAX_TOKENS = int(os.getenv("VOICE_CONCEPT_EXTRACTION_MAX_TOKENS", "500"))
+VOICE_ARTICLE_TEXT_MAX_LENGTH = int(os.getenv("VOICE_ARTICLE_TEXT_MAX_LENGTH", "50000"))  # Max article text to index
+
+# Voice agent LLM parameters
+VOICE_AGENT_MAX_TOKENS = int(os.getenv("VOICE_AGENT_MAX_TOKENS", "220"))  # Max tokens for voice responses
+VOICE_AGENT_TEMPERATURE = float(os.getenv("VOICE_AGENT_TEMPERATURE", "0.7"))  # Temperature for voice responses
+VOICE_CONCEPT_CONFIDENCE_THRESHOLD = float(os.getenv("VOICE_CONCEPT_CONFIDENCE_THRESHOLD", "0.7"))  # Min confidence for concept extraction
+VOICE_SESSION_HISTORY_LLM_LIMIT = int(os.getenv("VOICE_SESSION_HISTORY_LLM_LIMIT", "5"))  # History limit for LLM context
+VOICE_MEMORY_CONTEXT_LIMIT = int(os.getenv("VOICE_MEMORY_CONTEXT_LIMIT", "3"))  # Max memory items in context
+VOICE_SPEECH_RATE_SLOW = float(os.getenv("VOICE_SPEECH_RATE_SLOW", "0.9"))
+VOICE_SPEECH_RATE_NORMAL = float(os.getenv("VOICE_SPEECH_RATE_NORMAL", "1.15"))
+VOICE_SPEECH_RATE_FAST = float(os.getenv("VOICE_SPEECH_RATE_FAST", "1.6"))
+VOICE_SPEECH_CHARS_PER_MS = float(os.getenv("VOICE_SPEECH_CHARS_PER_MS", "55"))  # Characters per millisecond for speech duration estimate
+VOICE_SPEECH_MIN_DURATION_MS = int(os.getenv("VOICE_SPEECH_MIN_DURATION_MS", "800"))  # Minimum speech duration in ms
+VOICE_STOP_TEXT_MIN_LENGTH = int(os.getenv("VOICE_STOP_TEXT_MIN_LENGTH", "3"))  # Min remaining text length to process after stop
+VOICE_INTERRUPT_MAX_WORDS = int(os.getenv("VOICE_INTERRUPT_MAX_WORDS", "5"))  # Max words in interrupt-only command
+
+# Memory promotion thresholds (short -> active -> long-term)
+MEMORY_PROMOTION_MIN_CONFIDENCE = float(os.getenv("MEMORY_PROMOTION_MIN_CONFIDENCE", "0.60"))
+MEMORY_ACTIVE_THRESHOLD = float(os.getenv("MEMORY_ACTIVE_THRESHOLD", "0.72"))
+MEMORY_LONGTERM_THRESHOLD = float(os.getenv("MEMORY_LONGTERM_THRESHOLD", "0.86"))
+
 # PDF ingestion limits
 PDF_MAX_FILE_SIZE_MB = int(os.getenv("PDF_MAX_FILE_SIZE_MB", "50"))  # 50MB default
 PDF_MAX_FILE_SIZE_BYTES = PDF_MAX_FILE_SIZE_MB * 1024 * 1024

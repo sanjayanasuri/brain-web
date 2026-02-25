@@ -72,6 +72,7 @@ def get_unified_context(
     """
     context = {
         "user_facts": "",
+        "promoted_memories": "",
         "user_identity": {}, # Goals, Background
         "tutor_persona": {}, # Personality parameters
         "lecture_context": "",
@@ -98,6 +99,17 @@ def get_unified_context(
         except Exception as e:
             logger.warning(f"Failed to load user facts: {e}")
     
+    # 1b. Promoted memory tiers (active/long-term)
+    if include_user_facts:
+        try:
+            from services_memory_promotion import get_promoted_memories_for_prompt
+            promoted = get_promoted_memories_for_prompt(user_id=user_id, tenant_id=tenant_id, limit=8)
+            if promoted:
+                lines = [f"- [{m.get('tier')}] {m.get('content')}" for m in promoted]
+                context["promoted_memories"] = "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"Failed to load promoted memories: {e}")
+
     # 2. Working memory: Current lecture context from Qdrant
     if include_lecture_context and active_lecture_id:
         try:
@@ -366,7 +378,7 @@ def build_system_prompt_with_memory(
         Enhanced system prompt with memory context
     """
     if include_sections is None:
-        include_sections = ["user_facts", "lecture_context", "study_context", "recent_topics"]
+        include_sections = ["user_facts", "promoted_memories", "lecture_context", "study_context", "recent_topics"]
     
     memory_sections = []
     
@@ -377,6 +389,13 @@ def build_system_prompt_with_memory(
 {context["user_facts"]}
 """)
     
+    # Add promoted memory tiers
+    if "promoted_memories" in include_sections and context.get("promoted_memories"):
+        memory_sections.append(f"""
+## Active + Long-Term Memory
+{context["promoted_memories"]}
+""")
+
     # Add lecture context
     if "lecture_context" in include_sections and context.get("lecture_context"):
         memory_sections.append(f"""
