@@ -10,6 +10,7 @@ routing requests through provider modules and query policies.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -29,6 +30,7 @@ except ImportError:
 # AI libraries for native agents
 from services_model_router import model_router, TASK_SEARCH, TASK_SYNTHESIS
 from providers.exa_provider import (
+    LEARNING_OUTPUT_SCHEMA,
     answer_exa as exa_answer_provider,
     crawl_site_exa as exa_crawl_site_provider,
     create_research_task_exa as exa_create_research_task_provider,
@@ -141,6 +143,10 @@ async def answer_web(query: str, **kwargs) -> Optional[Dict[str, Any]]:
                 "raw": {"structured_metric": structured},
             }
 
+    use_learning_schema = bool(kwargs.get("use_learning_schema", False))
+    output_schema = kwargs.get("output_schema")
+    if output_schema is None and use_learning_schema:
+        output_schema = LEARNING_OUTPUT_SCHEMA
     return await exa_answer_provider(
         query=query,
         policy_name=kwargs.get("policy_name"),
@@ -152,7 +158,7 @@ async def answer_web(query: str, **kwargs) -> Optional[Dict[str, Any]]:
         exclude_domains=kwargs.get("exclude_domains"),
         stream=bool(kwargs.get("stream", False)),
         use_text=bool(kwargs.get("use_text", True)),
-        output_schema=kwargs.get("output_schema"),
+        output_schema=output_schema,
     )
 
 
@@ -198,6 +204,37 @@ def _ignore_legacy_search_kwargs(kwargs: Dict[str, Any]) -> None:
         logger.debug("Ignoring legacy web search options after provider refactor: %s", ignored)
 
 
+def _stable_str_list(values: Any) -> List[str]:
+    if not isinstance(values, (list, tuple)):
+        return []
+    out = []
+    for v in values:
+        s = str(v).strip().lower()
+        if s:
+            out.append(s)
+    return sorted(set(out))
+
+
+def _build_search_cache_key(query: str, kwargs: Dict[str, Any], exa_num_results: int, content_max_length: int, time_range: Optional[str]) -> str:
+    payload = {
+        "query": query,
+        "time_range": time_range,
+        "exa_num_results": exa_num_results,
+        "content_max_length": content_max_length,
+        "policy_name": kwargs.get("policy_name"),
+        "category": kwargs.get("category"),
+        "max_age_hours": kwargs.get("max_age_hours"),
+        "content_mode": kwargs.get("content_mode"),
+        "include_realtime": bool(kwargs.get("include_realtime", True)),
+        "include_web_context": bool(kwargs.get("include_web_context", True)),
+        "prefer_realtime_only": bool(kwargs.get("prefer_realtime_only", False)),
+        "include_domains": _stable_str_list(kwargs.get("include_domains")),
+        "exclude_domains": _stable_str_list(kwargs.get("exclude_domains")),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
+    return f"search:web:v4:{digest}"
+
+
 async def search_web(query: str, **kwargs) -> List[Dict[str, Any]]:
     """
     Unified real-time search wrapper.
@@ -221,16 +258,26 @@ async def search_web(query: str, **kwargs) -> List[Dict[str, Any]]:
                 return [structured_result]
 
     exa_num_results = max(1, num_results - (1 if structured_result else 0))
-    cache_key = f"search:web:v3:{query}:{time_range}:{exa_num_results}:{content_max_length}"
+    cache_key = _build_search_cache_key(query, kwargs, exa_num_results, content_max_length, time_range)
     cached_web_results = cache.get(cache_key)
     if cached_web_results is None:
-        cached_web_results = await search_exa(
-            query=query,
-            num_results=exa_num_results,
-            use_contents=True,
-            time_range=time_range,
-            content_max_length=content_max_length,
-        )
+        try:
+            cached_web_results = await search_exa(
+                query=query,
+                num_results=exa_num_results,
+                use_contents=True,
+                time_range=time_range,
+                content_max_length=content_max_length,
+                policy_name=kwargs.get("policy_name"),
+                category=kwargs.get("category"),
+                max_age_hours=kwargs.get("max_age_hours"),
+                content_mode=kwargs.get("content_mode"),
+                include_domains=kwargs.get("include_domains"),
+                exclude_domains=kwargs.get("exclude_domains"),
+            )
+        except Exception as e:
+            logger.warning("Exa search provider failure in search_web", extra={"query": query, "error": str(e)})
+            cached_web_results = []
         cache.set(cache_key, cached_web_results, expire=WEB_SEARCH_CACHE_TTL_SECONDS)
 
     if structured_result:
