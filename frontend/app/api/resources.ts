@@ -3,11 +3,23 @@
  */
 
 import { API_BASE_URL, getApiHeaders, getAuthToken } from './base';
+import { RecentQueryCache } from './_utils/recentQueryCache';
 import {
     Resource,
     Claim,
     Source
 } from './types';
+
+const RESOURCE_SEARCH_CACHE_TTL_MS = 2 * 60 * 1000;
+const RESOURCE_SEARCH_CACHE_MAX_ENTRIES = 200;
+
+const resourceSearchCache: RecentQueryCache<Resource[]> | null =
+    typeof window !== 'undefined'
+        ? new RecentQueryCache<Resource[]>({
+            maxEntries: RESOURCE_SEARCH_CACHE_MAX_ENTRIES,
+            defaultTtlMs: RESOURCE_SEARCH_CACHE_TTL_MS,
+        })
+        : null;
 
 /**
  * Search for resources by title or caption
@@ -17,8 +29,9 @@ export async function searchResources(
     graphIdOrLimit?: string | number,
     limit?: number
 ): Promise<Resource[]> {
+    const normalizedQuery = query.trim();
     const params = new URLSearchParams();
-    params.set('query', query);
+    params.set('query', normalizedQuery);
 
     let graphId: string | undefined;
     let actualLimit: number;
@@ -36,12 +49,27 @@ export async function searchResources(
         params.set('graph_id', graphId);
     }
     params.set('limit', actualLimit.toString());
-    const headers = await getApiHeaders();
-    const response = await fetch(`${API_BASE_URL}/resources/search?${params.toString()}`, { headers });
-    if (!response.ok) {
-        throw new Error(`Failed to search resources: ${response.statusText}`);
+
+    const fetcher = async () => {
+        const headers = await getApiHeaders();
+        const response = await fetch(`${API_BASE_URL}/resources/search?${params.toString()}`, { headers });
+        if (!response.ok) {
+            throw new Error(`Failed to search resources: ${response.statusText}`);
+        }
+        return response.json();
+    };
+
+    if (!resourceSearchCache) {
+        return fetcher();
     }
-    return response.json();
+
+    const cacheKey = JSON.stringify({
+        kind: 'resources.search',
+        q: normalizedQuery,
+        graphId: graphId ?? null,
+        limit: actualLimit,
+    });
+    return resourceSearchCache.getOrCreate(cacheKey, fetcher);
 }
 
 /**
