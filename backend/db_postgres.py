@@ -514,6 +514,26 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_web_reader_annotations_user_created ON web_reader_annotations(user_id, tenant_id, created_at DESC);",
 
+        # Teaching interventions (confusion-to-mastery loop)
+        """
+        CREATE TABLE IF NOT EXISTS learning_interventions (
+            id TEXT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            chat_id TEXT,
+            source VARCHAR(32) NOT NULL,
+            trigger_text TEXT NOT NULL,
+            simplified_explanation TEXT,
+            prerequisite_gap TEXT,
+            practice_question TEXT,
+            status VARCHAR(24) NOT NULL DEFAULT 'open',
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_learning_interventions_user_status ON learning_interventions(user_id, tenant_id, status, created_at DESC);",
+
         # -------------------------------------------------------------------
         # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
         # -------------------------------------------------------------------

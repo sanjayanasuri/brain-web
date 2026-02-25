@@ -372,6 +372,14 @@ async def chat_stream_endpoint(
             except Exception as e:
                 logger.warning(f"Failed task detection: {e}")
 
+            # Teaching signals
+            is_confusion_turn = False
+            try:
+                from services_teaching_engine import detect_confusion
+                is_confusion_turn = detect_confusion(payload.message)
+            except Exception:
+                is_confusion_turn = False
+
             # 3. Construct System Prompt using Orchestrator
             try:
                 from services_memory_orchestrator import build_system_prompt_with_memory
@@ -409,6 +417,12 @@ async def chat_stream_endpoint(
                 
                 {response_mode_instruction}
                 {question_policy_instruction}
+
+                ## Teaching Behavior (Critical)
+                - Act like a tutor, not a search engine.
+                - Ask one high-quality Socratic follow-up question when it helps understanding.
+                - If user shows confusion, start with a simpler explanation, identify one prerequisite gap, then ask one targeted practice question.
+                - Keep explanations evidence-anchored to available notes, article snippets, and transcript moments when present.
                 """
                 
                 system_msg = build_system_prompt_with_memory(
@@ -603,6 +617,24 @@ async def chat_stream_endpoint(
                         data = {"type": "chunk", "content": content, "cache": {"hit": False}}
                         yield f"data: {json.dumps(data)}\n\n"
             
+            # Add compact evidence anchors when available
+            try:
+                anchors = []
+                if unified_context.get("lecture_context"):
+                    anchors.append("Notes/lecture context")
+                rt = unified_context.get("recent_topics") or ""
+                if isinstance(rt, str) and "Voice transcript matches:" in rt:
+                    anchors.append("Voice transcript snippets")
+                if unified_context.get("promoted_memories"):
+                    anchors.append("Promoted memory")
+                if anchors:
+                    anchor_text = "\n\nEvidence used: " + " · ".join(anchors[:3])
+                    full_response += anchor_text
+                    data = {"type": "chunk", "content": anchor_text, "cache": {"hit": False}}
+                    yield f"data: {json.dumps(data)}\n\n"
+            except Exception:
+                pass
+
             # Send action buttons if any
             if actions:
                 action_data = {"type": "actions", "actions": actions}
@@ -665,6 +697,35 @@ async def chat_stream_endpoint(
                         )
                     except Exception as e:
                         logger.warning(f"Failed to queue fact extraction: {e}")
+
+                    # Confusion-to-mastery loop bookkeeping
+                    try:
+                        from services_teaching_engine import (
+                            create_learning_intervention,
+                            detect_confusion,
+                            maybe_mark_recent_interventions_resolved,
+                        )
+                        uid = auth.get("user_id", "unknown")
+                        tid = auth.get("tenant_id", "default")
+                        if detect_confusion(payload.message):
+                            create_learning_intervention(
+                                user_id=str(uid),
+                                tenant_id=str(tid),
+                                chat_id=chat_id_to_save,
+                                source="chat",
+                                trigger_text=payload.message,
+                                assistant_answer=full_response,
+                                metadata={"answer_id": assistant_db_id},
+                            )
+                        else:
+                            maybe_mark_recent_interventions_resolved(
+                                user_id=str(uid),
+                                tenant_id=str(tid),
+                                chat_id=chat_id_to_save,
+                                text=payload.message,
+                            )
+                    except Exception as e:
+                        logger.debug(f"Teaching intervention update skipped: {e}")
             except Exception as e:
                 logger.warning(f"Failed to save chat history: {e}")
             
