@@ -31,6 +31,7 @@ export * from './api/note-images';
 export * from './api/fill';
 export * from './api/assistant';
 export * from './api/home';
+export * from './api/capture';
 
 export async function createAnchorBranch(payload: {
     artifact: any;

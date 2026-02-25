@@ -3,16 +3,28 @@
 import { useEffect, useState } from 'react';
 import { getHomeFeed, type HomeFeed } from '../../api/home';
 import { dismissInterestSuggestion, markInterestSuggestionOpened } from '../../api/interest';
+import { createCapture, listCapture, promoteCapture, type CaptureItem } from '../../api/capture';
 
 export default function HomeFeedCard() {
   const [feed, setFeed] = useState<HomeFeed | null>(null);
   const [loading, setLoading] = useState(true);
+  const [captureText, setCaptureText] = useState('');
+  const [captureItems, setCaptureItems] = useState<CaptureItem[]>([]);
+  const [captureSaving, setCaptureSaving] = useState(false);
+
+  async function refreshHomeAndCapture() {
+    const [homeData, captures] = await Promise.all([
+      getHomeFeed(),
+      listCapture('new', 5),
+    ]);
+    setFeed(homeData);
+    setCaptureItems(captures);
+  }
 
   useEffect(() => {
     (async () => {
       try {
-        const data = await getHomeFeed();
-        setFeed(data);
+        await refreshHomeAndCapture();
       } finally {
         setLoading(false);
       }
@@ -25,8 +37,62 @@ export default function HomeFeedCard() {
 
   if (!feed) return null;
 
+  const submitCapture = async () => {
+    const text = captureText.trim();
+    if (!text) return;
+    try {
+      setCaptureSaving(true);
+      await createCapture(text, 'text');
+      setCaptureText('');
+      await refreshHomeAndCapture();
+    } finally {
+      setCaptureSaving(false);
+    }
+  };
+
+  const promoteToTask = async (item: CaptureItem) => {
+    await promoteCapture(item.id, 'task');
+    await refreshHomeAndCapture();
+  };
+
   return (
-    <div style={{ width: '100%', maxWidth: 900, marginTop: 18, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+    <div style={{ width: '100%', maxWidth: 900, marginTop: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Quick Capture</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <input
+            value={captureText}
+            onChange={(e) => setCaptureText(e.target.value)}
+            placeholder="Capture an idea, reminder, or note..."
+            style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)' }}
+            onKeyDown={(e) => { if (e.key === 'Enter') submitCapture(); }}
+          />
+          <button
+            onClick={submitCapture}
+            disabled={captureSaving || !captureText.trim()}
+            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12 }}
+          >
+            {captureSaving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {captureItems.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {captureItems.slice(0, 3).map((c) => (
+              <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
+                <div style={{ fontSize: 13, color: 'var(--ink)' }}>{c.content}</div>
+                <button
+                  onClick={() => promoteToTask(c)}
+                  style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  To Task
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
       <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
           <div style={{ fontWeight: 600 }}>Today</div>
@@ -95,6 +161,7 @@ export default function HomeFeedCard() {
             ))}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
