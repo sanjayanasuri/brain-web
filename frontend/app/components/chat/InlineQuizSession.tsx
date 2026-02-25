@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { startStudySession, getNextTask, submitAttempt, endStudySession } from '../../api-client-study';
 
 interface InlineQuizSessionProps {
@@ -89,9 +89,11 @@ export default function InlineQuizSession({ topic, graphId, onClose }: InlineQui
   };
 
   // Auto-start on mount
-  if (phase === 'loading' && !sessionId && !error) {
-    startQuiz();
-  }
+  useEffect(() => {
+    if (phase === 'loading' && !sessionId && !error) {
+      startQuiz();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scoreColor = feedback ? (feedback.score >= 0.7 ? '#22c55e' : feedback.score >= 0.4 ? '#f59e0b' : '#ef4444') : '#999';
 
