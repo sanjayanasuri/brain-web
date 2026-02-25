@@ -111,6 +111,9 @@ VOICE_SPEECH_MIN_DURATION_MS = int(os.getenv("VOICE_SPEECH_MIN_DURATION_MS", "80
 VOICE_STOP_TEXT_MIN_LENGTH = int(os.getenv("VOICE_STOP_TEXT_MIN_LENGTH", "3"))  # Min remaining text length to process after stop
 VOICE_INTERRUPT_MAX_WORDS = int(os.getenv("VOICE_INTERRUPT_MAX_WORDS", "5"))  # Max words in interrupt-only command
 
+# Web search API guardrails
+WEB_SEARCH_RATE_LIMIT_PER_MINUTE = int(os.getenv("WEB_SEARCH_RATE_LIMIT_PER_MINUTE", "60"))
+
 # Memory promotion thresholds (short -> active -> long-term)
 MEMORY_PROMOTION_MIN_CONFIDENCE = float(os.getenv("MEMORY_PROMOTION_MIN_CONFIDENCE", "0.60"))
 MEMORY_ACTIVE_THRESHOLD = float(os.getenv("MEMORY_ACTIVE_THRESHOLD", "0.72"))

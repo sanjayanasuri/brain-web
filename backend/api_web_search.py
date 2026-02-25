@@ -3,10 +3,16 @@ Brain Web Web Search API Endpoints
 
 Native web search endpoints for Brain Web.
 """
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from typing import Any, Dict, List, Optional
 import logging
+import threading
+import time
+from collections import defaultdict
 from pydantic import BaseModel, Field
+
+from auth import require_auth
+from config import WEB_SEARCH_RATE_LIMIT_PER_MINUTE
 
 from services_web_search import (
     search_web,
@@ -31,7 +37,37 @@ from services_web_search import (
 
 logger = logging.getLogger("brain_web")
 
-router = APIRouter(prefix="/web-search", tags=["web-search"])
+# Simple per-(tenant,user) in-memory limiter for web-search endpoints.
+# In production at scale, replace with Redis distributed limiter.
+_web_rate_limit_store: Dict[str, list] = defaultdict(list)
+_web_rate_limit_lock = threading.Lock()
+
+
+def _check_web_rate_limit(*, tenant_id: str, user_id: str) -> bool:
+    key = f"{tenant_id}:{user_id}"
+    with _web_rate_limit_lock:
+        now = time.time()
+        _web_rate_limit_store[key] = [ts for ts in _web_rate_limit_store[key] if now - ts < 60]
+        if len(_web_rate_limit_store[key]) >= WEB_SEARCH_RATE_LIMIT_PER_MINUTE:
+            return False
+        _web_rate_limit_store[key].append(now)
+        return True
+
+
+def _require_web_access(auth: dict = Depends(require_auth)) -> dict:
+    tenant_id = auth.get("tenant_id")
+    user_id = auth.get("user_id")
+    if not tenant_id or not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not _check_web_rate_limit(tenant_id=tenant_id, user_id=user_id):
+        raise HTTPException(
+            status_code=429,
+            detail=f"Web search rate limit exceeded ({WEB_SEARCH_RATE_LIMIT_PER_MINUTE}/min)",
+        )
+    return auth
+
+
+router = APIRouter(prefix="/web-search", tags=["web-search"], dependencies=[Depends(_require_web_access)])
 
 
 class ExaAnswerRequest(BaseModel):
