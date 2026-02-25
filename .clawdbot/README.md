@@ -91,6 +91,12 @@ export CLAWDBOT_REQUIRE_UI_SCREENSHOT=true
 ./.clawdbot/scripts/swarm-start.sh
 ```
 
+## Quick task submit
+
+```bash
+./.clawdbot/scripts/submit-task.sh --title "Build X" --scope "frontend/app" --desc "customer request" --lane A
+```
+
 ## Daily digest
 
 ```bash
