@@ -1,6 +1,7 @@
 'use client';
 
 import StudyPanel from '../components/dashboard/StudyPanel';
+import LearningInterventionsCard from '../components/home/LearningInterventionsCard';
 
 export default function LearnPage() {
   return (
@@ -18,6 +19,8 @@ export default function LearnPage() {
             Back Home
           </button>
         </div>
+
+        <LearningInterventionsCard />
 
         <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 12, background: 'var(--panel)' }}>
           <StudyPanel />

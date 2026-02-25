@@ -35,6 +35,7 @@ export * from './api/capture';
 export * from './api/indexing';
 export * from './api/reader';
 export * from './api/reader-annotations';
+export * from './api/learning';
 
 export async function createAnchorBranch(payload: {
     artifact: any;
