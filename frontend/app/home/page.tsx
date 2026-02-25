@@ -46,6 +46,7 @@ import ChatMessagesList from "../components/chat/ChatMessagesList";
 import StudyPanel from "../components/dashboard/StudyPanel";
 import VoiceAgentPanel from "../components/voice/VoiceAgentPanel";
 import { ActionButtons } from "../components/chat/ActionButtons";
+import WelcomeModal from "../components/onboarding/WelcomeModal";
 
 function HomePageInner() {
   const router = useRouter();
@@ -477,6 +478,8 @@ function HomePageInner() {
   const sectionsWithDedupedEntries = notesDigest?.sections || [];
 
   return (
+    <>
+    <WelcomeModal />
     <div
       className="page-container"
       onDragOver={handleDragOver}
@@ -918,6 +921,7 @@ function HomePageInner() {
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
       `}} />
     </div>
+    </>
   );
 }
 
