@@ -1,5 +1,6 @@
-name: Deploy to Hetzner
+name: Deploy to Hetzner (build on server)
 
+# Auto-deploy on push to main until GHCR path is set up; then switch to deploy-ghcr-hetzner.yml.
 on:
   push:
     branches: [ main ]

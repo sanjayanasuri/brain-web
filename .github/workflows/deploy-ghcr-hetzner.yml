@@ -1,14 +1,8 @@
 name: Deploy to Hetzner (GHCR Immutable)
 
+# Manual only until GHCR secrets + server are set up (see docs/deployment/GHCR_HETZNER_IMMUTABLE.md).
+# Then enable push trigger here and disable it on deploy.yml.
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'scripts/**'
-      - 'docker-compose*.yml'
-      - '.github/workflows/deploy-ghcr-hetzner.yml'
   workflow_dispatch:
 
 concurrency:
@@ -27,8 +21,39 @@ env:
   FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/brain-web-frontend
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup frontend
+        uses: ./.github/actions/setup-frontend
+
+      - name: Frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Setup backend
+        uses: ./.github/actions/setup-backend
+
+      - name: Backend unit tests (no Neo4j)
+        working-directory: backend
+        env:
+          ENABLE_SQLITE_FALLBACK: 'true'
+          OPENAI_API_KEY: 'test-key'
+          NEO4J_URI: 'bolt://localhost:7687'
+          NEO4J_USER: 'neo4j'
+          NEO4J_PASSWORD: 'test-password'
+        run: |
+          pytest tests/test_voice_style_profile.py tests/test_voice_learning_signals.py tests/test_services_vad.py tests/test_events.py tests/test_unified_primitives.py tests/test_unified_citations.py tests/test_feedback_classifier.py tests/test_notes_digest_merge_unit.py -m unit -q --tb=short
+
   build-and-deploy:
     runs-on: ubuntu-latest
+    needs: [test]
 
     steps:
       - name: Checkout code
