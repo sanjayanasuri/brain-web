@@ -35,3 +35,20 @@ export async function getAssistantStylePrompt(): Promise<string> {
   const data = await res.json();
   return data?.style_prompt || '';
 }
+
+export type AssistantAction = {
+  type: 'web_search' | 'save_note' | 'set_reminder' | 'summarize_answer' | string;
+  label: string;
+  query?: string;
+};
+
+export async function planAssistantActions(message: string, answer?: string): Promise<AssistantAction[]> {
+  const res = await fetch(`${API_BASE_URL}/assistant/actions/plan`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+    body: JSON.stringify({ message, answer }),
+  });
+  if (!res.ok) throw new Error('Failed to plan assistant actions');
+  const data = await res.json();
+  return data?.actions || [];
+}

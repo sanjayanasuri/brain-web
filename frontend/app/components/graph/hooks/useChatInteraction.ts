@@ -1,12 +1,14 @@
 'use client';
 
 import { useCallback, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useChat, ChatMessage } from './useChatState';
 import { useUI } from './useUIState';
 import { useGraph } from '../GraphContext';
 import { VisualNode, VisualGraph } from '../GraphTypes';
-import { Concept } from '../../../api-client';
+import { Concept, selectGraph, createConcept, getConcept, createRelationshipByIds, planAssistantActions } from '../../../api-client';
 import { getCurrentSessionId, setCurrentSessionId, createChatSession, addMessageToSession } from '../../../lib/chatSessions';
+import { APP_QUERY_KEYS } from '../../../hooks/useAppQueries';
 import { emitChatMessageCreated } from '../../../lib/sessionEvents';
 import { normalizeEvidence, EvidenceItem } from '../../../types/evidence';
 
@@ -20,6 +22,7 @@ export function useChatInteraction(
     clearEvidenceHighlight: () => void,
     applyEvidenceHighlightWithRetry: (evidenceItems: EvidenceItem[], retrievalMeta: any) => Promise<void>
 ) {
+    const queryClient = useQueryClient();
     const chat = useChat();
     const ui = useUI();
     const graph = useGraph();
@@ -202,11 +205,10 @@ export function useChatInteraction(
                 const action = data.suggestedActions[0];
                 try {
                     chat.actions.setLoadingStage(`Executing: ${action.label}...`);
-                    const api = await import('../../../api-client');
 
                     if (action.type === 'add' && action.concept) {
-                        await api.selectGraph(activeGraphId);
-                        const newConcept = await api.createConcept({
+                        await selectGraph(activeGraphId);
+                        const newConcept = await createConcept({
                             name: action.concept,
                             domain: action.domain || 'general',
                             type: 'concept',
@@ -215,7 +217,7 @@ export function useChatInteraction(
 
                         let fullConcept: Concept;
                         try {
-                            fullConcept = await api.getConcept(newConcept.node_id);
+                            fullConcept = await getConcept(newConcept.node_id);
                         } catch {
                             fullConcept = newConcept;
                         }
@@ -252,7 +254,7 @@ export function useChatInteraction(
                         const targetConcept = await resolveConceptByName(action.target);
 
                         if (sourceConcept && targetConcept) {
-                            await api.createRelationshipByIds(sourceConcept.node_id, targetConcept.node_id, action.label || 'related_to');
+                            await createRelationshipByIds(sourceConcept.node_id, targetConcept.node_id, action.label || 'related_to');
                             await loadGraph(activeGraphId);
                             chat.actions.setChatAnswer(`✅ Linked "${action.source}" to "${action.target}"!`);
                         }
@@ -267,13 +269,22 @@ export function useChatInteraction(
             const messageIdToUpdate = currentMessageIdRef.current || userMessageId;
 
             // Use updateChatMessage to ensure we don't rely on stale state for the full history
+            let resolvedActions = data.suggestedActions || [];
+            try {
+                if (!resolvedActions || resolvedActions.length === 0) {
+                    resolvedActions = await planAssistantActions(message, data.answer || '');
+                }
+            } catch (e) {
+                console.warn('[Chat] action planning failed:', e);
+            }
+
             chat.actions.updateChatMessage(messageIdToUpdate, {
                 answer: data.answer,
                 answerId: data.answerId || null,
                 answerSections: data.answer_sections || data.sections || null,
                 suggestedQuestions: data.suggestedQuestions || [],
                 usedNodes: data.usedNodes || [],
-                suggestedActions: data.suggestedActions || [],
+                suggestedActions: resolvedActions || [],
                 retrievalMeta: data.retrievalMeta || null,
                 evidenceUsed: normalizedEvidence,
                 anchorCitations: data.anchorCitations || data.citations || [],
@@ -284,7 +295,7 @@ export function useChatInteraction(
             chat.actions.setAnswerSections(data.answer_sections || data.sections || null);
             chat.actions.setUsedNodes(data.usedNodes || []);
             chat.actions.setSuggestedQuestions(data.suggestedQuestions || []);
-            chat.actions.setSuggestedActions(data.suggestedActions || []);
+            chat.actions.setSuggestedActions(resolvedActions || []);
             chat.actions.setRetrievalMeta(data.retrievalMeta || null);
             chat.actions.setEvidenceUsed(normalizedEvidence);
 
@@ -297,6 +308,7 @@ export function useChatInteraction(
                 const newSession = await createChatSession(message, data.answer || '', data.answerId || null, null, activeGraphId, activeBranchId);
                 sessionId = newSession.id;
                 setCurrentSessionId(sessionId);
+                queryClient.invalidateQueries({ queryKey: APP_QUERY_KEYS.chatSessions });
             }
 
             if (sessionId && data.answer) {
@@ -309,6 +321,7 @@ export function useChatInteraction(
                 const emittedEventId = eventResult?.event_id || null;
 
                 addMessageToSession(sessionId, message, data.answer, data.answerId || null, data.suggestedQuestions || [], normalizedEvidence, emittedEventId);
+                queryClient.invalidateQueries({ queryKey: APP_QUERY_KEYS.chatSessions });
 
                 if (emittedEventId) {
                     chat.actions.updateChatMessage(messageIdToUpdate, { eventId: emittedEventId });
@@ -330,7 +343,7 @@ export function useChatInteraction(
             isSubmittingChatRef.current = false;
             currentMessageIdRef.current = null;
         }
-    }, [chat, activeGraphId, activeBranchId, loadGraph, centerNodeInVisibleArea, updateSelectedPosition, resolveConceptByName, clearEvidenceHighlight, applyEvidenceHighlightWithRetry, setGraphData, setSelectedNode]);
+    }, [queryClient, chat, activeGraphId, activeBranchId, loadGraph, centerNodeInVisibleArea, updateSelectedPosition, resolveConceptByName, clearEvidenceHighlight, applyEvidenceHighlightWithRetry, setGraphData, setSelectedNode]);
 
     return useMemo(() => ({
         handleChatSubmit,
