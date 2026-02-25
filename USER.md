@@ -6,7 +6,7 @@ _Learn about the person you're helping. Update this as you go._
 - **What to call them:** sanjay
 - **Pronouns:** he/him
 - **Timezone:** est
-- **Notes:** im a senior at purdue university. During execution, prefers concise milestone-only updates and autonomous progress unless blocked.
+- **Notes:** im a senior at purdue university. During execution, prefers concise milestone-only updates and autonomous progress unless blocked. Autonomous release mode is ON: continue until code is pushed, CI is green, and demo is live; only interrupt for true blockers.
 
 ## Context
 
