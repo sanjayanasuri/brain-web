@@ -356,6 +356,25 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, created_at ASC);",
 
+        # Canonical conversation memory events
+        """
+        CREATE TABLE IF NOT EXISTS conversation_memory_events (
+            id TEXT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            graph_id VARCHAR(255),
+            branch_id VARCHAR(255),
+            source VARCHAR(32) NOT NULL,
+            turn_index INTEGER NOT NULL,
+            user_text TEXT NOT NULL,
+            assistant_text TEXT,
+            metadata JSONB DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_conversation_memory_events_user ON conversation_memory_events(user_id, tenant_id, created_at DESC);",
+
         # -------------------------------------------------------------------
         # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
         # -------------------------------------------------------------------

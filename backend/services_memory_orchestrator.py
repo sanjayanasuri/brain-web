@@ -73,6 +73,7 @@ def get_unified_context(
     context = {
         "user_facts": "",
         "promoted_memories": "",
+        "recent_memory_events": "",
         "user_identity": {}, # Goals, Background
         "tutor_persona": {}, # Personality parameters
         "lecture_context": "",
@@ -109,6 +110,21 @@ def get_unified_context(
                 context["promoted_memories"] = "\n".join(lines)
         except Exception as e:
             logger.warning(f"Failed to load promoted memories: {e}")
+
+    # 1c. Canonical recent conversation events
+    if include_chat_history:
+        try:
+            from services_conversation_memory_events import get_recent_conversation_memory_events
+            events = get_recent_conversation_memory_events(user_id=user_id, tenant_id=tenant_id, limit=6)
+            if events:
+                lines = []
+                for e in events:
+                    u = (e.get("user_text") or "").strip()
+                    if u:
+                        lines.append(f"- {u[:140]}{'...' if len(u) > 140 else ''}")
+                context["recent_memory_events"] = "\n".join(lines[:6])
+        except Exception as e:
+            logger.warning(f"Failed to load recent conversation events: {e}")
 
     # 2. Working memory: Current lecture context from Qdrant
     if include_lecture_context and active_lecture_id:
@@ -378,7 +394,7 @@ def build_system_prompt_with_memory(
         Enhanced system prompt with memory context
     """
     if include_sections is None:
-        include_sections = ["user_facts", "promoted_memories", "lecture_context", "study_context", "recent_topics"]
+        include_sections = ["user_facts", "promoted_memories", "recent_memory_events", "lecture_context", "study_context", "recent_topics"]
     
     memory_sections = []
     
@@ -394,6 +410,14 @@ def build_system_prompt_with_memory(
         memory_sections.append(f"""
 ## Active + Long-Term Memory
 {context["promoted_memories"]}
+""")
+
+    # Add recent canonical conversation memory events
+    if "recent_memory_events" in include_sections and context.get("recent_memory_events"):
+        memory_sections.append(f"""
+## Recent Conversation Memory Events
+{context["recent_memory_events"]}
+Use these for continuity and personalization; avoid verbatim repetition unless user asks.
 """)
 
     # Add lecture context
