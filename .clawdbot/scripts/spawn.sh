@@ -44,10 +44,16 @@ fi
 
 RENDERED_PROMPT="$(mktemp)"
 trap 'rm -f "$RENDERED_PROMPT"' EXIT
-sed -e "s|{{TASK_ID}}|$TASK_ID|g" \
-    -e "s|{{BRANCH_NAME}}|$BRANCH_NAME|g" \
-    -e "s|{{TASK_DESCRIPTION}}|$TASK_DESCRIPTION|g" \
-    "$PROMPT_FILE" > "$RENDERED_PROMPT"
+python3 - <<PY
+from pathlib import Path
+p = Path("$PROMPT_FILE")
+out = Path("$RENDERED_PROMPT")
+text = p.read_text()
+text = text.replace("{{TASK_ID}}", """$TASK_ID""")
+text = text.replace("{{BRANCH_NAME}}", """$BRANCH_NAME""")
+text = text.replace("{{TASK_DESCRIPTION}}", """$TASK_DESCRIPTION""")
+out.write_text(text)
+PY
 
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
   echo "Tmux session $TMUX_SESSION already exists. Reusing." >&2
