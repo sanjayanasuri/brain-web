@@ -3,11 +3,27 @@
  */
 
 import { API_BASE_URL, getApiHeaders } from './base';
+import { RecentQueryCache } from './_utils/recentQueryCache';
 import {
     Concept,
     ConceptNote,
     GraphData
 } from './types';
+
+const CONCEPT_SEARCH_CACHE_TTL_MS = 2 * 60 * 1000;
+const CONCEPT_SEARCH_CACHE_MAX_ENTRIES = 200;
+
+const conceptSearchCache: RecentQueryCache<{
+    query: string;
+    results: Concept[];
+    count: number;
+}> | null =
+    typeof window !== 'undefined'
+        ? new RecentQueryCache({
+            maxEntries: CONCEPT_SEARCH_CACHE_MAX_ENTRIES,
+            defaultTtlMs: CONCEPT_SEARCH_CACHE_TTL_MS,
+        })
+        : null;
 
 export async function getConceptNotes(nodeId: string, limit = 10, offset = 0): Promise<ConceptNote[]> {
     const headers = await getApiHeaders();
@@ -513,18 +529,35 @@ export async function searchConcepts(
     results: Concept[];
     count: number;
 }> {
-    const headers = await getApiHeaders();
-    const params = new URLSearchParams();
-    params.set('q', query);
-    if (graphId) {
-        params.set('graph_id', graphId);
+    const normalizedQuery = query.trim();
+
+    const fetcher = async () => {
+        const headers = await getApiHeaders();
+        const params = new URLSearchParams();
+        params.set('q', normalizedQuery);
+        if (graphId) {
+            params.set('graph_id', graphId);
+        }
+        params.set('limit', limit.toString());
+
+        const response = await fetch(`${API_BASE_URL}/concepts/search?${params.toString()}`, { headers });
+        if (!response.ok) {
+            throw new Error(`Failed to search concepts: ${response.statusText}`);
+        }
+        return response.json();
+    };
+
+    if (!conceptSearchCache) {
+        return fetcher();
     }
-    params.set('limit', limit.toString());
-    const response = await fetch(`${API_BASE_URL}/concepts/search?${params.toString()}`, { headers });
-    if (!response.ok) {
-        throw new Error(`Failed to search concepts: ${response.statusText}`);
-    }
-    return response.json();
+
+    const cacheKey = JSON.stringify({
+        kind: 'concepts.search',
+        q: normalizedQuery,
+        graphId: graphId ?? null,
+        limit,
+    });
+    return conceptSearchCache.getOrCreate(cacheKey, fetcher);
 }
 
 /**
