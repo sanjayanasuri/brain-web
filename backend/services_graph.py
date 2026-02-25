@@ -65,7 +65,7 @@ def _build_tenant_filter_clause(tenant_id: str) -> str:
     """Build strict tenant filter for GraphSpace."""
     if not tenant_id:
         raise ValueError("tenant_id is required for tenant filtering")
-    return "AND g.tenant_id = $tenant_id"
+    return "WHERE g.tenant_id = $tenant_id"
 
 
 def _normalize_include_proposed(include_proposed: Optional[str]) -> str:
@@ -181,16 +181,7 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
         "tenant_id": resolved_tenant_id,
     }
     
-    query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
-    {tenant_filter}
-    MATCH (c:Concept)-[:BELONGS_TO]->(g)
-    WHERE {' AND '.join(where_clauses)}
-      AND (
-        c.name = $name
-        OR toLower(trim(c.name)) = $normalized_name
-        OR $normalized_name IN [alias IN COALESCE(c.aliases, []) | toLower(trim(alias))]
-      )
+    return_fields = """
     RETURN c.node_id AS node_id,
            c.name AS name,
            c.domain AS domain,
@@ -206,8 +197,32 @@ def get_concept_by_name(session: Session, name: str, include_archived: bool = Fa
            c.last_updated_by AS last_updated_by
     LIMIT 1
     """
-    result = session.run(query, **params)
-    record = result.single()
+
+    # Fast path: exact name lookup via (graph_id, name) NODE KEY index.
+    exact_query = f"""
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    {tenant_filter}
+    MATCH (c:Concept {{graph_id: $graph_id, name: $name}})-[:BELONGS_TO]->(g)
+    WHERE {' AND '.join(where_clauses)}
+    {return_fields}
+    """
+    record = session.run(exact_query, **params).single()
+    if record:
+        return _normalize_concept_from_db(record.data())
+
+    # Fallback: case-insensitive name match or alias match.
+    fallback_query = f"""
+    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    {tenant_filter}
+    MATCH (c:Concept {{graph_id: $graph_id}})-[:BELONGS_TO]->(g)
+    WHERE {' AND '.join(where_clauses)}
+      AND (
+        toLower(trim(c.name)) = $normalized_name
+        OR $normalized_name IN [alias IN COALESCE(c.aliases, []) | toLower(trim(alias))]
+      )
+    {return_fields}
+    """
+    record = session.run(fallback_query, **params).single()
     if not record:
         return None
     return _normalize_concept_from_db(record.data())
@@ -258,17 +273,15 @@ def get_concept_by_slug(session: Session, slug: str, include_archived: bool = Fa
     ensure_graph_scoping_initialized(session)
     graph_id, branch_id, resolved_tenant_id = _get_tenant_scoped_graph_context(session, tenant_id=tenant_id)
     where_clauses = [
-        "c.url_slug = $slug",
         "$branch_id IN COALESCE(c.on_branches, [])"
     ]
     if not include_archived:
         where_clauses.append("COALESCE(c.archived, false) = false")
     
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
+    MATCH (c:Concept {{url_slug: $slug}})-[:BELONGS_TO]->(g:GraphSpace {{graph_id: $graph_id}})
     WHERE g.tenant_id = $tenant_id
-    MATCH (c:Concept)-[:BELONGS_TO]->(g)
-    WHERE {' AND '.join(where_clauses)}
+      AND {' AND '.join(where_clauses)}
     RETURN c.node_id AS node_id,
            c.name AS name,
            c.domain AS domain,
@@ -738,8 +751,7 @@ def link_artifact_mentions_concept(
         params["ingestion_run_id"] = ingestion_run_id
     
     query = f"""
-    MATCH (g:GraphSpace {{graph_id: $graph_id}})
-    MATCH (a:Artifact {{artifact_id: $artifact_id}})-[:BELONGS_TO]->(g)
+    MATCH (a:Artifact {{artifact_id: $artifact_id}})-[:BELONGS_TO]->(g:GraphSpace {{graph_id: $graph_id}})
     MATCH (c:Concept {{node_id: $concept_node_id}})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(a.on_branches, []) AND $branch_id IN COALESCE(c.on_branches, [])
     MERGE (a)-[r:MENTIONS]->(c)
@@ -765,8 +777,7 @@ def get_artifact(session: Session, artifact_id: str) -> Optional[Dict[str, Any]]
     graph_id, branch_id = get_active_graph_context(session)
     
     query = """
-    MATCH (g:GraphSpace {graph_id: $graph_id})
-    MATCH (a:Artifact {artifact_id: $artifact_id})-[:BELONGS_TO]->(g)
+    MATCH (a:Artifact {artifact_id: $artifact_id})-[:BELONGS_TO]->(g:GraphSpace {graph_id: $graph_id})
     WHERE $branch_id IN COALESCE(a.on_branches, [])
     RETURN a.artifact_id AS artifact_id,
            a.graph_id AS graph_id,
@@ -809,8 +820,8 @@ def create_relationship(session: Session, payload: RelationshipCreate, tenant_id
     graph_id, branch_id = get_active_graph_context(session, tenant_id=tenant_id)
     query = """
     MATCH (g:GraphSpace {graph_id: $graph_id})
-    MATCH (s:Concept {name: $source_name})-[:BELONGS_TO]->(g)
-    MATCH (t:Concept {name: $target_name})-[:BELONGS_TO]->(g)
+    MATCH (s:Concept {graph_id: $graph_id, name: $source_name})-[:BELONGS_TO]->(g)
+    MATCH (t:Concept {graph_id: $graph_id, name: $target_name})-[:BELONGS_TO]->(g)
     WHERE $branch_id IN COALESCE(s.on_branches, []) AND $branch_id IN COALESCE(t.on_branches, [])
     MERGE (s)-[r:`%s`]->(t)
     SET r.graph_id = COALESCE(r.graph_id, $graph_id),

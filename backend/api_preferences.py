@@ -43,7 +43,7 @@ from services_tutor_profile import (
     set_tutor_profile as set_tutor_profile_service,
     patch_tutor_profile as patch_tutor_profile_service,
 )
-from auth import get_user_context_from_request
+from auth import get_user_context_from_request, require_auth
 
 router = APIRouter(prefix="/preferences", tags=["preferences"])
 
