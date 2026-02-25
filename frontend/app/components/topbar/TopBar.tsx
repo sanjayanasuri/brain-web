@@ -1519,6 +1519,7 @@ export default function TopBar() {
 
   const [graphSwitcherOpen, setGraphSwitcherOpen] = useState(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [createGraphOpen, setCreateGraphOpen] = useState(false);
   const [createGraphName, setCreateGraphName] = useState('');
   const [createGraphError, setCreateGraphError] = useState<string | null>(null);
@@ -1533,6 +1534,7 @@ export default function TopBar() {
   const [scopePickerSearchQuery, setScopePickerSearchQuery] = useState('');
   const graphSwitcherRef = useRef<HTMLDivElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const createGraphDeepLinkHandledRef = useRef<string | null>(null);
   const [isNewNoteModalOpen, setNewNoteModalOpen] = useState(false);
 
@@ -2600,6 +2602,9 @@ export default function TopBar() {
       if (newMenuRef.current && !newMenuRef.current.contains(event.target as Node)) {
         setNewMenuOpen(false);
       }
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
       if (scopeMenuRef.current && !scopeMenuRef.current.contains(event.target as Node)) {
         setScopeMenuOpen(false);
         setScopePickerOpen(false);
@@ -3409,24 +3414,107 @@ export default function TopBar() {
             )}
           </button >
 
-          {/* Profile icon (simple placeholder) */}
-          < div
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '50%',
-              backgroundColor: 'var(--border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              fontSize: '16px',
-              color: 'var(--muted)',
-            }}
-            onClick={() => router.push('/profile-customization')}
-          >
-            👤
-          </div >
+          {/* Profile menu */}
+          <div ref={profileMenuRef} style={{ position: 'relative' }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                backgroundColor: profileMenuOpen ? 'var(--accent, #3b82f6)' : 'var(--border)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: '16px',
+                color: profileMenuOpen ? '#fff' : 'var(--muted)',
+                transition: 'all 0.15s',
+              }}
+              onClick={() => setProfileMenuOpen(!profileMenuOpen)}
+            >
+              👤
+            </div>
+            {profileMenuOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  right: 0,
+                  backgroundColor: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '12px',
+                  padding: '6px',
+                  minWidth: '180px',
+                  boxShadow: '0 8px 24px rgba(15, 23, 42, 0.15)',
+                  zIndex: 1100,
+                }}
+              >
+                <div
+                  onClick={() => {
+                    router.push('/profile-customization');
+                    setProfileMenuOpen(false);
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>⚙️</span> Settings
+                </div>
+                <div
+                  onClick={() => {
+                    router.push('/source-management');
+                    setProfileMenuOpen(false);
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>📄</span> Sources
+                </div>
+                <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0' }} />
+                <div
+                  onClick={async () => {
+                    setProfileMenuOpen(false);
+                    const { signOut } = await import('next-auth/react');
+                    signOut({ callbackUrl: '/welcome' });
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    transition: 'all 0.1s',
+                    color: '#ef4444',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>🚪</span> Sign Out
+                </div>
+              </div>
+            )}
+          </div>
         </div >
       </div >
       {createGraphOpen && (
