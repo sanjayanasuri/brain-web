@@ -55,6 +55,7 @@ from api_events import router as events_router, sessions_router
 from api_events_replay import router as events_replay_router
 from api_review import router as review_router
 from api_suggestions import router as suggestions_router
+from api_interest import router as interest_router
 from api_ingestion_runs import router as ingestion_runs_router
 from api_paths import router as paths_router
 from api_quality import router as quality_router
@@ -480,6 +481,7 @@ app.include_router(sessions_router)
 app.include_router(events_replay_router)
 app.include_router(review_router)
 app.include_router(suggestions_router)
+app.include_router(interest_router)
 app.include_router(paths_router)
 app.include_router(quality_router)
 # Web ingestion router is always included but has local-only guard

@@ -375,6 +375,32 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_conversation_memory_events_user ON conversation_memory_events(user_id, tenant_id, created_at DESC);",
 
+        # Interest profiles and suggestion history
+        """
+        CREATE TABLE IF NOT EXISTS interest_profiles (
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, tenant_id)
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS content_suggestions (
+            id TEXT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            kind VARCHAR(64) NOT NULL,
+            title TEXT NOT NULL,
+            reason TEXT,
+            query TEXT,
+            score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_content_suggestions_user_created ON content_suggestions(user_id, tenant_id, created_at DESC);",
+
         # -------------------------------------------------------------------
         # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
         # -------------------------------------------------------------------
