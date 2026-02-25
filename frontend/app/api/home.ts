@@ -19,6 +19,7 @@ export type HomeFeed = {
   today: { tasks: HomeTask[]; task_count: number };
   picks: HomePick[];
   continuity: string[];
+  capture_inbox?: { new_count: number };
 };
 
 export async function getHomeFeed(): Promise<HomeFeed> {

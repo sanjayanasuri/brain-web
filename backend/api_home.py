@@ -65,6 +65,21 @@ def get_home_feed(user_ctx=Depends(require_auth), session=Depends(get_neo4j_sess
     except Exception:
         continuity = []
 
+    capture_new_count = 0
+    try:
+        cap_rows = execute_query(
+            """
+            SELECT COUNT(*)::int AS c
+            FROM capture_inbox
+            WHERE user_id=%s AND tenant_id=%s AND status='new'
+            """,
+            (str(user_id), str(tenant_id)),
+        ) or []
+        if cap_rows:
+            capture_new_count = int(cap_rows[0].get("c") or 0)
+    except Exception:
+        capture_new_count = 0
+
     return {
         "today": {
             "tasks": tasks,
@@ -72,4 +87,7 @@ def get_home_feed(user_ctx=Depends(require_auth), session=Depends(get_neo4j_sess
         },
         "picks": picks,
         "continuity": continuity,
+        "capture_inbox": {
+            "new_count": capture_new_count,
+        },
     }

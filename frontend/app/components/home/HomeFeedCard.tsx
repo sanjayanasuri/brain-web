@@ -28,7 +28,10 @@ export default function HomeFeedCard() {
   return (
     <div style={{ width: '100%', maxWidth: 900, marginTop: 18, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
       <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Today</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ fontWeight: 600 }}>Today</div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>Inbox: {feed.capture_inbox?.new_count ?? 0}</div>
+        </div>
         {feed.today.tasks.length === 0 ? (
           <div style={{ color: 'var(--muted)', fontSize: 13 }}>No tasks queued for today.</div>
         ) : (
@@ -42,6 +45,12 @@ export default function HomeFeedCard() {
                     style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer' }}
                   >
                     Focus
+                  </button>
+                  <button
+                    onClick={() => window.location.assign('/profile-customization')}
+                    style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    Plan
                   </button>
                 </div>
               </div>

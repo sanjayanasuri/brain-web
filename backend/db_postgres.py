@@ -461,6 +461,22 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_content_suggestion_events_user_created ON content_suggestion_events(user_id, tenant_id, created_at DESC);",
 
+        # Unified capture inbox (voice/text/note quick captures)
+        """
+        CREATE TABLE IF NOT EXISTS capture_inbox (
+            id TEXT PRIMARY KEY,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            source VARCHAR(32) NOT NULL,
+            content TEXT NOT NULL,
+            status VARCHAR(24) NOT NULL DEFAULT 'new',
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_capture_inbox_user_status ON capture_inbox(user_id, tenant_id, status, created_at DESC);",
+
         # -------------------------------------------------------------------
         # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
         # -------------------------------------------------------------------
