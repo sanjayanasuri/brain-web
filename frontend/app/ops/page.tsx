@@ -102,6 +102,9 @@ export default function OpsPage() {
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{(r.description || '').split('\n')[0]}</div>
                   <div style={{ fontSize: 12, marginTop: 6 }}>Session: {r.tmux_session || '-'}</div>
+                  <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
+                    CI: {String((r as any)?.checks?.ciPassed ?? false)} · Mergeable: {String((r as any)?.checks?.mergeable ?? false)} · Approvals: {String((r as any)?.checks?.approvalsCount ?? 0)}
+                  </div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                     {r.tmux_session && (
                       <>
