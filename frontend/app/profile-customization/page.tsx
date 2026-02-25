@@ -289,7 +289,7 @@ export default function ControlPanelPage() {
   }
 
   return (
-    <div className="app-shell" style={{ padding: 24, overflow: 'auto' }}>
+    <div className="app-shell" style={{ overflow: 'auto' }}>
       <header
         className="graph-header"
         style={{ marginBottom: '16px', paddingBottom: 0 }}

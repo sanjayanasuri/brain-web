@@ -563,7 +563,7 @@ function HomePageInner() {
                   paddingTop: "0",
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                   <div style={{ textAlign: "left" }}>
                   {firstName && (
                     <div
@@ -599,6 +599,12 @@ function HomePageInner() {
                     }}
                   >
                     Explore your knowledge graph or the web with agentic research.
+                  </div>
+
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button className="ui-button" onClick={() => router.push('/explorer')}>Explorer</button>
+                    <button className="ui-button" onClick={() => router.push('/learn')}>Quiz Me</button>
+                    <button className="ui-button" onClick={() => router.push('/web-reader')}>Reader</button>
                   </div>
                   </div>
 

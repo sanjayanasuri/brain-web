@@ -37,7 +37,11 @@ export default function ReaderPage() {
             <div className="page-title">Reader</div>
             <div className="page-subtitle">Readable article view with relevance scoring, snippets, and AI context fit.</div>
           </div>
-          <button className="ui-button" onClick={() => window.location.assign('/home')}>Home</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="ui-button" onClick={() => window.location.assign('/home')}>Home</button>
+            <button className="ui-button" onClick={() => window.location.assign('/explorer')}>Explorer</button>
+            <button className="ui-button" onClick={() => window.location.assign('/learn')}>Quiz Me</button>
+          </div>
         </div>
 
         <div className="ui-card" style={{ display: 'grid', gap: 8 }}>
