@@ -42,6 +42,18 @@ def get_client() -> QdrantClient:
     return _client
 
 
+def reset_client() -> None:
+    """Reset the global Qdrant client (best-effort)."""
+    global _client
+    client = _client
+    _client = None
+    try:
+        if client is not None and hasattr(client, "close"):
+            client.close()  # type: ignore[no-untyped-call]
+    except Exception:
+        pass
+
+
 def ensure_collection(*, collection_name: str, dimension: int) -> None:
     client = get_client()
     existing = {c.name for c in client.get_collections().collections}
@@ -56,4 +68,3 @@ def ensure_collection(*, collection_name: str, dimension: int) -> None:
 def ensure_content_pipeline_collections(*, dimension: int = DEFAULT_EMBEDDING_DIMENSION) -> None:
     ensure_collection(collection_name=QDRANT_COLLECTION_CONTENT_ITEM_TEXT, dimension=dimension)
     ensure_collection(collection_name=QDRANT_COLLECTION_TRANSCRIPT_CHUNKS, dimension=dimension)
-

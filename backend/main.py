@@ -78,6 +78,7 @@ from api_exams import router as exams_router
 from api_calendar import router as calendar_router
 from api_scheduler import tasks_router, schedule_router
 from api_observability_ingest import router as observability_ingest_router
+from api_system_monitoring import router as system_monitoring_router
 
 # Phase 4: Analytics router
 try:
@@ -258,6 +259,7 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     refresh_scheduler_task = None
+    self_healing_monitor = None
     try:
         from config import NEO4J_URI
 
@@ -375,6 +377,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Refresh Scheduler] ⚠ Failed to start: {e}")
         logger.warning(f"Failed to start refresh scheduler: {e}")
+
+    # Start self-healing monitoring loop (env-gated)
+    try:
+        from system_monitoring import MonitorConfig, build_default_monitor
+
+        cfg = MonitorConfig.from_env()
+        if cfg.enabled:
+            self_healing_monitor = build_default_monitor(config=cfg)
+            app.state.self_healing_monitor = self_healing_monitor
+            self_healing_monitor.start()
+            print(f"[SelfHeal] Enabled (mode={cfg.mode} interval={cfg.interval_seconds}s)")
+    except Exception as e:
+        print(f"[SelfHeal] ⚠ Failed to start: {e}")
+        logger.warning(f"Failed to start self-healing monitor: {e}")
     
     yield  # App runs here
     
@@ -399,6 +415,13 @@ async def lifespan(app: FastAPI):
         try:
             refresh_scheduler_task.cancel()
             print("[Refresh Scheduler] Background task cancelled")
+        except Exception:
+            pass
+
+    if self_healing_monitor is not None:
+        try:
+            await self_healing_monitor.stop()
+            print("[SelfHeal] Background task cancelled")
         except Exception:
             pass
 
@@ -456,6 +479,7 @@ app.include_router(api_keys_router)
 app.include_router(ingest_v1_router)
 app.include_router(health_router)
 app.include_router(observability_ingest_router)
+app.include_router(system_monitoring_router)
 app.include_router(concepts_router)
 app.include_router(ai_router)
 app.include_router(retrieval_router)

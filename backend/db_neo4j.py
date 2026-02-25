@@ -49,6 +49,18 @@ def _get_driver():
     return _driver
 
 
+def reset_driver() -> None:
+    """Close and reset the global Neo4j driver (best-effort)."""
+    global _driver
+    if _driver is None:
+        return
+    try:
+        _driver.close()
+    except Exception:
+        pass
+    _driver = None
+
+
 def retry_neo4j_operation(func, max_retries=3, delay=1):
     """
     Retry wrapper for Neo4j operations that may fail due to connection issues.

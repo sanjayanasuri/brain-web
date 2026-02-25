@@ -13,16 +13,12 @@ Environment Variables:
     QDRANT_COLLECTION: Collection name (default: concepts)
 """
 from typing import List, Dict, Optional, Any
-import os
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 )
 
-# Configuration
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "concepts")
+from config import QDRANT_COLLECTION, QDRANT_HOST, QDRANT_PORT
 
 # Global client (lazy initialization)
 _client: Optional[QdrantClient] = None
@@ -34,6 +30,18 @@ def get_client() -> QdrantClient:
     if _client is None:
         _client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
     return _client
+
+
+def reset_client() -> None:
+    """Reset the global Qdrant client (best-effort)."""
+    global _client
+    client = _client
+    _client = None
+    try:
+        if client is not None and hasattr(client, "close"):
+            client.close()  # type: ignore[no-untyped-call]
+    except Exception:
+        pass
 
 
 def ensure_collection(dimension: int = 1536):
