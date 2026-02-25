@@ -1151,6 +1151,16 @@ Transcript with timestamps:
                                 else:
                                     tutor_layer = f"\nAI Tutor Persona: Tone={tutor_profile.tone}, Pacing={tutor_profile.pacing}"
 
+                            assistant_style_prompt = ""
+                            try:
+                                from services_assistant_profile import build_assistant_style_prompt
+                                assistant_style_prompt = build_assistant_style_prompt(
+                                    user_id=str(self.user_id),
+                                    tenant_id=str(self.tenant_id),
+                                )
+                            except Exception as e:
+                                logger.debug(f"Failed to load assistant style prompt for voice: {e}")
+
                             # Build enhanced system prompt with conversation quality improvements
                             memory_context = ""
                             if personal_memories:
@@ -1174,6 +1184,7 @@ Transcript with timestamps:
                             Mode: {mode_desc}
                             {tutor_layer}
                             {learned_style_hint}
+                            {assistant_style_prompt}
                             {f"STIMULUS: The student is confused. Derivation: {fog_res['explanation']}" if fog_res else ""}
                             
                             Knowledge Context:

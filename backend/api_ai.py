@@ -328,6 +328,17 @@ async def chat_stream_endpoint(
             except Exception as e:
                 logger.debug(f"Failed to load learned communication style hint: {e}")
                 learned_comm_style = ""
+
+            assistant_style_prompt = ""
+            try:
+                from services_assistant_profile import build_assistant_style_prompt
+                assistant_style_prompt = build_assistant_style_prompt(
+                    user_id=str(user_id_ctx),
+                    tenant_id=str(tenant_id_ctx),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to load assistant style prompt: {e}")
+                assistant_style_prompt = ""
                 
             # Detect if user is responding to a task
             task_evaluation_feedback = ""
@@ -375,6 +386,9 @@ async def chat_stream_endpoint(
                 
                 ## Learned Communication Style
                 {learned_comm_style}
+
+                ## Personalized Assistant Style
+                {assistant_style_prompt}
                 
                 {response_mode_instruction}
                 {question_policy_instruction}
@@ -383,7 +397,7 @@ async def chat_stream_endpoint(
                 system_msg = build_system_prompt_with_memory(
                     base_prompt=base_prompt.strip(),
                     context=unified_context,
-                    include_sections=["user_facts", "lecture_context", "study_context"]
+                    include_sections=["user_facts", "promoted_memories", "recent_memory_events", "lecture_context", "study_context", "recent_topics"]
                 )
                 
                 if task_evaluation_feedback:
