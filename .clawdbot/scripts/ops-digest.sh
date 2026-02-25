@@ -10,26 +10,29 @@ if [[ ! -f "$TASKS" ]]; then
   exit 0
 fi
 
+# Handle accidental multi-document JSON by using the last array document.
+TASKS_JSON=$(jq -s 'last // []' "$TASKS")
+
 printf "\n=== CLAWDBOT DIGEST (%s) ===\n" "$(date)"
 
-running=$(jq '[.[] | select(.status=="running")] | length' "$TASKS")
-ready=$(jq '[.[] | select(.status=="ready")] | length' "$TASKS")
-failed=$(jq '[.[] | select(.status=="failed")] | length' "$TASKS")
+running=$(echo "$TASKS_JSON" | jq '[.[] | select(.status=="running")] | length')
+ready=$(echo "$TASKS_JSON" | jq '[.[] | select(.status=="ready")] | length')
+failed=$(echo "$TASKS_JSON" | jq '[.[] | select(.status=="failed")] | length')
 
 echo "Running: $running | Ready: $ready | Failed: $failed"
 
-if [[ "$ready" -gt 0 ]]; then
-  echo "\nReady PRs:"
-  jq -r '.[] | select(.status=="ready") | "- \(.task_id): PR #\(.pr_number // "?") \(.pr_url // "")"' "$TASKS"
+if (( ready > 0 )); then
+  printf "\nReady PRs:\n"
+  echo "$TASKS_JSON" | jq -r '.[] | select(.status=="ready") | "- \(.task_id): PR #\(.pr_number // "?") \(.pr_url // "")"'
 fi
 
-if [[ "$failed" -gt 0 ]]; then
-  echo "\nFailed tasks:"
-  jq -r '.[] | select(.status=="failed") | "- \(.task_id) (retries: \(.retries // 0))"' "$TASKS"
+if (( failed > 0 )); then
+  printf "\nFailed tasks:\n"
+  echo "$TASKS_JSON" | jq -r '.[] | select(.status=="failed") | "- \(.task_id) (retries: \(.retries // 0))"'
 fi
 
 if command -v gh >/dev/null 2>&1; then
-  echo "\nOpen PRs (top 10):"
+  printf "\nOpen PRs (top 10):\n"
   gh pr list --limit 10 --json number,title,headRefName,state,url --jq '.[] | "- #\(.number) [\(.state)] \(.title) (\(.headRefName)) -> \(.url)"' || true
 fi
 
