@@ -7,7 +7,8 @@ This folder runs a deterministic multi-agent coding loop on top of OpenClaw.
 - `ideas.json` — proposed/approved work items
 - `active-tasks.json` — runtime task registry
 - `scripts/spawn.sh` — creates worktree + tmux session + registry entry
-- `scripts/dispatch.sh` — starts approved ideas
+- `scripts/dispatch.sh` — starts approved ideas (auto-routes agent by task)
+- `scripts/task-router.sh` — chooses Cursor vs Codex vs Claude command
 - `scripts/check.sh` — monitors tmux/PR/CI and marks merge-ready
 - `scripts/notify.sh` — sends readiness notifications
 - `check-agents.sh` — convenience wrapper around `scripts/check.sh`
@@ -53,6 +54,27 @@ Tune max retries with:
 
 ```bash
 export CLAWDBOT_MAX_RETRIES=3
+```
+
+## Agent routing (hybrid)
+
+By default `dispatch.sh` uses `DISPATCH_AGENT_CMD=auto` and routes:
+- UI/frontend/demo tasks -> Cursor
+- backend/correctness tasks -> Codex
+- fallback -> Claude, then Cursor
+
+Override commands if needed:
+
+```bash
+export CURSOR_AGENT_CMD='cursor'
+export CODEX_AGENT_CMD='codex exec --full-auto'
+export CLAUDE_AGENT_CMD='claude -p'
+```
+
+Force one command for all tasks:
+
+```bash
+export DISPATCH_AGENT_CMD='claude -p'
 ```
 
 ## Gates/tuning
