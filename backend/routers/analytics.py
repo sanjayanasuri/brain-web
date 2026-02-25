@@ -240,6 +240,8 @@ async def get_recommendations(
         )
         return recs
     except Exception as e:
+        if "does not exist" in str(e):
+            return []
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -48,10 +48,10 @@ def get_user_trends(
             cur.execute("""
                 SELECT 
                     date,
-                    avg_score,
-                    task_count,
-                    session_count,
-                    mode_distribution
+                    COALESCE(average_score, 0) AS avg_score,
+                    COALESCE(tasks_completed, 0) AS task_count,
+                    COALESCE(study_duration_minutes, 0) AS session_count,
+                    COALESCE(concepts_practiced, '[]'::jsonb) AS mode_distribution
                 FROM performance_history
                 WHERE user_id = %s AND tenant_id = %s
                 AND date >= CURRENT_DATE - INTERVAL '%s days'
@@ -146,7 +146,7 @@ def get_learning_velocity(
             cur.execute("""
                 SELECT 
                     date,
-                    avg_score
+                    COALESCE(average_score, 0) AS avg_score
                 FROM performance_history
                 WHERE user_id = %s AND tenant_id = %s
                 AND date >= CURRENT_DATE - INTERVAL '28 days'
@@ -215,20 +215,23 @@ def identify_weak_areas(
             } for row in cur.fetchall()]
             
             # Weak task types (avg < threshold)
-            cur.execute("""
-                SELECT task_type, avg_score
-                FROM user_performance_cache
-                WHERE user_id = %s AND tenant_id = %s
-                AND avg_score < %s
-                AND attempt_count >= 3
-                ORDER BY avg_score ASC
-                LIMIT 3
-            """, (user_id, tenant_id, threshold))
-            
-            weak_task_types = [{
-                'task_type': row['task_type'],
-                'score': row['avg_score']
-            } for row in cur.fetchall()]
+            weak_task_types = []
+            try:
+                cur.execute("""
+                    SELECT task_type, avg_score
+                    FROM user_performance_cache
+                    WHERE user_id = %s AND tenant_id = %s
+                    AND avg_score < %s
+                    AND attempt_count >= 3
+                    ORDER BY avg_score ASC
+                    LIMIT 3
+                """, (user_id, tenant_id, threshold))
+                weak_task_types = [{
+                    'task_type': row['task_type'],
+                    'score': row['avg_score']
+                } for row in cur.fetchall()]
+            except Exception:
+                conn.rollback()
             
             return {
                 'weak_concepts': weak_concepts,
