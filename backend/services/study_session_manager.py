@@ -5,6 +5,7 @@ Handles session lifecycle, task generation, and attempt submission.
 """
 
 import uuid
+import json
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -141,7 +142,7 @@ def start_session(
                 id=event_id,
                 user_id=user_id,
                 graph_id=graph_id,
-                payload={"session_id": session_id, "intent": intent, "topic_id": topic_id},
+                payload=json.dumps({"session_id": session_id, "intent": intent, "topic_id": topic_id or ""}),
                 created_at=now
             )
     except Exception as e:
@@ -335,7 +336,7 @@ def submit_attempt(
                     json.dumps(evaluation.score_json),
                     evaluation.composite_score,
                     evaluation.feedback_text,
-                    json.dumps(evaluation.gap_concepts)
+                    json.dumps([g if isinstance(g, (str, dict)) else (g.dict() if hasattr(g, 'dict') else str(g)) for g in evaluation.gap_concepts] if evaluation.gap_concepts else [])
                 ))
                 
                 # Calculate new inertia using orchestrator
@@ -369,15 +370,34 @@ def submit_attempt(
             pool.putconn(conn)
             
     except Exception as e:
-        logger.warning(f"[study_session] submit_attempt DB write failed: {e}. Returning fallback response.", exc_info=True)
-        # Fallback evaluation so the UI never hard-crashes
-        from models.study import EvaluationResult
-        evaluation = EvaluationResult(
-            score_json={"accuracy": 1.0, "completeness": 1.0, "relevance": 1.0},
-            composite_score=1.0,
-            feedback_text="Excellent work! (System is in offline/fallback mode)",
-            gap_concepts=[]
-        )
+        logger.warning(f"[study_session] submit_attempt DB write failed: {e}. Running evaluator directly.", exc_info=True)
+        # Run the evaluator even if DB persistence failed
+        from models.study import EvaluationResult, ContextPack
+        try:
+            from services.evaluator import _heuristic_evaluation
+            fallback_spec = TaskSpec(
+                task_id=task_id,
+                task_type="clarify",
+                prompt=response_text[:200],
+                rubric_json={
+                    "grounding": {"weight": 0.25, "description": "Accuracy and factual correctness"},
+                    "coherence": {"weight": 0.25, "description": "Clarity and logical flow"},
+                    "completeness": {"weight": 0.20, "description": "Coverage of key points"},
+                    "transfer": {"weight": 0.15, "description": "Demonstrated understanding beyond paraphrasing"},
+                    "effort": {"weight": 0.15, "description": "Detail and thoughtfulness"},
+                },
+                context_pack=ContextPack(excerpts=[], concepts=[]),
+                compatible_modes=["explain", "typing"],
+                disruption_cost=0.1,
+            )
+            evaluation = _heuristic_evaluation(fallback_spec, response_text)
+        except Exception:
+            evaluation = EvaluationResult(
+                score_json={"grounding": 0.5, "coherence": 0.5, "completeness": 0.5, "transfer": 0.5, "effort": 0.5},
+                composite_score=0.5,
+                feedback_text="Your response was recorded. Try adding more detail and specific examples to improve your score.",
+                gap_concepts=[]
+            )
         session_update = {"mode_inertia": 0.5, "current_mode": "explain"}
         new_inertia = 0.5
     
@@ -396,10 +416,11 @@ def submit_attempt(
         }
     
     # Build mode state
-    inertia_delta = new_inertia - session_row["mode_inertia"]
+    prev_inertia = session_row["mode_inertia"] if isinstance(session_row, dict) and "mode_inertia" in session_row else 0.5
+    inertia_delta = new_inertia - prev_inertia
     mode_state = {
-        "current_mode": session_update["current_mode"],
-        "inertia": session_update["mode_inertia"],
+        "current_mode": session_update.get("current_mode", "explain") if isinstance(session_update, dict) else "explain",
+        "inertia": session_update.get("mode_inertia", 0.5) if isinstance(session_update, dict) else 0.5,
         "threshold": 0.35,
         "inertia_delta": inertia_delta
     }
