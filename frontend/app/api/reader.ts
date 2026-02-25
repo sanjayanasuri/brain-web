@@ -28,3 +28,23 @@ export async function getReaderView(params: { query: string; url?: string; doc_i
   if (!res.ok) throw new Error('Failed to load reader view');
   return res.json();
 }
+
+export async function checkReaderUnderstanding(params: { query: string; snippet_text: string; user_answer: string; url?: string; doc_id?: string; }) {
+  const res = await fetch(`${API_BASE_URL}/web/reader/check`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error('Failed to check understanding');
+  return res.json();
+}
+
+export async function explainReaderSnippet(params: { query: string; snippet_text: string; question?: string; url?: string; doc_id?: string; }) {
+  const res = await fetch(`${API_BASE_URL}/web/reader/explain`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error('Failed to explain snippet');
+  return res.json();
+}

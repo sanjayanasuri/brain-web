@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { getReaderView, type ReaderResponse } from '../api/reader';
+import { checkReaderUnderstanding, explainReaderSnippet, getReaderView, type ReaderResponse } from '../api/reader';
 import { createReaderAnnotation, listReaderAnnotations } from '../api/reader-annotations';
 
 export default function ReaderPage() {
@@ -10,6 +10,10 @@ export default function ReaderPage() {
   const [data, setData] = useState<ReaderResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [annotations, setAnnotations] = useState<any[]>([]);
+  const [checkResults, setCheckResults] = useState<Record<string, { verdict: string; feedback: string; score: number }>>({});
+  const [chatSnippet, setChatSnippet] = useState<string>('');
+  const [explainChat, setExplainChat] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const [chatInput, setChatInput] = useState('');
 
   const run = async () => {
     if (!url.trim() || !query.trim()) return;
@@ -64,7 +68,7 @@ export default function ReaderPage() {
                       <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>{s.text}</div>
                       {(s.why || []).length > 0 && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>Why: {s.why.join(' · ')}</div>}
                       {(s.claims || []).length > 0 && <div style={{ marginTop: 6, fontSize: 12 }}>Claims: {(s.claims || []).slice(0, 2).join(' | ')}</div>}
-                      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           onClick={async () => {
                             await createReaderAnnotation({
@@ -97,7 +101,44 @@ export default function ReaderPage() {
                         >
                           Save Memory
                         </button>
+                        <button
+                          onClick={async () => {
+                            const answer = window.prompt('Quick check: explain this snippet in your own words') || '';
+                            if (!answer.trim()) return;
+                            const out = await checkReaderUnderstanding({
+                              query,
+                              snippet_text: s.text,
+                              user_answer: answer,
+                              doc_id: data.document?.doc_id,
+                              url: data.document?.url,
+                            });
+                            setCheckResults(prev => ({ ...prev, [s.chunk_id || String(i)]: out }));
+                          }}
+                          style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                        >
+                          Test understanding
+                        </button>
+                        <button
+                          onClick={async () => {
+                            const out = await explainReaderSnippet({
+                              query,
+                              snippet_text: s.text,
+                              doc_id: data.document?.doc_id,
+                              url: data.document?.url,
+                            });
+                            setChatSnippet(s.text);
+                            setExplainChat([{ role: 'assistant', text: out.explanation || 'Here is the explanation.' }]);
+                          }}
+                          style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                        >
+                          Explain
+                        </button>
                       </div>
+                      {checkResults[s.chunk_id || String(i)] && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)' }}>
+                          <strong>{checkResults[s.chunk_id || String(i)].verdict.toUpperCase()}</strong> · {checkResults[s.chunk_id || String(i)].feedback}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -116,6 +157,49 @@ export default function ReaderPage() {
                     </div>
                   )}
                 </div>
+
+                {explainChat.length > 0 && (
+                  <div style={{ marginTop: 12, border: '1px solid var(--border)', borderRadius: 10, padding: 10, background: 'var(--surface)' }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Explain in Context</div>
+                    {chatSnippet ? <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>Snippet: {chatSnippet.slice(0, 140)}{chatSnippet.length > 140 ? '…' : ''}</div> : null}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflow: 'auto' }}>
+                      {explainChat.map((m, idx) => (
+                        <div key={idx} style={{ fontSize: 12, padding: 8, borderRadius: 8, border: '1px solid var(--border)', background: m.role === 'assistant' ? 'var(--panel)' : 'var(--background)' }}>
+                          <strong>{m.role === 'assistant' ? 'Bujji' : 'You'}:</strong> {m.text}
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                      <input
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        placeholder="Ask about this section..."
+                        style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--background)' }}
+                        onKeyDown={async (e) => {
+                          if (e.key !== 'Enter' || !chatInput.trim() || !chatSnippet) return;
+                          const question = chatInput.trim();
+                          setExplainChat(prev => [...prev, { role: 'user', text: question }]);
+                          setChatInput('');
+                          const out = await explainReaderSnippet({ query, snippet_text: chatSnippet, question, doc_id: data.document?.doc_id, url: data.document?.url });
+                          setExplainChat(prev => [...prev, { role: 'assistant', text: out.explanation || '' }]);
+                        }}
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!chatInput.trim() || !chatSnippet) return;
+                          const question = chatInput.trim();
+                          setExplainChat(prev => [...prev, { role: 'user', text: question }]);
+                          setChatInput('');
+                          const out = await explainReaderSnippet({ query, snippet_text: chatSnippet, question, doc_id: data.document?.doc_id, url: data.document?.url });
+                          setExplainChat(prev => [...prev, { role: 'assistant', text: out.explanation || '' }]);
+                        }}
+                        style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                      >
+                        Ask
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
