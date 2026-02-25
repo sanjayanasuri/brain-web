@@ -207,17 +207,34 @@ def _heuristic_evaluation(task_spec: TaskSpec, response_text: str) -> Evaluation
         weight = task_spec.rubric_json.get(dimension, {}).get("weight", 0.0)
         composite += score * weight
     
-    feedback = "Your response shows effort. "
-    if composite < 0.5:
-        feedback += "Try to provide more detail and connect to the provided context."
-    elif composite < 0.75:
-        feedback += "Good work! Consider adding more examples or explanations."
+    # Generate contextual feedback
+    if composite < 0.4:
+        feedback = "Your answer needs more depth. Try to explain the core ideas in your own words and connect them to specific examples. "
+        if word_count < 20:
+            feedback += "A more detailed response would help demonstrate your understanding."
+        else:
+            feedback += "Focus on the key concepts and how they relate to each other."
+    elif composite < 0.6:
+        feedback = "You're on the right track! Your answer covers some key points. "
+        feedback += "To improve, try to be more specific — mention exact terms, definitions, or examples from what you've studied."
+    elif composite < 0.8:
+        feedback = "Good work! You've shown solid understanding of the material. "
+        feedback += "To reach mastery, try explaining how this connects to related topics or apply it to a new scenario."
     else:
-        feedback += "Excellent! You've demonstrated strong understanding."
-    
+        feedback = "Excellent response! You've demonstrated strong understanding with clear explanations and good detail."
+
+    # Extract gap concepts from context
+    gap_concepts = []
+    for concept_name in task_spec.context_pack.concepts[:3]:
+        if concept_name.lower() not in response_text.lower():
+            gap_concepts.append({
+                "name": concept_name,
+                "definition": f"A key concept related to this topic that wasn't addressed in your response."
+            })
+
     return EvaluationResult(
         score_json=scores,
         composite_score=round(composite, 3),
         feedback_text=feedback,
-        gap_concepts=[]
+        gap_concepts=gap_concepts
     )

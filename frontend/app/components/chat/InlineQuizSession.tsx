@@ -55,14 +55,17 @@ export default function InlineQuizSession({ topic, graphId, onClose }: InlineQui
       const session = await startStudySession(`Quiz me on ${topic}`, undefined, undefined, 'quiz');
       setSessionId(session.session_id);
 
-      const initialTask = session.initial_task;
+      // initial_task may be nested under task_spec or flat
+      const raw = session.initial_task;
+      const initialTask = raw?.task_spec || raw;
       if (initialTask?.prompt) {
         setQuestion(initialTask.prompt);
         setTaskId(initialTask.task_id);
         setTaskType(initialTask.task_type || 'quiz');
         setPhase('question');
       } else {
-        const task = await getNextTask(session.session_id, 'quiz');
+        const resp = await getNextTask(session.session_id, 'quiz');
+        const task = resp?.task_spec || resp;
         if (task?.prompt) {
           setQuestion(task.prompt);
           setTaskId(task.task_id);
@@ -96,8 +99,11 @@ export default function InlineQuizSession({ topic, graphId, onClose }: InlineQui
       setSubmitting(true);
       const result = await submitAttempt(taskId, answer.trim());
 
-      const score = result.composite_score ?? result.score_json?.overall ?? 0.5;
-      const gapConcepts: GapConcept[] = (result.gap_concepts || []).map((g: any) =>
+      // Handle both flat and nested (evaluation wrapper) response formats
+      const eval_ = result.evaluation || result;
+      const score = eval_.composite_score ?? eval_.score_json?.overall ?? 0.5;
+      const rawGaps = eval_.gap_concepts || [];
+      const gapConcepts: GapConcept[] = rawGaps.map((g: any) =>
         typeof g === 'string' ? { name: g } : { name: g.name, definition: g.definition }
       );
 
@@ -105,9 +111,9 @@ export default function InlineQuizSession({ topic, graphId, onClose }: InlineQui
         question,
         answer: answer.trim(),
         score,
-        feedback: result.feedback_text || 'Keep practicing!',
+        feedback: eval_.feedback_text || 'Keep practicing!',
         gapConcepts,
-        rubricScores: result.score_json || {},
+        rubricScores: eval_.score_json || {},
         taskType,
       };
 
@@ -132,7 +138,8 @@ export default function InlineQuizSession({ topic, graphId, onClose }: InlineQui
     if (!sessionId) return;
     try {
       setPhase('loading');
-      const task = await getNextTask(sessionId, 'quiz');
+      const resp = await getNextTask(sessionId, 'quiz');
+      const task = resp?.task_spec || resp;
       if (task?.prompt) {
         setQuestion(task.prompt);
         setTaskId(task.task_id);

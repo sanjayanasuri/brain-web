@@ -84,12 +84,17 @@ class AttemptRequest(BaseModel):
     self_confidence: Optional[float] = Field(default=None, description="User's self-assessment (0-1)")
 
 
+class GapConcept(BaseModel):
+    """A concept the student needs to review."""
+    name: str = Field(..., description="Concept name")
+    definition: Optional[str] = Field(default=None, description="Brief definition in context")
+
 class EvaluationResult(BaseModel):
     """Result of evaluating a task attempt."""
     score_json: Dict[str, float] = Field(..., description="Scores by dimension (each 0-1)")
     composite_score: float = Field(..., description="Weighted composite score (0-1)")
     feedback_text: str = Field(..., description="Constructive feedback")
-    gap_concepts: List[str] = Field(default_factory=list, description="Missing/weak concept IDs")
+    gap_concepts: List[Any] = Field(default_factory=list, description="Missing/weak concepts (strings or {name, definition} objects)")
 
 
 class StartSessionRequest(BaseModel):
