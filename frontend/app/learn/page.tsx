@@ -2,6 +2,7 @@
 
 import StudyPanel from '../components/dashboard/StudyPanel';
 import LearningInterventionsCard from '../components/home/LearningInterventionsCard';
+import AppTopNav from '../components/layout/AppTopNav';
 
 export default function LearnPage() {
   return (
@@ -12,11 +13,7 @@ export default function LearnPage() {
             <div className="page-title">Quiz Me</div>
             <div className="page-subtitle">Adaptive study and confidence-building from your actual memory graph.</div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="ui-button" onClick={() => window.location.assign('/home')}>Home</button>
-            <button className="ui-button" onClick={() => window.location.assign('/explorer')}>Explorer</button>
-            <button className="ui-button" onClick={() => window.location.assign('/web-reader')}>Reader</button>
-          </div>
+          <AppTopNav />
         </div>
 
         <LearningInterventionsCard />

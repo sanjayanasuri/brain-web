@@ -29,10 +29,7 @@ export default function ExplorerPage() {
                         <div style={{ fontSize: 16, fontWeight: 700 }}>Explorer</div>
                         <div style={{ fontSize: 12, color: 'var(--muted)' }}>Map concepts, inspect links, and branch your thinking.</div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => window.location.assign('/home')} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12 }}>Home</button>
-                        <button onClick={() => window.location.assign('/profile-customization')} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: 12 }}>Personalize</button>
-                    </div>
+                    <AppTopNav />
                 </div>
                 <div style={{ flex: 1, minHeight: 0 }}>
                     <GraphVisualization />
