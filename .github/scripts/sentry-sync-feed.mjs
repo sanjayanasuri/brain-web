@@ -118,7 +118,11 @@ async function createGitHubIssueForSentry(sentryIssue) {
     '',
     `**Culprit:** ${sentryIssue.culprit || '–'}`,
     '',
-    'Agent: see `.github/AGENT_FEED.md`. Reproduce, fix, then resolve in Sentry.',
+    '**Suggested action (agent):**',
+    '1. Open the Sentry permalink above and check stack trace + tags (`request_id`, `bw_session_id`).',
+    '2. Search Loki/backend logs for that `request_id` to see the full request path.',
+    '3. Reproduce locally if needed, fix, then resolve the issue in Sentry.',
+    '4. See `.github/AGENT_FEED.md` for claim protocol.',
   ].join('\n');
 
   const created = await gh('POST', '/issues', {

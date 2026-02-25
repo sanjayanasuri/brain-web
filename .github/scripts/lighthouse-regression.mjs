@@ -89,6 +89,7 @@ async function createIssue(metrics, reasons) {
     return;
   }
 
+  const commitSha = process.env.GITHUB_SHA || process.env.COMMIT_SHA || '';
   const agentFeed = {
     agent_feed: {
       type: 'performance_regression',
@@ -102,11 +103,11 @@ async function createIssue(metrics, reasons) {
         url: PRODUCTION_URL,
         metrics: { performance: metrics.performance, lcpMs: metrics.lcpMs, cls: metrics.cls },
         reasons,
+        ...(commitSha && { commit_sha: commitSha }),
       },
       created_at: new Date().toISOString(),
     },
   };
-
   const body = [
     '<!-- agent_feed:start -->',
     '```json',
@@ -115,6 +116,7 @@ async function createIssue(metrics, reasons) {
     '<!-- agent_feed:end -->',
     '',
     `**URL:** ${PRODUCTION_URL}`,
+    ...(commitSha ? ['', `**Commit:** \`${commitSha}\` (run at audit time)`, ''] : []),
     '',
     '**Metrics:**',
     `- Performance: ${(metrics.performance * 100).toFixed(0)}`,

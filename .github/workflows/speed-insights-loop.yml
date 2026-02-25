@@ -38,4 +38,5 @@ jobs:
           PRODUCTION_URL: ${{ inputs.production_url || vars.PRODUCTION_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
         run: node lighthouse-regression.mjs

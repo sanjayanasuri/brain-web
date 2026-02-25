@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/nextjs';
 import { getSession } from 'next-auth/react';
 import { createRequestId, getOrCreateBrowserSessionId } from '../../lib/observability/correlation';
 
@@ -40,7 +41,13 @@ export async function getApiHeaders(): Promise<Record<string, string>> {
     };
 
     // Correlation headers for observability (backend logs + Sentry tags)
-    headers['x-request-id'] = createRequestId();
+    const requestId = createRequestId();
+    headers['x-request-id'] = requestId;
+    try {
+        Sentry.setTag('request_id', requestId);
+    } catch {
+        // Sentry may be uninitialized (e.g. no DSN)
+    }
     const sessionId = getOrCreateBrowserSessionId();
     if (sessionId) {
         headers['x-session-id'] = sessionId;
