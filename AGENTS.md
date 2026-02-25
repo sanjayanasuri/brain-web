@@ -1,6 +1,6 @@
 # Brain Web Agent Preferences
 
-This repo is the Brain Web knowledge + agent system (Neo4j graph, retrieval, backend/frontend). When running as an OpenClaw workspace, you are operating in this repo; follow the rules below. For task queues and merge-ready checks, see `.clawdbot/` (ideas queue, scout, dispatch, check scripts).
+This repo is the Brain Web knowledge + agent system (Neo4j graph, retrieval, backend/frontend). When running as an OpenClaw workspace, you are operating in this repo; follow the rules below.
 
 ---
 
@@ -8,7 +8,7 @@ This repo is the Brain Web knowledge + agent system (Neo4j graph, retrieval, bac
 
 - **What it is:** A “second brain” that ingests handwriting, text, and voice into a personalized knowledge graph. Users chat with an AI assistant, take structured notes, and revisit ideas. The goal is ingesting content and building on existing ideas, not just storing them.
 - **Where it runs:** Production on a Hetzner cluster (Neo4j, Qdrant, Postgres). Demo at **demo.sanjayanasuri.com**. Backend and frontend can run locally for development.
-- **When agents work here:** As an OpenClaw workspace; CI on push/PR to main/master; task dispatch and merge checks via `.clawdbot/` scripts.
+- **When agents work here:** As an OpenClaw workspace; CI on push/PR to main/master.
 
 ---
 
@@ -37,11 +37,6 @@ This repo is the Brain Web knowledge + agent system (Neo4j graph, retrieval, bac
 | Typecheck | `cd frontend && npm run typecheck` (CI: frontend-lint) |
 | Explorer E2E | `cd frontend && npm run test:explorer` (Playwright; see “Explorer E2E tests” below) |
 | Full E2E | `cd frontend && npm run test:e2e`; smoke: `npm run test:smoke` |
-
-### Clawdbot / merge readiness
-
-- Check running tasks and CI/PR state: `.clawdbot/scripts/check.sh`
-- Ideas queue, scout, dispatch: see `.clawdbot/` and scripts there.
 
 ---
 
@@ -76,6 +71,12 @@ This repo is the Brain Web knowledge + agent system (Neo4j graph, retrieval, bac
 ## Explorer E2E tests
 - **Run:** from repo root `cd frontend && npm run test:explorer` (or from `frontend/`: `npm run test:explorer`).
 - **What it does:** Playwright runs the Explorer page suite (`tests/explorer-page.spec.ts`): loads `/explorer`, checks toolbar + search, graph area, chat panel, concept panel when a node is selected, and legend toggle. Uses `data-testid` selectors. Frontend dev server can be started by Playwright (see `playwright.config.ts` webServer) or run `npm run dev` first; backend optional for full chat/API behavior.
+
+## Debugging and deployment health
+- **No single store:** Logs and errors are not in one database. They live in: (1) **Sentry** (browser + backend errors, performance traces), (2) **Loki** (backend/container logs, via Grafana on Hetzner), (3) **GitHub issues** with label `agent-fix` (Sentry/Lighthouse/Playwright sync). Use **request_id** (and **bw_session_id**) to correlate across these: same ID appears in Sentry tags, backend log lines, and activity events.
+- **Central entry point for “what’s wrong” / “what’s causing slowdowns”:** Call **GET /admin/observability-summary** (auth required). It returns links to Sentry and Grafana/Loki, suggested Loki log queries, and optionally recent Sentry issues if the backend has Sentry API env configured. Use that response to answer deployment-health and slowdown questions.
+- **Runbook when summary isn’t enough:** (1) **Sentry** – open your Sentry project, filter last 24h, check errors and performance for slow transactions. (2) **Loki (Grafana)** – run: `{container="brainweb-backend"}` for backend logs; `{job="docker"} |= "ERROR"` for errors; `{job="docker"} |= "request_id"` and add the id to narrow. (3) **Agent-fix issues** – open GitHub issues with label `agent-fix` for automated Sentry/Lighthouse/Playwright items. (4) **Given a request_id:** search Loki for that id; in Sentry filter by tag `request_id`; in Neo4j/activity events search by `trace_id`.
+- **Docs:** `docs/deployment/OBSERVABILITY_HETZNER.md` (Grafana/Loki setup), `.github/AGENT_FEED.md` (agent-fix issue format and claim protocol).
 
 ## CI / GitHub Actions
 - **Pin actions to full commit SHAs.** Use the 40-character SHA (e.g. `actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5`), not tags like `@v4`. This avoids IDE/linter “repository or version not found” when it can’t resolve GitHub and matches GitHub’s guidance for immutable, secure action usage. To get the SHA for a tag: `https://api.github.com/repos/OWNER/REPO/commits/TAG` and use the response `sha`.

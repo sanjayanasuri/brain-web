@@ -58,16 +58,7 @@ So you can keep using the existing AGENTS.md; no need to duplicate it elsewhere.
 - **CLI chat:** `openclaw chat` (if configured).
 - Pair WhatsApp/Telegram/Discord etc. via `openclaw channels login` and the Control UI.
 
-## 5. How this fits with .clawdbot (Zoe-lite)
-
-- **OpenClaw** = the agent runtime and channels (one gateway, Pi/coding agent, worktrees when it runs coding tasks). The agent’s “home” is brain-web when workspace is set as above.
-- **.clawdbot** = local scripts for task registry, ideas queue, scout, dispatch, and “merge-ready” checks. They don’t require OpenClaw.
-
-You can:
-- Use **only OpenClaw** (no .clawdbot): chat from the Control UI or channels; the agent edits in brain-web.
-- Use **both**: run `.clawdbot/scripts/scout.sh --run` and `dispatch.sh` / `check.sh` as before; have OpenClaw run the agent for chat and coding, and keep using the ideas queue and PR-ready notifications from .clawdbot.
-
-## 6. References
+## 5. References
 
 - [OpenClaw docs](https://docs.openclaw.ai/)
 - [Getting started](https://docs.openclaw.ai/start/getting-started)

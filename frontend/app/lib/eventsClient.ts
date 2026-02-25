@@ -109,12 +109,13 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 export async function logEvent(event: LogEventParams): Promise<void> {
   try {
     const headers = await getApiHeaders();
+    const requestTraceId = event.trace_id ?? headers['x-request-id'] ?? undefined;
     const response = await fetch(`${API_BASE_URL}/events/activity`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         ...event,
-        ...(event.trace_id != null && { trace_id: event.trace_id }),
+        ...(requestTraceId != null && { trace_id: requestTraceId }),
         ...(event.correlation_id != null && { correlation_id: event.correlation_id }),
       }),
     });
