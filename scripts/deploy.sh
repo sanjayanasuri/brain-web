@@ -72,8 +72,11 @@ if [ -d .git ]; then
         if [ -n "$(git status --porcelain)" ]; then
             if [ "$AUTO_STASH_GIT_CHANGES" = "1" ]; then
                 STASH_NAME="deploy-auto-stash-$(date -u +%Y%m%dT%H%M%SZ)"
-                git stash push -u -m "$STASH_NAME" > /dev/null
-                echo "Stashed local changes as: $STASH_NAME"
+                if ! git stash push -u -m "$STASH_NAME"; then
+                    echo "Stash failed; will force reset to origin for deploy."
+                else
+                    echo "Stashed local changes as: $STASH_NAME"
+                fi
             else
                 echo "ERROR: Git working tree has local changes. Deployment aborted."
                 echo "Run 'git status' to inspect, or rerun with AUTO_STASH_GIT_CHANGES=1"
@@ -84,8 +87,14 @@ if [ -d .git ]; then
 
         CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
         git fetch --prune origin
-        git pull --ff-only origin "$CURRENT_BRANCH"
-        echo "✓ Git pull complete"
+        if ! git pull --ff-only origin "$CURRENT_BRANCH"; then
+            echo "Pull failed (local or untracked changes in the way). Forcing tree to match origin/$CURRENT_BRANCH for deploy..."
+            git reset --hard "origin/$CURRENT_BRANCH"
+            git clean -fd
+            echo "✓ Reset to origin/$CURRENT_BRANCH complete"
+        else
+            echo "✓ Git pull complete"
+        fi
         echo ""
     fi
 else

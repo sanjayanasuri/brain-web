@@ -10,6 +10,7 @@ on:
       - 'scripts/**'
       - 'docker-compose*.yml'
       - '.github/workflows/deploy.yml'
+      - '.github/actions/**'
   workflow_dispatch:
 
 concurrency:
@@ -23,6 +24,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Sync server repo to main
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            cd ~/brain-web || exit 1
+            git fetch --prune origin
+            git checkout main
+            git reset --hard origin/main
+            git clean -fd
+            echo "Repo synced to origin/main"
 
       - name: Deploy to Hetzner
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
