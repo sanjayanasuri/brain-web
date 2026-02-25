@@ -33,6 +33,7 @@ export * from './api/assistant';
 export * from './api/home';
 export * from './api/capture';
 export * from './api/indexing';
+export * from './api/reader';
 
 export async function createAnchorBranch(payload: {
     artifact: any;

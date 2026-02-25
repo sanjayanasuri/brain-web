@@ -64,6 +64,7 @@ from api_ingestion_runs import router as ingestion_runs_router
 from api_paths import router as paths_router
 from api_quality import router as quality_router
 from api_web_ingestion import router as web_ingestion_router
+from api_web_reader import router as web_reader_router
 from api_pdf_ingestion import router as pdf_ingestion_router
 from api_quotes import router as quotes_router
 from api_claims_from_quotes import router as claims_from_quotes_router
@@ -494,6 +495,7 @@ app.include_router(paths_router)
 app.include_router(quality_router)
 # Web ingestion router is always included but has local-only guard
 app.include_router(web_ingestion_router)
+app.include_router(web_reader_router)
 # PDF ingestion router for ingesting PDFs into the knowledge graph
 app.include_router(pdf_ingestion_router)
 # Phase 2: Evidence Graph endpoints
