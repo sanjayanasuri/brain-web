@@ -25,7 +25,7 @@ export default function ExplorerPage() {
                     background: 'var(--panel)',
                 }}>
                     <div>
-                        <div style={{ fontSize: 16, fontWeight: 700 }}>Explorer Pro</div>
+                        <div style={{ fontSize: 16, fontWeight: 700 }}>Explorer</div>
                         <div style={{ fontSize: 12, color: 'var(--muted)' }}>Map concepts, inspect links, and branch your thinking.</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>

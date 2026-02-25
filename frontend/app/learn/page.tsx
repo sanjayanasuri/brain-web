@@ -8,7 +8,7 @@ export default function LearnPage() {
       <div style={{ maxWidth: 1080, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>Quiz Me Pro</div>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>Quiz Me</div>
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>Adaptive study and confidence-building from your actual memory graph.</div>
           </div>
           <button
