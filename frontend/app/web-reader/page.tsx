@@ -55,7 +55,7 @@ export default function ReaderPage() {
         {data && (
           <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 12, background: 'var(--panel)', display: 'grid', gap: 10 }}>
             {!data.found ? (
-              <div style={{ color: 'var(--muted)' }}>{data.reason || 'Not found'}</div>
+              <div className="page-subtitle">{data.reason || 'No ingested document found for that target.'}</div>
             ) : (
               <>
                 <div style={{ fontSize: 14 }}>
@@ -152,7 +152,7 @@ export default function ReaderPage() {
                 <div style={{ marginTop: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Annotations</div>
                   {annotations.length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>No annotations yet.</div>
+                    <div className="page-subtitle">No annotations yet. Highlight or save memory from snippets to start.</div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {annotations.slice(0, 8).map((a, idx) => (

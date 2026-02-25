@@ -24,9 +24,9 @@ export default function LearningInterventionsCard() {
     <div className="ui-card" style={{ padding: 14 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Learning Interventions</div>
       {loading ? (
-        <div style={{ color: 'var(--muted)', fontSize: 13 }}>Loading…</div>
+        <div className="page-subtitle">Loading learning interventions...</div>
       ) : items.length === 0 ? (
-        <div style={{ color: 'var(--muted)', fontSize: 13 }}>No open interventions. Nice momentum.</div>
+        <div className="page-subtitle">No open interventions right now.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {items.map((it) => (

@@ -117,7 +117,7 @@ export default function HomeFeedCard() {
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>Inbox: {feed.capture_inbox?.new_count ?? 0}</div>
         </div>
         {feed.today.tasks.length === 0 ? (
-          <div style={{ color: 'var(--muted)', fontSize: 13 }}>No tasks queued for today.</div>
+          <div className="page-subtitle">No tasks queued for today.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {feed.today.tasks.slice(0, 3).map((t) => (
@@ -140,7 +140,7 @@ export default function HomeFeedCard() {
       <div className="ui-card" style={{ padding: 14 }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>Bujji Picks</div>
         {feed.picks.length === 0 ? (
-          <div style={{ color: 'var(--muted)', fontSize: 13 }}>No picks yet. They’ll appear as memory builds.</div>
+          <div className="page-subtitle">No picks yet. They will appear as your memory graph strengthens.</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {feed.picks.slice(0, 3).map((p, i) => (
