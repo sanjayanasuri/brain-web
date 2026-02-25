@@ -97,6 +97,14 @@ export CLAWDBOT_REQUIRE_UI_SCREENSHOT=true
 ./.clawdbot/scripts/submit-task.sh --title "Build X" --scope "frontend/app" --desc "customer request" --lane A
 ```
 
+## Super-short wrapper
+
+```bash
+./bw task "Build X" "frontend/app" "customer request" A
+./bw status
+./bw tick
+```
+
 ## Daily digest
 
 ```bash
