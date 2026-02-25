@@ -120,6 +120,13 @@ Swarm tick order:
 ./.clawdbot/scripts/ops-digest.sh
 ```
 
+## Daily interest suggestions refresh
+
+```bash
+./.clawdbot/scripts/install-interest-cron.sh "15 9 * * *"
+# runs: backend/jobs/refresh_interest_suggestions.py
+```
+
 ## Example cron
 
 ```bash
