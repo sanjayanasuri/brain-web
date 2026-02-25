@@ -21,6 +21,40 @@ EXA_HTTP_BACKOFF_BASE_SECONDS = 0.5
 EXA_HTTP_BACKOFF_CAP_SECONDS = 8.0
 EXA_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
+_HTTP_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _get_http_client(timeout_seconds: float) -> httpx.AsyncClient:
+    global _HTTP_CLIENT
+    # Reuse one client for connection pooling/latency improvements.
+    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
+        _HTTP_CLIENT = httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True)
+    return _HTTP_CLIENT
+
+# JSON Schema for Exa /answer structured output (learning: summary, key points, prerequisites, examples)
+LEARNING_OUTPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "Brief summary of the answer"},
+        "key_points": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Main takeaways or key points",
+        },
+        "prerequisites": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Concepts or knowledge needed first",
+        },
+        "examples": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Concrete examples or use cases",
+        },
+    },
+    "required": ["summary"],
+}
+
 
 @dataclass(frozen=True)
 class ResolvedExaSearchPolicy:
@@ -235,14 +269,14 @@ async def _exa_request_json(
 
     for attempt in range(1, attempts + 1):
         try:
-            async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
-                resp = await client.request(
-                    method_upper,
-                    url,
-                    headers=_exa_headers(api_key) if method_upper != "GET" else {"x-api-key": api_key},
-                    json=json_body,
-                    params=params,
-                )
+            client = _get_http_client(timeout_seconds)
+            resp = await client.request(
+                method_upper,
+                url,
+                headers=_exa_headers(api_key) if method_upper != "GET" else {"x-api-key": api_key},
+                json=json_body,
+                params=params,
+            )
 
             if resp.status_code >= 400:
                 retry_after = _parse_retry_after_seconds(resp.headers.get("Retry-After"))
@@ -348,6 +382,16 @@ def _normalize_exa_answer_response(query: str, raw: Dict[str, Any], policy: Reso
         or raw.get("content")
         or ""
     )
+    # Merge structured output from Exa (when outputSchema was used)
+    output = raw.get("output")
+    if isinstance(output, dict):
+        answer_text = str(output.get("summary") or answer_text or "")
+        key_points = output.get("key_points")
+        prerequisites = output.get("prerequisites")
+        examples = output.get("examples")
+    else:
+        key_points = prerequisites = examples = None
+
     citations_raw = raw.get("citations")
     if not isinstance(citations_raw, list):
         citations_raw = raw.get("sources") if isinstance(raw.get("sources"), list) else []
@@ -366,7 +410,7 @@ def _normalize_exa_answer_response(query: str, raw: Dict[str, Any], policy: Reso
         elif isinstance(item, str):
             citations.append({"title": None, "url": item, "snippet": None, "provider": "exa"})
 
-    return {
+    out: Dict[str, Any] = {
         "query": query,
         "answer": str(answer_text or ""),
         "citations": citations,
@@ -382,6 +426,13 @@ def _normalize_exa_answer_response(query: str, raw: Dict[str, Any], policy: Reso
         },
         "raw": raw,
     }
+    if key_points is not None and isinstance(key_points, list):
+        out["key_points"] = [str(x) for x in key_points if x]
+    if prerequisites is not None and isinstance(prerequisites, list):
+        out["prerequisites"] = [str(x) for x in prerequisites if x]
+    if examples is not None and isinstance(examples, list):
+        out["examples"] = [str(x) for x in examples if x]
+    return out
 
 
 def _normalize_research_task(task: Dict[str, Any]) -> Dict[str, Any]:
