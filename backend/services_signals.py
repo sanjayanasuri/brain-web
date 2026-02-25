@@ -196,7 +196,8 @@ def list_signals(
     RETURN count(s) AS total
     """
     count_result = session.run(count_query, **{k: v for k, v in params.items() if k not in ["limit", "offset"]})
-    total = count_result.single()["total"] if count_result.single() else 0
+    count_record = count_result.single()
+    total = count_record["total"] if count_record else 0
     
     return SignalListResponse(signals=signals, total=total)
 
@@ -423,7 +424,8 @@ def list_tasks(
     RETURN count(t) AS total
     """
     count_result = session.run(count_query, **{k: v for k, v in params.items() if k not in ["limit", "offset"]})
-    total = count_result.single()["total"] if count_result.single() else 0
+    count_record = count_result.single()
+    total = count_record["total"] if count_record else 0
     
     return TaskListResponse(tasks=tasks, total=total)
 def get_recent_user_activity(session: Session, limit: int = 10) -> str:
