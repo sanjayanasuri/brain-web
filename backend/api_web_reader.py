@@ -8,6 +8,7 @@ from auth import require_auth
 from db_neo4j import get_neo4j_session
 from db_postgres import execute_query, execute_update
 from services_web_reader import build_reader_view
+from services_teaching_engine import create_learning_intervention
 
 router = APIRouter(prefix="/web", tags=["web-reader"])
 
@@ -153,12 +154,31 @@ def check_understanding(payload: ReaderCheckRequest, auth=Depends(require_auth))
         ),
     )
 
+    intervention_id = None
+    if verdict in {"partial", "incorrect"}:
+        intervention_id = create_learning_intervention(
+            user_id=str(auth.user_id),
+            tenant_id=str(auth.tenant_id),
+            chat_id="reader",
+            source="reader_check",
+            trigger_text=payload.user_answer[:400],
+            assistant_answer=f"Snippet context: {payload.snippet_text[:500]}",
+            metadata={
+                "doc_id": payload.doc_id,
+                "url": payload.url,
+                "query": payload.query,
+                "verdict": verdict,
+                "ratio": ratio,
+            },
+        )
+
     return {
         "verdict": verdict,
         "feedback": feedback,
         "score": ratio,
         "expected_terms": expected[:6],
         "next_prompt": "Explain this snippet in one sentence as if teaching a friend.",
+        "intervention_id": intervention_id,
     }
 
 
