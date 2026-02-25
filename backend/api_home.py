@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 
 from auth import require_auth
 from db_neo4j import get_neo4j_session
+from db_postgres import execute_query
 from services_interest_recommender import get_recent_suggestions
 
 router = APIRouter(prefix="/home", tags=["home"])
@@ -29,7 +30,7 @@ def get_home_feed(user_ctx=Depends(require_auth), session=Depends(get_neo4j_sess
     start_iso, end_iso = _today_window_iso()
     tasks_query = """
     MATCH (t:Task)
-    WHERE coalesce(t.tenant_id, 'default') = $tenant_id
+    WHERE ($tenant_id = 'default' OR t.tenant_id = $tenant_id OR t.tenant_id IS NULL)
       AND (t.due_date IS NULL OR t.due_date >= $start_iso)
       AND (t.due_date IS NULL OR t.due_date < $end_iso OR t.due_date <= $end_iso)
     RETURN t.id AS id,
@@ -47,18 +48,20 @@ def get_home_feed(user_ctx=Depends(require_auth), session=Depends(get_neo4j_sess
     # 2) Suggested reads (already personalized)
     picks = get_recent_suggestions(user_id=user_id, tenant_id=tenant_id, limit=3)
 
-    # 3) Lightweight continuity summary from latest chat memory (optional)
-    continuity_query = """
-    MATCH (c:ChatMessage)
-    WHERE coalesce(c.tenant_id, 'default') = $tenant_id
-    RETURN c.content AS content
-    ORDER BY c.created_at DESC
-    LIMIT 3
-    """
+    # 3) Lightweight continuity summary from latest chat history (Postgres)
     continuity: List[str] = []
     try:
-        cont_res = session.run(continuity_query, tenant_id=tenant_id)
-        continuity = [str(r.get("content") or "")[:180] for r in cont_res if r.get("content")]
+        rows = execute_query(
+            """
+            SELECT content
+            FROM chat_messages
+            WHERE user_id=%s AND tenant_id=%s AND role='user'
+            ORDER BY created_at DESC
+            LIMIT 3
+            """,
+            (str(user_id), str(tenant_id)),
+        ) or []
+        continuity = [str(r.get("content") or "")[:180] for r in rows if r.get("content")]
     except Exception:
         continuity = []
 
