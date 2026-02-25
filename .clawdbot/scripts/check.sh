@@ -23,6 +23,7 @@ UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 MAX_RETRIES_DEFAULT="${CLAWDBOT_MAX_RETRIES:-3}"
 MIN_APPROVALS="${CLAWDBOT_MIN_APPROVALS:-1}"
 REQUIRE_UI_SCREENSHOT="${CLAWDBOT_REQUIRE_UI_SCREENSHOT:-true}"
+AUTO_MERGE="${CLAWDBOT_AUTO_MERGE:-false}"
 
 running_tasks=$(jq -c '[.[] | select(.status == "running")]' "$TASKS_FILE")
 count=$(echo "$running_tasks" | jq 'length')
@@ -134,7 +135,17 @@ for i in $(seq 0 $((count - 1))); do
 
   # Merge-ready gate
   if [[ -n "$pr_number" && "$ci_passed" == "true" && "$mergeable" == "true" && "$approvals_ok" == "true" && "$screenshot_present" == "true" ]]; then
-    update_task "$task_id" "{\"status\": \"ready\", \"updated_at\": \"$UPDATED_AT\", \"completedAt\": $(date +%s)000}"
+    if [[ "$AUTO_MERGE" == "true" ]] && command -v gh >/dev/null 2>&1; then
+      merge_out=$(gh pr merge "$pr_number" --squash --auto --delete-branch 2>&1 || true)
+      if echo "$merge_out" | grep -Eqi 'merged|auto-merge enabled|will be merged automatically'; then
+        update_task "$task_id" "{\"status\": \"merged\", \"updated_at\": \"$UPDATED_AT\", \"completedAt\": $(date +%s)000, \"autoMerged\": true}"
+      else
+        update_task "$task_id" "{\"status\": \"ready\", \"updated_at\": \"$UPDATED_AT\", \"completedAt\": $(date +%s)000, \"autoMergeError\": $(jq -Rn --arg s \"$merge_out\" '$s')}"
+      fi
+    else
+      update_task "$task_id" "{\"status\": \"ready\", \"updated_at\": \"$UPDATED_AT\", \"completedAt\": $(date +%s)000}"
+    fi
+
     notified=$(echo "$task" | jq -r '.notified // false')
     if [[ "$notified" != "true" ]]; then
       "$NOTIFY_SCRIPT" "$task_id" "$pr_number" "$pr_url"

@@ -35,7 +35,7 @@ What it does:
 4. checks mergeability (`gh pr view --json mergeStateStatus`)
 5. checks approval count gate (`CLAWDBOT_MIN_APPROVALS`, default `1`)
 6. if UI files changed, checks PR body includes screenshot evidence
-7. marks task `ready` only when all gates pass
+7. marks task `ready` (or `merged` when auto-merge is enabled) only when all gates pass
 
 ## Notifications
 
@@ -83,6 +83,7 @@ export DISPATCH_AGENT_CMD='claude -p'
 export CLAWDBOT_MAX_RETRIES=3
 export CLAWDBOT_MIN_APPROVALS=3
 export CLAWDBOT_REQUIRE_UI_SCREENSHOT=true
+export CLAWDBOT_AUTO_MERGE=false
 ```
 
 ## One-command tick
