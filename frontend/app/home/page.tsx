@@ -47,6 +47,7 @@ import StudyPanel from "../components/dashboard/StudyPanel";
 import VoiceAgentPanel from "../components/voice/VoiceAgentPanel";
 import { ActionButtons } from "../components/chat/ActionButtons";
 import WelcomeModal from "../components/onboarding/WelcomeModal";
+import MorningBriefing from "../components/dashboard/MorningBriefing";
 import InlineQuizSession from "../components/chat/InlineQuizSession";
 import RelatedNotes from "../components/chat/RelatedNotes";
 
@@ -666,6 +667,9 @@ function HomePageInner() {
                     Explore your study map, ask questions, or import your notes.
                   </div>
                 </div>
+
+                {/* Morning briefing */}
+                {messages.length === 0 && <MorningBriefing />}
 
                 {/* Quick-start actions for new users */}
                 {chatSessions.length === 0 && messages.length === 0 && (

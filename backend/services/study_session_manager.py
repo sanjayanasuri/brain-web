@@ -569,8 +569,8 @@ def _generate_next_task(
         threshold=0.7
     )
     
-    # Build context pack
-    from models.study import ContextPack
+    # Build context pack from user's actual graph content
+    from models.study import ContextPack, Excerpt
     context_pack = ContextPack(excerpts=[], concepts=[])
     
     if selection_id and neo4j_session:
@@ -582,6 +582,12 @@ def _generate_next_task(
             include_related=True,
             user_id=user_id,
             tenant_id=tenant_id
+        )
+    elif neo4j_session:
+        # No selection — pull concepts and content from the user's graph
+        # based on the session intent (e.g. "Quiz me on biology")
+        context_pack = _build_context_from_graph(
+            neo4j_session, user_id, tenant_id, topic_id
         )
     
     # Calculate adaptive difficulty for this task type (Phase 4)
@@ -723,3 +729,105 @@ def _update_user_performance(
             conn.commit()
     finally:
         pool.putconn(conn)
+
+
+def _build_context_from_graph(
+    neo4j_session,
+    user_id: str,
+    tenant_id: str,
+    topic_id=None,
+):
+    """
+    Build a context pack from the user's knowledge graph.
+    Pulls real concepts and lecture content the user has studied,
+    so quiz questions are grounded in their actual material.
+    """
+    from models.study import ContextPack, Excerpt
+    from services_branch_explorer import get_active_graph_context, ensure_graph_scoping_initialized
+
+    try:
+        ensure_graph_scoping_initialized(neo4j_session)
+        graph_id, branch_id = get_active_graph_context(neo4j_session)
+    except Exception:
+        graph_id = "default"
+        branch_id = "main"
+
+    concepts = []
+    excerpts = []
+
+    try:
+        result = neo4j_session.run("""
+            MATCH (c:Concept)
+            WHERE c.graph_id = $graph_id
+            AND c.tenant_id = $tenant_id
+            AND ($branch_id IN c.on_branches OR c.on_branches IS NULL)
+            RETURN c.name AS name, c.node_id AS node_id,
+                   c.description AS description, c.domain AS domain,
+                   COALESCE(c.mastery_level, 0) AS mastery
+            ORDER BY c.mastery_level ASC, rand()
+            LIMIT 5
+        """, graph_id=graph_id, branch_id=branch_id, tenant_id=tenant_id)
+
+        for record in result:
+            concepts.append(record["name"])
+            desc = record["description"] or f"{record['name']} is a concept in {record['domain'] or 'this subject'}."
+            excerpts.append(Excerpt(
+                excerpt_id=record["node_id"],
+                content=f"{record['name']}: {desc}",
+                source_type="concept",
+                source_id=record["node_id"],
+                relevance_score=1.0 - (record["mastery"] / 5.0),
+                metadata={"domain": record["domain"], "mastery": record["mastery"]},
+            ))
+    except Exception as e:
+        logger.warning(f"[study_session] Failed to fetch concepts from graph: {e}")
+
+    try:
+        if concepts:
+            seg_result = neo4j_session.run("""
+                MATCH (c:Concept)-[:MENTIONED_IN]->(l:Lecture)
+                WHERE c.name IN $concepts
+                AND c.graph_id = $graph_id
+                AND c.tenant_id = $tenant_id
+                RETURN l.lecture_id AS lecture_id, l.title AS title,
+                       l.raw_text AS raw_text, c.name AS concept_name
+                LIMIT 3
+            """, concepts=concepts, graph_id=graph_id, tenant_id=tenant_id)
+
+            for record in seg_result:
+                raw = record["raw_text"] or ""
+                snippet = raw[:500] if raw else f"Lecture: {record['title'] or 'Untitled'}"
+                excerpts.append(Excerpt(
+                    excerpt_id=record["lecture_id"],
+                    content=snippet,
+                    source_type="lecture",
+                    source_id=record["lecture_id"],
+                    relevance_score=0.9,
+                    metadata={"title": record["title"], "concept": record["concept_name"]},
+                ))
+    except Exception as e:
+        logger.warning(f"[study_session] Failed to fetch lecture segments: {e}")
+
+    try:
+        if len(concepts) >= 2:
+            rel_result = neo4j_session.run("""
+                MATCH (a:Concept)-[r]->(b:Concept)
+                WHERE a.name IN $concepts AND b.name IN $concepts
+                AND a.graph_id = $graph_id AND a.tenant_id = $tenant_id
+                RETURN a.name AS from_name, type(r) AS rel_type, b.name AS to_name
+                LIMIT 5
+            """, concepts=concepts, graph_id=graph_id, tenant_id=tenant_id)
+
+            for record in rel_result:
+                rel_text = f"{record['from_name']} {record['rel_type'].replace('_', ' ').lower()} {record['to_name']}"
+                excerpts.append(Excerpt(
+                    excerpt_id=f"rel_{record['from_name']}_{record['to_name']}",
+                    content=rel_text,
+                    source_type="relationship",
+                    source_id="graph",
+                    relevance_score=0.7,
+                ))
+    except Exception as e:
+        logger.debug(f"[study_session] Failed to fetch relationships: {e}")
+
+    return ContextPack(excerpts=excerpts, concepts=concepts)
