@@ -758,8 +758,8 @@ def _build_context_from_graph(
     try:
         result = neo4j_session.run("""
             MATCH (c:Concept)
-            WHERE c.graph_id = $graph_id
-            AND c.tenant_id = $tenant_id
+            WHERE (c.graph_id = $graph_id OR c.graph_id STARTS WITH $graph_id OR $graph_id STARTS WITH c.graph_id)
+            AND (c.tenant_id = $tenant_id OR c.tenant_id IS NULL)
             AND ($branch_id IN c.on_branches OR c.on_branches IS NULL)
             RETURN c.name AS name, c.node_id AS node_id,
                    c.description AS description, c.domain AS domain,
@@ -788,7 +788,7 @@ def _build_context_from_graph(
                 MATCH (c:Concept)-[:MENTIONED_IN]->(l:Lecture)
                 WHERE c.name IN $concepts
                 AND c.graph_id = $graph_id
-                AND c.tenant_id = $tenant_id
+                AND (c.tenant_id = $tenant_id OR c.tenant_id IS NULL)
                 RETURN l.lecture_id AS lecture_id, l.title AS title,
                        l.raw_text AS raw_text, c.name AS concept_name
                 LIMIT 3
@@ -813,7 +813,8 @@ def _build_context_from_graph(
             rel_result = neo4j_session.run("""
                 MATCH (a:Concept)-[r]->(b:Concept)
                 WHERE a.name IN $concepts AND b.name IN $concepts
-                AND a.graph_id = $graph_id AND a.tenant_id = $tenant_id
+                AND a.graph_id = $graph_id
+                AND (a.tenant_id = $tenant_id OR a.tenant_id IS NULL)
                 RETURN a.name AS from_name, type(r) AS rel_type, b.name AS to_name
                 LIMIT 5
             """, concepts=concepts, graph_id=graph_id, tenant_id=tenant_id)
