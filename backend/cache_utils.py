@@ -206,6 +206,41 @@ def clear_cache() -> None:
         except Exception:
             pass
 
+
+def prune_memory_cache(*, max_entries: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Prune in-memory (L1) cache only.
+
+    - Always removes expired entries.
+    - If `max_entries` is provided and the cache is still larger, evicts the
+      oldest entries (in insertion order) until the target is met.
+    """
+    now = time.time()
+    removed_expired = 0
+    removed_evicted = 0
+    with _cache_lock:
+        expired_keys = [k for k, v in _memory_cache.items() if now > float(v.get("expires_at") or 0)]
+        for k in expired_keys:
+            _memory_cache.pop(k, None)
+        removed_expired = len(expired_keys)
+
+        if max_entries is not None and max_entries > 0 and len(_memory_cache) > max_entries:
+            excess = len(_memory_cache) - max_entries
+            # dict preserves insertion order; evict oldest first.
+            for k in list(_memory_cache.keys())[:excess]:
+                _memory_cache.pop(k, None)
+                removed_evicted += 1
+
+        remaining = len(_memory_cache)
+
+    return {
+        "removed_expired": removed_expired,
+        "removed_evicted": removed_evicted,
+        "remaining": remaining,
+        "max_entries": max_entries,
+    }
+
+
 def get_cache_stats() -> Dict[str, Any]:
     """Get multi-level cache statistics."""
     total_hits = _cache_stats["hits_l1"] + _cache_stats["hits_l2"] + _cache_stats["hits_l3"]
@@ -219,4 +254,3 @@ def get_cache_stats() -> Dict[str, Any]:
         "memory_size": len(_memory_cache),
         "disk_size": len(_disk_cache) if _disk_cache else 0,
     }
-

@@ -86,6 +86,26 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _pool
 
 
+def reset_pool() -> None:
+    """
+    Close and reset the global connection pool (best-effort).
+
+    Intended for self-healing remediation when the pool is unhealthy.
+    """
+    global _pool
+    pool = None
+    with _pool_lock:
+        pool = _pool
+        _pool = None
+    if pool is None:
+        return
+    try:
+        pool.closeall()
+    except Exception:
+        pass
+    logger.warning("[db_postgres] Connection pool reset")
+
+
 def get_db_connection():
     """
     Borrow a connection from the pool.
