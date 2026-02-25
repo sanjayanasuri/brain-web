@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.unit
+
 from services_voice_style_profile import (
     _default_metrics,
     _derive_preferences,

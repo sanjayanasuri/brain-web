@@ -442,7 +442,8 @@ Rules:
 - simple: conversational/thanks
 - medium: status/definitions
 - complex: analysis/planning
-- needsWebSearch: current events/news/real-time data (2024-2026)
+- needsWebSearch: true when the user needs current/recent info, explanations, or learning material: current events, news, real-time data (2024-2026); "latest", "recent", "what's new"; "explain", "how does X work", "what is X", "tutorial", "documentation", "examples", "paper", "study", "evidence", "sources". Set to false for pure conversation or when the user only needs their own notes/graph.
+- searchQuery: If needsWebSearch is true, set to a concise standalone search query (e.g. "latest updates on X", "how does Y work explained simply", "X tutorial examples", "X definition and prerequisites"). Never leave empty when needsWebSearch is true; derive from the user message.
 - requiresSelfKnowledge: User is asking about their own knowledge, notes, or history (e.g., "What do I know about X?")`;
 
   try {

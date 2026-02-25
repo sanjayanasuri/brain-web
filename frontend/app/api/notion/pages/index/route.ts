@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getToken } from 'next-auth/jwt';
 
 // Force dynamic rendering - this API route should not be statically generated
 export const dynamic = 'force-dynamic';
@@ -7,6 +8,11 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 export async function POST(request: NextRequest) {
   try {
+    const token = await getToken({ req: request });
+    const accessToken = (token as { accessToken?: string } | null)?.accessToken;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
     const body = await request.json();
     const { page_id, include } = body;
 
@@ -19,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const response = await fetch(`${API_BASE_URL}/admin/notion/pages/index`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ page_id, include }),
     });
 

@@ -1,0 +1,23 @@
+# Sync Sentry issues into the agent feed (label agent-fix) so OpenClaw/agents can pick them up.
+# Requires repo secrets: SENTRY_AUTH_TOKEN (Sentry API token with event:read), SENTRY_ORG, SENTRY_PROJECT.
+name: sentry-sync-feed
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Sync Sentry issues to agent-feed
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node .github/scripts/sentry-sync-feed.mjs

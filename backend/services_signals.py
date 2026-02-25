@@ -15,6 +15,7 @@ from models import (
     Signal, SignalType, SignalCreate, SignalListResponse,
     Task, TaskType, TaskStatus, TaskCreate, TaskListResponse
 )
+from utils.timestamp import utcnow_ms
 from services_branch_explorer import ensure_graph_scoping_initialized, get_active_graph_context
 
 
@@ -46,7 +47,7 @@ def create_signal(session: Session, payload: SignalCreate, user_id: Optional[str
     graph_id, branch_id = get_active_graph_context(session)
     
     signal_id = f"SIG_{uuid4().hex[:10]}"
-    timestamp = int(datetime.utcnow().timestamp() * 1000)  # milliseconds
+    timestamp = utcnow_ms()
     payload_json = json.dumps(payload.payload) if payload.payload else "{}"
     
     query = """
@@ -262,7 +263,7 @@ def create_task(session: Session, payload: TaskCreate) -> Task:
     graph_id, branch_id = get_active_graph_context(session)
     
     task_id = f"TASK_{uuid4().hex[:10]}"
-    timestamp = int(datetime.utcnow().timestamp() * 1000)  # milliseconds
+    timestamp = utcnow_ms()
     params_json = json.dumps(payload.params) if payload.params else "{}"
     
     query = """

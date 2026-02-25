@@ -4,6 +4,7 @@ import { useCallback, useMemo } from 'react';
 import { useGraph } from '../GraphContext';
 import { useChat } from './useChatState';
 import { useUI } from './useUIState';
+import { listGraphs } from '../../../api-client';
 import { EvidenceItem } from '../../../types/evidence';
 
 export function useEvidenceHighlight(
@@ -38,7 +39,6 @@ export function useEvidenceHighlight(
         if (retrievalMeta?.claimIds && retrievalMeta.claimIds.length > 0) {
             try {
                 const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-                const { listGraphs } = await import('../../../api-client');
                 const graphs = await listGraphs();
                 const graphId = graphs.active_graph_id || 'demo';
 

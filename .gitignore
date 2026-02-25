@@ -84,6 +84,10 @@ backend/notion_page_index.json
 backend/uploaded_resources/*
 !backend/uploaded_resources/.gitkeep
 
+# Scout raw output (ingested into ideas.json)
+.clawdbot/scout-output.json
+.clawdbot/scout-last-run
+
 # Terraform
 .terraform/
 *.tfstate

@@ -3,6 +3,7 @@
  * Enables multi-device "Recent activity" and future Sessions
  */
 import { getApiHeaders } from '../api/base';
+import { UnauthorizedError } from './UnauthorizedError';
 
 export type EventType =
   | 'CONCEPT_VIEWED'
@@ -40,6 +41,10 @@ export interface LogEventParams {
   resource_id?: string;
   answer_id?: string;
   payload?: Record<string, any>;
+  /** OpenTelemetry trace ID for correlation */
+  trace_id?: string;
+  /** Correlation ID for request/flow grouping */
+  correlation_id?: string;
 }
 
 export interface FetchRecentEventsParams {
@@ -107,7 +112,11 @@ export async function logEvent(event: LogEventParams): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/events/activity`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(event),
+      body: JSON.stringify({
+        ...event,
+        ...(event.trace_id != null && { trace_id: event.trace_id }),
+        ...(event.correlation_id != null && { correlation_id: event.correlation_id }),
+      }),
     });
     
     if (!response.ok) {
@@ -167,15 +176,15 @@ export async function fetchRecentSessions(
     
     const url = `${API_BASE_URL}/sessions/recent?${queryParams.toString()}`;
     const response = await fetch(url, { headers });
-    
+    if (response.status === 401) throw new UnauthorizedError();
     if (!response.ok) {
       console.warn('[EventsClient] Failed to fetch recent sessions:', response.status);
       return [];
     }
-    
     const sessions: SessionSummary[] = await response.json();
     return sessions;
   } catch (error) {
+    if (error instanceof UnauthorizedError) throw error;
     console.warn('[EventsClient] Error fetching recent sessions:', error);
     return [];
   }

@@ -101,6 +101,7 @@ class ActivityEventCreate(BaseModel):
         'PATH_EXITED',
         'DIGEST_OPENED',
         'REVIEW_OPENED',
+        'REMINDER_DISMISSED',
         'VOICE_SESSION',
         'INGESTION_STARTED',
         'INGESTION_COMPLETED',
@@ -118,6 +119,8 @@ class ActivityEventCreate(BaseModel):
     resource_id: Optional[str] = None
     answer_id: Optional[str] = None
     payload: Optional[Dict[str, Any]] = None
+    trace_id: Optional[str] = None
+    correlation_id: Optional[str] = None
 
 
 class ActivityEvent(BaseModel):
@@ -130,6 +133,8 @@ class ActivityEvent(BaseModel):
     type: str
     payload: Optional[Dict[str, Any]] = None
     created_at: str
+    trace_id: Optional[str] = None
+    correlation_id: Optional[str] = None
 
 
 @router.post("/activity", status_code=201)
@@ -151,8 +156,10 @@ def create_activity_event(
         # Generate event ID
         event_id = str(uuid.uuid4())
         created_at = datetime.utcnow().isoformat() + "Z"
-        
-        # Store in Neo4j
+        trace_id = payload.trace_id or getattr(request.state, "request_id", None)
+        correlation_id = payload.correlation_id
+
+        # Store in Neo4j (trace_id/correlation_id for OpenTelemetry correlation)
         query = """
         CREATE (e:ActivityEvent {
             id: $id,
@@ -163,11 +170,12 @@ def create_activity_event(
             answer_id: $answer_id,
             type: $type,
             payload: $payload,
-            created_at: $created_at
+            created_at: $created_at,
+            trace_id: $trace_id,
+            correlation_id: $correlation_id
         })
         RETURN e.id as id, e.created_at as created_at
         """
-        
         params = {
             "id": event_id,
             "user_id": user_id,
@@ -178,6 +186,8 @@ def create_activity_event(
             "type": payload.type,
             "payload": payload.payload or {},
             "created_at": created_at,
+            "trace_id": trace_id,
+            "correlation_id": correlation_id,
         }
         
         result = session.run(query, params)
@@ -237,14 +247,12 @@ def get_recent_activity_events(
         RETURN e.id as id, e.user_id as user_id, e.graph_id as graph_id,
                e.concept_id as concept_id, e.resource_id as resource_id,
                e.answer_id as answer_id, e.type as type, e.payload as payload,
-               e.created_at as created_at
+               e.created_at as created_at, e.trace_id as trace_id, e.correlation_id as correlation_id
         ORDER BY e.created_at DESC
         LIMIT $limit
         """
-        
         result = session.run(query, params)
         events = []
-        
         for record in result:
             events.append(ActivityEvent(
                 id=record["id"],
@@ -256,6 +264,8 @@ def get_recent_activity_events(
                 type=record["type"],
                 payload=record.get("payload"),
                 created_at=record["created_at"],
+                trace_id=record.get("trace_id"),
+                correlation_id=record.get("correlation_id"),
             ))
         
         return events

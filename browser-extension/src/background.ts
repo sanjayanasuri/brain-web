@@ -24,14 +24,35 @@ type CaptureSelectionRequest = {
 };
 
 const MENU_ID = "brainweb_add_selection";
+const MENU_SEARCH_ID = "brainweb_search_selection";
 const DEFAULT_API_BASE = "http://localhost:8000";
 const SESSION_STORAGE_KEY = "BW_SESSION_ID";
 const API_BASE_KEY = "BW_API_BASE";
+const APP_URL_KEY = "BW_APP_URL";
 
 async function getApiBase(): Promise<string> {
   const stored = await chrome.storage.local.get([API_BASE_KEY]);
   const syncStored = await chrome.storage.sync.get([API_BASE_KEY]);
   return (stored[API_BASE_KEY] as string) || (syncStored[API_BASE_KEY] as string) || DEFAULT_API_BASE;
+}
+
+/** App URL for opening Brain Web frontend (home/explorer). Defaults to same host as API with port 3000. */
+async function getAppUrl(): Promise<string> {
+  const stored = await chrome.storage.local.get([APP_URL_KEY]);
+  const syncStored = await chrome.storage.sync.get([APP_URL_KEY]);
+  const explicit = (stored[APP_URL_KEY] as string) || (syncStored[APP_URL_KEY] as string);
+  if (explicit && explicit.trim()) return explicit.trim().replace(/\/$/, "");
+  const apiBase = await getApiBase();
+  try {
+    const u = new URL(apiBase);
+    if (u.port === "8000" || u.port === "80") {
+      u.port = "3000";
+      return u.origin;
+    }
+    return u.origin;
+  } catch {
+    return "http://localhost:3000";
+  }
 }
 
 function uuidLike(): string {
@@ -202,6 +223,11 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     title: "Add to Brain Web",
     contexts: ["selection"]
   });
+  chrome.contextMenus.create({
+    id: MENU_SEARCH_ID,
+    title: "Search Brain Web for this",
+    contexts: ["selection"]
+  });
 
   // Test notification on install/reload for debugging
   if (details.reason === "install" || details.reason === "update") {
@@ -247,6 +273,35 @@ chrome.runtime.onMessage.addListener((message: any, sender: chrome.runtime.Messa
 
 chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => {
   console.log("[Brain Web] Context menu clicked", { menuItemId: info.menuItemId, tabId: tab?.id });
+
+  if (info.menuItemId === MENU_SEARCH_ID) {
+    const tabId = tab?.id;
+    if (!tabId) {
+      await notify("Brain Web", "No active tab found.");
+      return;
+    }
+    let extracted: { selected_text: string };
+    try {
+      extracted = await extractSelectionFromTab(tabId);
+    } catch (e: any) {
+      await notify("Brain Web", `Could not read selection: ${String(e?.message || e)}`.slice(0, 120));
+      return;
+    }
+    const selectedText = (extracted.selected_text || "").trim();
+    if (!selectedText) {
+      await notify("Brain Web", "No text selected.");
+      return;
+    }
+    try {
+      const appUrl = await getAppUrl();
+      const target = `${appUrl}/home?web_search=${encodeURIComponent(selectedText)}`;
+      await chrome.tabs.create({ url: target });
+      await notify("Brain Web", "Opened Brain Web with your search.");
+    } catch (e: any) {
+      await notify("Brain Web", `Failed to open: ${String(e?.message || e)}`.slice(0, 120));
+    }
+    return;
+  }
 
   if (info.menuItemId !== MENU_ID) return;
 

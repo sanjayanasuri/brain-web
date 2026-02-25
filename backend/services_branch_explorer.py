@@ -565,27 +565,37 @@ def set_active_branch(
     return graph_id, branch_id
 
 
+def list_all_graphs(session: Session) -> List[Dict[str, Any]]:
+    """
+    List all graphs across all tenants. For admin and script use only.
+    Normal app code should use list_graphs(session, tenant_id=...).
+    """
+    return _list_graphs_impl(session, tenant_id=None)
+
+
 def list_graphs(session: Session, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    List all graphs, optionally filtered by tenant_id.
-    
-    Args:
-        session: Neo4j session
-        tenant_id: Optional tenant identifier for multi-tenant isolation.
-                   If provided, only returns graphs belonging to this tenant.
-                   If None, returns all graphs (for backward compatibility).
+    List graphs for the given tenant. tenant_id is required for multi-tenant isolation.
+    Resolved from request context if not provided. Use list_all_graphs() only for admin/scripts.
     """
+    resolved = str(tenant_id).strip() if tenant_id else (str(_REQUEST_GRAPH_TENANT_ID.get()).strip() if _REQUEST_GRAPH_TENANT_ID.get() else None)
+    if not resolved:
+        raise ValueError("tenant_id is required for list_graphs; use list_all_graphs() for admin/script use only.")
+    return _list_graphs_impl(session, tenant_id=resolved)
+
+
+def _list_graphs_impl(session: Session, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Internal: run the list query with optional tenant filter."""
     ensure_default_context(session)
     if tenant_id:
         ensure_graphspace_exists(session, _tenant_default_graph_id(tenant_id), name="Default", tenant_id=tenant_id)
-    
-    # Build WHERE clause for tenant filtering
+
     where_clause = ""
-    params = {}
+    params: Dict[str, Any] = {}
     if tenant_id:
         where_clause = "WHERE g.tenant_id = $tenant_id"
         params["tenant_id"] = tenant_id
-    
+
     query = f"""
     MATCH (g:GraphSpace)
     {where_clause}

@@ -1,7 +1,12 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useState, useEffect } from 'react';
-import GraphVisualization from '../components/graph/GraphVisualization';
+
+const GraphVisualization = dynamic(
+  () => import('../components/graph/GraphVisualization'),
+  { ssr: false }
+);
 
 export default function MobilePage() {
   const [isMounted, setIsMounted] = useState(false);

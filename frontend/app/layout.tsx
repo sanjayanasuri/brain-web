@@ -1,5 +1,6 @@
 import React, { Suspense } from 'react';
 import type { Metadata, Viewport } from 'next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import './globals.css';
 import TopBarWrapper from './components/topbar/TopBarWrapper';
 import { SidebarProvider } from './components/context-providers/SidebarContext';
@@ -53,6 +54,7 @@ export default function RootLayout({
             </QueryProvider>
           </ThemeProvider>
         </SessionProvider>
+        <SpeedInsights />
       </body>
     </html>
   );

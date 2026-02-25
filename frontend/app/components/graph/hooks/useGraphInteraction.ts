@@ -4,7 +4,7 @@ import { useCallback, useMemo } from 'react';
 import { useGraph } from '../GraphContext';
 import { VisualNode, VisualGraph } from '../GraphTypes';
 import { useUI } from './useUIState';
-import { Concept, getGraphNeighbors, selectGraph, createConcept } from '../../../api-client';
+import { Concept, getGraphNeighbors, selectGraph, createConcept, getConceptByName } from '../../../api-client';
 
 export function useGraphInteraction(
     graphRef: React.MutableRefObject<any>,
@@ -41,8 +41,7 @@ export function useGraphInteraction(
             const local = findLocalConcept(name);
             if (local) return local;
             try {
-                const api = await import('../../../api-client');
-                return await api.getConceptByName(name);
+                return await getConceptByName(name);
             } catch (err) {
                 throw new Error(`Concept "${name}" not found`);
             }

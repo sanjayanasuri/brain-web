@@ -3,6 +3,9 @@ Unit tests for heuristic voice learning-signal extraction.
 
 These tests are intentionally pure (no DB / no FastAPI app import).
 """
+import pytest
+
+pytestmark = pytest.mark.unit
 
 import services_voice_learning_signals as svc
 

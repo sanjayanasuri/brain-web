@@ -7,8 +7,9 @@ import CaptureModal, { FreeformCaptureResult } from '../components/canvas/Captur
 import InfiniteCanvas from '../components/canvas/InfiniteCanvas';
 import PhasePanel from '../components/canvas/PhasePanel';
 import { createLecture, getLecture } from '../api/lectures';
-import { useFreeformCanvasStore } from '../state/freeformCanvasStore';
+import { useFreeformCanvasStore, type InternalStore } from '../state/freeformCanvasStore';
 import type { CanvasStroke, FPoint, TextBlock, ToolType } from '../types/freeform-canvas';
+import { useIPadLikeDevice } from '../lib/ipadScribble';
 
 const WORLD_W = 8000;
 const WORLD_H = 6000;
@@ -87,7 +88,9 @@ function estimateLabelWidth(text: string, fontSize: number, min = 110, max = 320
 export default function FreeformCanvasPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const canvasIdFromUrl = searchParams.get('canvasId');
+  const canvasIdFromUrl = searchParams?.get('canvasId') ?? null;
+  const isIPadLike = useIPadLikeDevice();
+  const appliedIPadDefaultRef = useRef(false);
 
   const [canvasId, setCanvasId] = useState<string | null>(canvasIdFromUrl);
   const [canvasTitle, setCanvasTitle] = useState('Untitled Canvas');
@@ -101,18 +104,26 @@ export default function FreeformCanvasPage() {
   const [dirtyTick, setDirtyTick] = useState(0);
   const bootstrappingRef = useRef(false);
 
-  const strokes = useFreeformCanvasStore((s) => s.strokes);
-  const textBlocks = useFreeformCanvasStore((s) => s.textBlocks);
-  const phases = useFreeformCanvasStore((s) => s.phases);
-  const viewX = useFreeformCanvasStore((s) => s.viewX);
-  const viewY = useFreeformCanvasStore((s) => s.viewY);
-  const zoom = useFreeformCanvasStore((s) => s.zoom);
-  const addPhase = useFreeformCanvasStore((s) => s.addPhase);
-  const deletePhase = useFreeformCanvasStore((s) => s.deletePhase);
-  const reorderPhase = useFreeformCanvasStore((s) => s.reorderPhase);
-  const setView = useFreeformCanvasStore((s) => s.setView);
-  const undo = useFreeformCanvasStore((s) => s.undo);
-  const loadState = useFreeformCanvasStore((s) => s.loadState);
+  useEffect(() => {
+    if (isIPadLike && !appliedIPadDefaultRef.current) {
+      appliedIPadDefaultRef.current = true;
+      setActiveTool('pen');
+    }
+  }, [isIPadLike]);
+
+  const strokes = useFreeformCanvasStore((s: InternalStore) => s.strokes);
+  const textBlocks = useFreeformCanvasStore((s: InternalStore) => s.textBlocks);
+  const drawingBlocks = useFreeformCanvasStore((s: InternalStore) => s.drawingBlocks);
+  const phases = useFreeformCanvasStore((s: InternalStore) => s.phases);
+  const viewX = useFreeformCanvasStore((s: InternalStore) => s.viewX);
+  const viewY = useFreeformCanvasStore((s: InternalStore) => s.viewY);
+  const zoom = useFreeformCanvasStore((s: InternalStore) => s.zoom);
+  const addPhase = useFreeformCanvasStore((s: InternalStore) => s.addPhase);
+  const deletePhase = useFreeformCanvasStore((s: InternalStore) => s.deletePhase);
+  const reorderPhase = useFreeformCanvasStore((s: InternalStore) => s.reorderPhase);
+  const setView = useFreeformCanvasStore((s: InternalStore) => s.setView);
+  const undo = useFreeformCanvasStore((s: InternalStore) => s.undo);
+  const loadState = useFreeformCanvasStore((s: InternalStore) => s.loadState);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -129,6 +140,7 @@ export default function FreeformCanvasPage() {
       if (k === 'h') setActiveTool('highlighter');
       if (k === 'e') setActiveTool('eraser');
       if (k === 't') setActiveTool('text');
+      if (k === 'b') setActiveTool('drawingBox');
       if (k === 'v') setActiveTool('select');
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -175,6 +187,7 @@ export default function FreeformCanvasPage() {
               loadState({
                 strokes: Array.isArray(savedState.strokes) ? savedState.strokes : [],
                 textBlocks: Array.isArray(savedState.textBlocks) ? savedState.textBlocks : [],
+                drawingBlocks: Array.isArray(savedState.drawingBlocks) ? savedState.drawingBlocks : [],
                 phases: Array.isArray(savedState.phases) ? savedState.phases : [],
                 viewX: typeof savedState.viewX === 'number' ? savedState.viewX : 0,
                 viewY: typeof savedState.viewY === 'number' ? savedState.viewY : 0,
@@ -214,6 +227,7 @@ export default function FreeformCanvasPage() {
             state: {
               strokes,
               textBlocks,
+              drawingBlocks,
               phases,
               viewX,
               viewY,
@@ -226,7 +240,7 @@ export default function FreeformCanvasPage() {
       }
     }, 2000);
     return () => window.clearTimeout(timeout);
-  }, [canvasId, canvasTitle, isBootstrapped, strokes, textBlocks, phases, viewX, viewY, zoom, dirtyTick]);
+  }, [canvasId, canvasTitle, isBootstrapped, strokes, textBlocks, drawingBlocks, phases, viewX, viewY, zoom, dirtyTick]);
 
   function animateToPhase(targetPhase: { viewX: number; viewY: number; zoom: number }) {
     const start = performance.now();
@@ -290,6 +304,7 @@ export default function FreeformCanvasPage() {
         canvas_title: canvasTitle || 'Untitled Canvas',
         strokes_json: JSON.stringify(useFreeformCanvasStore.getState().strokes),
         text_blocks_json: JSON.stringify(useFreeformCanvasStore.getState().textBlocks),
+        drawing_blocks_json: JSON.stringify(useFreeformCanvasStore.getState().drawingBlocks),
         phases_json: JSON.stringify(useFreeformCanvasStore.getState().phases),
         ocr_hint: ocrHint,
       };
@@ -313,25 +328,25 @@ export default function FreeformCanvasPage() {
 
   function handlePolish() {
     const current = useFreeformCanvasStore.getState();
-    const loopStrokes = current.strokes.filter((s) => isClosedLoop(s.points));
+    const loopStrokes = current.strokes.filter((s: CanvasStroke) => isClosedLoop(s.points));
     if (!loopStrokes.length) return;
 
-    const polishedStrokes = current.strokes.map((stroke) =>
+    const polishedStrokes = current.strokes.map((stroke: CanvasStroke) =>
       isClosedLoop(stroke.points) ? sampleEllipseStroke(stroke) : stroke,
     );
-    const polishedLoops = polishedStrokes.filter((s) => isClosedLoop(s.points));
+    const polishedLoops = polishedStrokes.filter((s: CanvasStroke) => isClosedLoop(s.points));
 
     const anchoredByStroke = new Map<string, TextBlock[]>();
     const unanchoredBlocks: TextBlock[] = [];
 
     for (const block of current.textBlocks) {
       const nearest = polishedLoops
-        .map((s) => {
+        .map((s: CanvasStroke) => {
           const dx = Math.max(s.canvasX - block.x, 0, block.x - (s.canvasX + s.canvasW));
           const dy = Math.max(s.canvasY - block.y, 0, block.y - (s.canvasY + s.canvasH));
           return { stroke: s, dist: Math.hypot(dx, dy) };
         })
-        .sort((a, b) => a.dist - b.dist)[0];
+        .sort((a: { dist: number }, b: { dist: number }) => a.dist - b.dist)[0];
 
       if (!nearest || nearest.dist > 80) {
         unanchoredBlocks.push(block);
@@ -345,10 +360,10 @@ export default function FreeformCanvasPage() {
     const occupiedRects: Array<{ x: number; y: number; w: number; h: number }> = [];
     const mergedLabelBlocks: TextBlock[] = [];
 
-    for (const stroke of polishedLoops.sort((a, b) => a.timestamp - b.timestamp)) {
+    for (const stroke of polishedLoops.sort((a: CanvasStroke, b: CanvasStroke) => a.timestamp - b.timestamp)) {
       const blocks = (anchoredByStroke.get(stroke.id) || [])
-        .filter((b) => (b.text || '').trim())
-        .sort((a, b) => a.timestamp - b.timestamp);
+        .filter((b: TextBlock) => (b.text || '').trim())
+        .sort((a: TextBlock, b: TextBlock) => a.timestamp - b.timestamp);
       if (!blocks.length) continue;
 
       const combinedText = blocks.map((b) => b.text.trim()).filter(Boolean).join('  •  ');
@@ -393,6 +408,7 @@ export default function FreeformCanvasPage() {
     useFreeformCanvasStore.getState().loadState({
       strokes: polishedStrokes,
       textBlocks: polishedTextBlocks,
+      drawingBlocks: current.drawingBlocks,
       phases: current.phases,
       viewX: current.viewX,
       viewY: current.viewY,
@@ -400,6 +416,17 @@ export default function FreeformCanvasPage() {
     });
     setDirtyTick(Date.now());
   }
+
+  const [showIpadHint, setShowIpadHint] = useState(false);
+  useEffect(() => {
+    if (!isIPadLike) return;
+    try {
+      if (localStorage.getItem('freeform-ipad-hint-dismissed') === '1') return;
+      setShowIpadHint(true);
+    } catch {
+      // ignore localStorage
+    }
+  }, [isIPadLike]);
 
   return (
     <div
@@ -411,11 +438,56 @@ export default function FreeformCanvasPage() {
         overflow: 'hidden',
       }}
     >
+      {showIpadHint && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 60,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '10px 16px',
+            borderRadius: 12,
+            background: 'color-mix(in srgb, var(--panel) 95%, black)',
+            border: '1px solid var(--border)',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+            fontSize: 13,
+            color: 'var(--ink)',
+          }}
+        >
+          <span>Use Pencil to draw; finger to pan.</span>
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                localStorage.setItem('freeform-ipad-hint-dismissed', '1');
+              } catch {
+                // ignore
+              }
+              setShowIpadHint(false);
+            }}
+            style={{
+              padding: '4px 8px',
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--muted)',
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <InfiniteCanvas
         activeTool={activeTool}
         activeColor={color}
         brushSize={brushSize}
         onDirtyChange={setDirtyTick}
+        onDrawingBlockCreated={() => setActiveTool('pen')}
       />
 
       <CanvasToolbar

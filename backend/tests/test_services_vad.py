@@ -1,4 +1,7 @@
+import pytest
 import numpy as np
+
+pytestmark = pytest.mark.unit
 
 from services_vad import EnergySpeechDetector, VadConfig, VadUtteranceSegmenter
 

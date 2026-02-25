@@ -60,8 +60,10 @@ function graphFiltersReducer(state: GraphFiltersState, action: GraphFiltersActio
       return { ...state, sourceLayer: action.payload };
     case 'RESET_FILTERS':
       return initialState;
-    default:
+    default: {
+      const _: never = action;
       return state;
+    }
   }
 }
 

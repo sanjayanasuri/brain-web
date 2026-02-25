@@ -12,10 +12,10 @@ from neo4j import Session
 from db_neo4j import get_neo4j_session
 from auth import require_auth
 from models import (
-    Task,
-    TaskCreate,
-    TaskUpdate,
-    TaskListResponse,
+    TodoTask,
+    TodoTaskCreate,
+    TodoTaskUpdate,
+    TodoTaskListResponse,
     PlanSuggestion,
     SuggestionsResponse,
     SuggestionGroupedByDay,
@@ -61,9 +61,9 @@ def _ensure_task_schema(session: Session):
         pass
 
 
-def _node_to_task(node) -> Task:
-    """Convert Neo4j node to Task model."""
-    return Task(
+def _node_to_task(node) -> TodoTask:
+    """Convert Neo4j node to TodoTask model."""
+    return TodoTask(
         id=node["id"],
         title=node["title"],
         notes=node.get("notes"),
@@ -99,7 +99,7 @@ def _node_to_suggestion(node, task_title: str) -> PlanSuggestion:
 
 # Task CRUD endpoints
 
-@tasks_router.get("", response_model=TaskListResponse)
+@tasks_router.get("", response_model=TodoTaskListResponse)
 def list_tasks(
     range_days: int = Query(7, alias="range", description="Number of days to look ahead"),
     request: Request = None,
@@ -130,15 +130,15 @@ def list_tasks(
             if record:
                 tasks.append(_node_to_task(record["t"]))
         
-        return TaskListResponse(tasks=tasks, total=len(tasks))
+        return TodoTaskListResponse(tasks=tasks, total=len(tasks))
     except Exception as e:
         logger.error(f"Error listing tasks: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list tasks: {str(e)}")
 
 
-@tasks_router.post("", response_model=Task)
+@tasks_router.post("", response_model=TodoTask)
 def create_task(
-    payload: TaskCreate,
+    payload: TodoTaskCreate,
     request: Request = None,
     auth: dict = Depends(require_auth),
     session: Session = Depends(get_neo4j_session),
@@ -200,10 +200,10 @@ def create_task(
         raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
 
 
-@tasks_router.patch("/{task_id}", response_model=Task)
+@tasks_router.patch("/{task_id}", response_model=TodoTask)
 def update_task(
     task_id: str,
-    payload: TaskUpdate,
+    payload: TodoTaskUpdate,
     request: Request = None,
     auth: dict = Depends(require_auth),
     session: Session = Depends(get_neo4j_session),

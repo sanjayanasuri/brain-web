@@ -1,17 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { fetchRecentSessions, type SessionSummary } from '../../lib/eventsClient';
+import { type SessionSummary } from '../../lib/eventsClient';
 import { getLastSession } from '../../lib/sessionState';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { getChatSessions, getChatSession, setCurrentSessionId, type ChatSession } from '../../lib/chatSessions';
-import { listGraphs, type GraphSummary } from '../../api-client';
+import { type GraphSummary } from '../../api-client';
 import { useOptimizedNavigation, routePrefetchers, quickNav, useNavigationShortcuts, optimizedStorage } from '../../lib/navigationUtils';
 import { useEnhancedNavigation } from '../../lib/navigationHelpers';
 import { clearChatStateIfAvailable, closeMobileSidebarIfAvailable, registerMobileSidebarCloseFunction } from '../../lib/globalNavigationState';
 import { getUserProfile, getUIPreferences, updateUIPreferences as saveUIPreferences } from '../../api/preferences';
+import { useListGraphs, useRecentSessions, useChatSessions } from '../../hooks/useAppQueries';
 
 
 interface SessionDrawerProps {
@@ -24,15 +25,24 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   const pathname = usePathname();
   const { isMobileSidebarOpen, setIsMobileSidebarOpen } = useSidebar();
   const { navigateWithOptimization } = useOptimizedNavigation();
-  const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([]);
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [loading, setLoading] = useState(true);
   const [lastSession, setLastSession] = useState<{ graph_id?: string; concept_id?: string } | null>(null);
   const [isMobile, setIsMobile] = useState(false);
-  const [activeGraphId, setActiveGraphId] = useState<string>('');
-  const [graphs, setGraphs] = useState<GraphSummary[]>([]);
   const [userProfile, setUserProfile] = useState<{ name?: string } | null>(null);
   const [uiPreferences, setUIPreferences] = useState<any>(null);
+
+  const graphsQuery = useListGraphs();
+  const recentSessionsQuery = useRecentSessions(10);
+  const chatSessionsQuery = useChatSessions();
+
+  const loading = graphsQuery.isLoading || recentSessionsQuery.isLoading || chatSessionsQuery.isLoading;
+  const recentSessions = recentSessionsQuery.data ?? [];
+  const graphsData = graphsQuery.data;
+  const activeGraphId = graphsData?.active_graph_id ?? '';
+  const graphs = graphsData?.graphs ?? [];
+  const chatSessions = useMemo(() => {
+    const list = chatSessionsQuery.data ?? getChatSessions();
+    return [...list].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10);
+  }, [chatSessionsQuery.data]);
 
   // Add navigation shortcuts
   useNavigationShortcuts(activeGraphId);
@@ -96,47 +106,19 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   }, []);
 
   useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        const sessions = await fetchRecentSessions(10);
-        setRecentSessions(sessions);
-        const localLastSession = getLastSession();
-        setLastSession(localLastSession);
+    setLastSession(getLastSession());
+  }, []);
 
-        // Load graphs to get active graph
-        const graphsData = await listGraphs();
-        setActiveGraphId(graphsData.active_graph_id || '');
-        setGraphs(graphsData.graphs || []);
-
-        // Load chat sessions
-        const chats = getChatSessions();
-        // Sort by updatedAt descending
-        const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
-        setChatSessions(sortedChats.slice(0, 10));
-
-        // Load user profile
-        try {
-          const profileData = await getUserProfile();
-          setUserProfile(profileData);
-        } catch (e) {
-          console.warn('Failed to load user profile:', e);
-        }
-        // Load UI preferences
-        try {
-          const uiData = await getUIPreferences();
-          setUIPreferences(uiData);
-        } catch (e) {
-          console.warn('Failed to load UI preferences:', e);
-        }
-      } catch (err) {
-        console.warn('Failed to load sessions:', err);
-        setRecentSessions([]);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
+  useEffect(() => {
+    let cancelled = false;
+    Promise.allSettled([getUserProfile(), getUIPreferences()]).then(([profileResult, uiResult]) => {
+      if (cancelled) return;
+      if (profileResult.status === 'fulfilled') setUserProfile(profileResult.value);
+      else console.warn('Failed to load user profile:', profileResult.reason);
+      if (uiResult.status === 'fulfilled') setUIPreferences(uiResult.value);
+      else console.warn('Failed to load UI preferences:', uiResult.reason);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   const handleUpdateUIPreferences = async (newPrefs: any) => {
@@ -266,7 +248,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
   // Get graph name for display
   const getGraphName = (graphId?: string): string => {
     if (!graphId) return '';
-    const graph = graphs.find(g => g.graph_id === graphId);
+    const graph = graphs.find((g: GraphSummary) => g.graph_id === graphId);
     return graph?.name || graphId;
   };
 
@@ -276,7 +258,7 @@ export default function SessionDrawer({ isCollapsed = false, onToggleCollapse }:
     if (!targetGraphId) return null;
 
     // Find all sessions for this graph
-    const graphSessions = recentSessions.filter(s => s.graph_id === targetGraphId);
+    const graphSessions = recentSessions.filter((s: SessionSummary) => s.graph_id === targetGraphId);
     const latestSession = graphSessions[0] || mostRecentGraphSession;
 
     if (!latestSession) return null;

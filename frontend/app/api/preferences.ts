@@ -2,6 +2,7 @@
  * Preferences, Profile and Dashboard related API methods
  */
 
+import { UnauthorizedError } from '../lib/UnauthorizedError';
 import { API_BASE_URL, getApiHeaders } from './base';
 import {
     DashboardData,
@@ -105,6 +106,7 @@ export async function getFocusAreas(): Promise<FocusArea[]> {
     const res = await fetch(`${API_BASE_URL}/preferences/focus-areas`, {
         headers
     });
+    if (res.status === 401) throw new UnauthorizedError();
     if (!res.ok) throw new Error('Failed to load focus areas');
     return res.json();
 }

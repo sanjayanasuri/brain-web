@@ -222,6 +222,7 @@ export default function GraphSideToolbar({
                 onClick={onToggleLegend}
                 icon={<InfoIcon size={18} />}
                 label="View Legend"
+                testId="explorer-side-toolbar-legend"
             />
             <ToolbarButton
                 active={false}
@@ -240,14 +241,16 @@ export default function GraphSideToolbar({
     );
 }
 
-function ToolbarButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
-    return (
-        <button
-            onClick={(e) => {
-                e.stopPropagation();
-                onClick();
-            }}
-            title={label}
+function ToolbarButton({ active, onClick, icon, label, testId }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string; testId?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title={label}
+      data-testid={testId}
             style={{
                 width: '44px',
                 height: '44px',

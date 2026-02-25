@@ -11,9 +11,9 @@ lane="${4:-}"
 text="$(printf '%s\n%s\n%s\n%s\n' "$title" "$description" "$scope" "$lane" | tr '[:upper:]' '[:lower:]')"
 
 # Configurable commands
-cursor_cmd="${CURSOR_AGENT_CMD:-cursor}"
+cursor_cmd="${CURSOR_AGENT_CMD:-}"
 codex_cmd="${CODEX_AGENT_CMD:-codex exec --full-auto}"
-claude_cmd="${CLAUDE_AGENT_CMD:-claude -p}"
+claude_cmd="${CLAUDE_AGENT_CMD:-claude --dangerously-skip-permissions}"
 
 is_ui=false
 if echo "$text" | grep -E '(frontend|ui|ux|component|page|layout|css|style|visual|demo|screenshot|browser-extension)' >/dev/null 2>&1; then
@@ -28,7 +28,8 @@ command -v cursor >/dev/null 2>&1 && has_cursor=true
 command -v claude >/dev/null 2>&1 && has_claude=true
 
 if [[ "$is_ui" == "true" ]]; then
-  if [[ "$has_cursor" == "true" ]]; then
+  # Only use Cursor if user provided an explicit executable agent command.
+  if [[ -n "$cursor_cmd" ]] && command -v "${cursor_cmd%% *}" >/dev/null 2>&1; then
     echo "$cursor_cmd"
     exit 0
   fi

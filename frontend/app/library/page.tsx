@@ -25,13 +25,13 @@ export default function LibraryPage() {
             const sortedChats = [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
             setSessions(sortedChats);
 
-            // 2. Load Graph Stats
+            // 2. Load graph list then overview + snapshots in parallel
             const graphsData = await listGraphs();
             const activeGraphId = graphsData.active_graph_id || 'default';
-            const overview = await getGraphOverview(activeGraphId, 1, 1); // Small fetch just for meta
-
-            // 3. Load Snapshots
-            const snapshotsData = await listSnapshots(5);
+            const [overview, snapshotsData] = await Promise.all([
+              getGraphOverview(activeGraphId, 1, 1),
+              listSnapshots(5),
+            ]);
             setSnapshots(snapshotsData.snapshots);
 
             setStats({

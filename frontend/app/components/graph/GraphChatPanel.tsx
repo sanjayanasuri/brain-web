@@ -11,7 +11,8 @@ import TaskCard from '../study/TaskCard';
 import AttemptInput from '../study/AttemptInput';
 import Feedback from '../study/Feedback';
 import Citations from '../study/Citations';
-import { startStudySession, getNextTask } from '../../api-client-study';
+import { startStudySession, getNextTask, submitAttempt } from '../../api-client-study';
+import { createConcept, createRelationshipByIds } from '../../api-client';
 import { submitFeedback } from '../../api/feedback';
 import StyleFeedbackForm from '../ui/StyleFeedbackForm';
 import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../../lib/ipadScribble';
@@ -182,7 +183,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
     }
 
     return (
-        <div className="responsive-panel" style={{
+        <div className="responsive-panel chat-panel" data-testid="explorer-chat-panel" style={{
             maxWidth: isTutorMode ? '980px' : (state.isChatExpanded ? '700px' : '380px'),
             background: 'var(--panel)',
             borderRadius: '20px',
@@ -472,17 +473,14 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                                             msg.extractedGraphData._saving = true; // Simple local lock
 
                                                             try {
-                                                                const api = await import('../../api-client');
                                                                 const nodes = msg.extractedGraphData.nodes || [];
                                                                 const edges = msg.extractedGraphData.edges || [];
 
-                                                                // Optimistic UI update
                                                                 const btn = document.getElementById(`save-btn-${msg.id}`);
                                                                 if (btn) btn.innerText = "Saving...";
 
-                                                                // Persist Nodes
                                                                 const nodePromises = nodes.map((n: any) =>
-                                                                    api.createConcept({
+                                                                    createConcept({
                                                                         name: n.label || n.name || n.id,
                                                                         domain: 'generated',
                                                                         type: 'concept',
@@ -490,13 +488,10 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                                                         graph_id: activeGraphId
                                                                     })
                                                                 );
-
-                                                                // Persist Edges (after nodes to ensure existence, though backend might handle it)
-                                                                // Better to map promises.
                                                                 await Promise.all(nodePromises);
 
                                                                 const edgePromises = edges.map((e: any) =>
-                                                                    api.createRelationshipByIds(
+                                                                    createRelationshipByIds(
                                                                         e.from || e.source,
                                                                         e.to || e.target,
                                                                         e.label || 'related_to'
@@ -511,10 +506,6 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                                                     btn.style.borderColor = "#10b981";
                                                                     btn.style.color = "#166534";
                                                                 }
-
-                                                                // Trigger a reload? 
-                                                                // We need to notify the graph to remove "new" status or just refresh.
-                                                                // For now, simple persistence is the goal.
                                                             } catch (err) {
                                                                 console.error("Failed to save graph:", err);
                                                                 const btn = document.getElementById(`save-btn-${msg.id}`);
@@ -701,6 +692,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                         <form onSubmit={handleSubmit} style={{ position: 'relative' }}>
                             <textarea
                                 ref={inputRef}
+                                data-testid="explorer-chat-input"
                                 placeholder={isIPadLike ? 'Handwrite a question about the graph…' : 'Ask about the graph...'}
                                 onPointerDown={focusOnPenPointerDown}
                                 enterKeyHint="send"
@@ -851,8 +843,7 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                             onSubmit={async (responseText) => {
                                                 try {
                                                     setStudyLoading(true);
-                                                    const { submitAttempt: apiSubmitAttempt } = await import('../../api-client-study');
-                                                    const result = await apiSubmitAttempt(currentTask.task_id, responseText);
+                                                    const result = await submitAttempt(currentTask.task_id, responseText);
                                                     setLastEvaluation(result.evaluation);
                                                 } catch (err) {
                                                     console.error('Failed to submit attempt:', err);

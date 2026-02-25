@@ -1,0 +1,11 @@
+{
+  // Copy the relevant parts into ~/.openclaw/openclaw.json
+  // and set workspace to your brain-web repo path (absolute).
+  "agents": {
+    "defaults": {
+      "workspace": "/ABSOLUTE/PATH/TO/brain-web"
+    }
+  }
+  // Optional: skip seeding SOUL.md / USER.md etc. if you manage them yourself:
+  // "agent": { "skipBootstrap": true }
+}

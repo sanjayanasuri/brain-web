@@ -13,6 +13,7 @@ import uuid
 from neo4j import Session
 
 from models import Task, TaskType, TaskStatus
+from utils.timestamp import utcnow_ms, utcnow_iso
 from services_signals import get_task
 from services_branch_explorer import get_active_graph_context, set_active_branch, set_active_graph
 from services_graphrag import retrieve_graphrag_context
@@ -136,7 +137,7 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
         return task
     
     # Update status to RUNNING
-    started_at = int(datetime.utcnow().timestamp() * 1000)
+    started_at = utcnow_ms()
     update_query = """
     MATCH (t:Task {task_id: $task_id})
     SET t.status = $status,
@@ -167,7 +168,7 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
             error = f"Unknown task type: {task.task_type}"
         
         # Update task with result
-        completed_at = int(datetime.utcnow().timestamp() * 1000)
+        completed_at = utcnow_ms()
         import json
         result_json = json.dumps(result) if result else None
         
@@ -194,7 +195,7 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
         if task.task_type in [TaskType.EXTRACT_CONCEPTS, TaskType.GENERATE_ANSWERS]:
             try:
                 event_id = str(uuid.uuid4())
-                now = datetime.utcnow().isoformat() + "Z"
+                now = utcnow_iso()
                 title = task.params.get("title") or task.params.get("question") or "Background Task"
                 
                 session.run(
@@ -222,7 +223,7 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
     except Exception as e:
         logger.error(f"Task {task_id} failed: {e}", exc_info=True)
         # Update task with error
-        completed_at = int(datetime.utcnow().timestamp() * 1000)
+        completed_at = utcnow_ms()
         update_error_query = """
         MATCH (t:Task {task_id: $task_id})
         SET t.status = $status,

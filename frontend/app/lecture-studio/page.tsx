@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -19,7 +20,8 @@ import {
 } from '../api-client';
 import { optimizedStorage } from '../lib/navigationUtils';
 import { focusOnPenPointerDown, getScribbleInputStyle, scribbleInputProps, useIPadLikeDevice } from '../lib/ipadScribble';
-import PDFViewer from '../components/pdf/PDFViewer';
+
+const PDFViewer = dynamic(() => import('../components/pdf/PDFViewer'), { ssr: false });
 
 export default function LectureStudioPage() {
   return (

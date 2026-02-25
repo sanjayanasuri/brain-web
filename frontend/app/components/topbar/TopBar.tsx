@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { signOut } from 'next-auth/react';
 import { listGraphs, listWorkspaceTemplates, selectGraph, createGraph, searchConcepts, searchResources, getConcept, createConcept, deleteConcept, createRelationshipByIds, updateGraphRefreshDefaults, type CreateGraphOptions, type GraphSummary, type Concept, type Resource, type RefreshBindingConfig, type WorkspaceTemplate } from '../../api-client';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { useTheme } from '../context-providers/ThemeProvider';
@@ -1533,8 +1534,10 @@ export default function TopBar() {
   const [scopePickerSearchQuery, setScopePickerSearchQuery] = useState('');
   const graphSwitcherRef = useRef<HTMLDivElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const createGraphDeepLinkHandledRef = useRef<string | null>(null);
   const [isNewNoteModalOpen, setNewNoteModalOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
 
   // Load graphs on mount
@@ -2600,6 +2603,9 @@ export default function TopBar() {
       if (newMenuRef.current && !newMenuRef.current.contains(event.target as Node)) {
         setNewMenuOpen(false);
       }
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
       if (scopeMenuRef.current && !scopeMenuRef.current.contains(event.target as Node)) {
         setScopeMenuOpen(false);
         setScopePickerOpen(false);
@@ -3409,24 +3415,89 @@ export default function TopBar() {
             )}
           </button >
 
-          {/* Profile icon (simple placeholder) */}
-          < div
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '50%',
-              backgroundColor: 'var(--border)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              fontSize: '16px',
-              color: 'var(--muted)',
-            }}
-            onClick={() => router.push('/profile-customization')}
-          >
-            👤
-          </div >
+          {/* Profile icon with dropdown */}
+          <div ref={profileMenuRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              aria-expanded={profileMenuOpen}
+              aria-haspopup="true"
+              aria-label="User menu"
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--border)',
+                border: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                fontSize: '16px',
+                color: 'var(--muted)',
+              }}
+              onClick={() => setProfileMenuOpen((prev) => !prev)}
+            >
+              👤
+            </button>
+            {profileMenuOpen && (
+              <div
+                role="menu"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  right: 0,
+                  backgroundColor: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '12px',
+                  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.1)',
+                  minWidth: '180px',
+                  zIndex: 1001,
+                  padding: '6px',
+                }}
+              >
+                <div
+                  role="menuitem"
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    router.push('/profile-customization');
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>⚙️</span> Settings
+                </div>
+                <div
+                  role="menuitem"
+                  onClick={() => {
+                    setProfileMenuOpen(false);
+                    signOut({ callbackUrl: '/' });
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 500,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                  }}
+                  className="menu-item-hover"
+                >
+                  <span style={{ fontSize: '16px' }}>🚪</span> Sign out
+                </div>
+              </div>
+            )}
+          </div>
         </div >
       </div >
       {createGraphOpen && (

@@ -159,12 +159,20 @@ function getStructuredNewsHeadlines(resource: Resource): Array<Record<string, an
   return Array.isArray(headlines) ? headlines.filter((item) => item && typeof item === 'object') : [];
 }
 
-function getStructuredEvidenceKind(resource: Resource): 'metric' | 'news' | null {
+function getStructuredEvidenceKind(resource: Resource): 'metric' | 'news' | 'learning_answer' | null {
   const meta = resource.metadata;
   if (resource.kind === 'metric_snapshot') return 'metric';
   if (meta && typeof meta === 'object') {
     if (meta.type === 'live_metric_snapshot' || meta.check_kind === 'live_metric') return 'metric';
     if (meta.check_kind === 'exa_news' || resource.source === 'exa_news' || Array.isArray(meta.headlines)) return 'news';
+    const answerResult = meta.answer_result as Record<string, unknown> | undefined;
+    if ((resource.source === 'exa_answer' || meta.check_kind === 'exa_answer') && answerResult && typeof answerResult === 'object') {
+      const kp = answerResult.key_points;
+      const pr = answerResult.prerequisites;
+      const ex = answerResult.examples;
+      const hasStructured = (Array.isArray(kp) && kp.length > 0) || (Array.isArray(pr) && pr.length > 0) || (Array.isArray(ex) && ex.length > 0);
+      if (hasStructured) return 'learning_answer';
+    }
   }
   return null;
 }
@@ -345,6 +353,60 @@ function MetricEvidenceCard({ resource, isExpanded }: { resource: Resource; isEx
   );
 }
 
+function getLearningAnswerPayload(resource: Resource): { summary?: string; key_points?: string[]; prerequisites?: string[]; examples?: string[] } | null {
+  const meta = resource.metadata;
+  if (!meta || typeof meta !== 'object') return null;
+  const ar = (meta as Record<string, unknown>).answer_result as Record<string, unknown> | undefined;
+  if (!ar || typeof ar !== 'object') return null;
+  return {
+    summary: typeof ar.answer === 'string' ? ar.answer : typeof ar.summary === 'string' ? ar.summary : undefined,
+    key_points: Array.isArray(ar.key_points) ? ar.key_points.filter((x): x is string => typeof x === 'string') : undefined,
+    prerequisites: Array.isArray(ar.prerequisites) ? ar.prerequisites.filter((x): x is string => typeof x === 'string') : undefined,
+    examples: Array.isArray(ar.examples) ? ar.examples.filter((x): x is string => typeof x === 'string') : undefined,
+  };
+}
+
+function LearningAnswerEvidenceCard({ resource, isExpanded }: { resource: Resource; isExpanded: boolean }) {
+  const payload = getLearningAnswerPayload(resource);
+  if (!payload) return null;
+  const { summary, key_points, prerequisites, examples } = payload;
+  const hasList = (key_points?.length ?? 0) + (prerequisites?.length ?? 0) + (examples?.length ?? 0) > 0;
+  return (
+    <div style={{ border: '1px solid rgba(99,102,241,0.2)', borderRadius: '8px', background: 'rgba(99,102,241,0.04)', padding: '10px', marginBottom: '8px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>Learning summary</div>
+      {summary && (
+        <p style={{ marginTop: '6px', fontSize: '13px', lineHeight: 1.5, color: 'var(--ink)' }}>
+          {isExpanded || !hasList ? summary : summary.length > 200 ? `${summary.slice(0, 200)}...` : summary}
+        </p>
+      )}
+      {isExpanded && key_points && key_points.length > 0 && (
+        <div style={{ marginTop: '8px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>Key points</div>
+          <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5 }}>
+            {key_points.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+      )}
+      {isExpanded && prerequisites && prerequisites.length > 0 && (
+        <div style={{ marginTop: '8px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>Prerequisites</div>
+          <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5 }}>
+            {prerequisites.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+      )}
+      {isExpanded && examples && examples.length > 0 && (
+        <div style={{ marginTop: '8px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--muted)', marginBottom: '4px' }}>Examples</div>
+          <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5 }}>
+            {examples.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewsEvidenceCard({ resource, isExpanded }: { resource: Resource; isExpanded: boolean }) {
   const headlines = getStructuredNewsHeadlines(resource);
   const visible = isExpanded ? headlines : headlines.slice(0, 4);
@@ -420,6 +482,7 @@ function StructuredEvidenceCardBody({ resource, isExpanded }: { resource: Resour
   const kind = getStructuredEvidenceKind(resource);
   if (kind === 'metric') return <MetricEvidenceCard resource={resource} isExpanded={isExpanded} />;
   if (kind === 'news') return <NewsEvidenceCard resource={resource} isExpanded={isExpanded} />;
+  if (kind === 'learning_answer') return <LearningAnswerEvidenceCard resource={resource} isExpanded={isExpanded} />;
   return null;
 }
 
@@ -1802,7 +1865,7 @@ export default function ContextPanel({
   // Empty state
   if (!selectedNode) {
     return (
-      <div className="context-panel" style={{
+      <div className="context-panel" data-testid="explorer-concept-panel" style={{
         width: '100%',
         maxWidth: '400px',
         borderLeft: '1px solid var(--border)',
@@ -1871,7 +1934,7 @@ export default function ContextPanel({
   const domainColor = domainColors.get(selectedNode.domain) || 'var(--ink)';
 
   return (
-    <div className="context-panel" style={{
+    <div className="context-panel" data-testid="explorer-concept-panel" style={{
       width: '100%',
       borderLeft: '1px solid var(--border)',
       background: 'var(--background)',
@@ -3489,6 +3552,11 @@ export default function ContextPanel({
                           {structuredCardKind === 'news' && (
                             <span className="badge badge--soft" style={{ fontSize: '11px', background: 'rgba(245,158,11,0.08)', color: '#b45309', borderColor: 'rgba(245,158,11,0.14)' }}>
                               news feed
+                            </span>
+                          )}
+                          {structuredCardKind === 'learning_answer' && (
+                            <span className="badge badge--soft" style={{ fontSize: '11px', background: 'rgba(99,102,241,0.1)', color: '#4f46e5', borderColor: 'rgba(99,102,241,0.2)' }}>
+                              learning
                             </span>
                           )}
                         </div>

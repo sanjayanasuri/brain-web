@@ -1,1 +1,3 @@
-# Utils package
+"""
+Utility modules for backend services.
+"""

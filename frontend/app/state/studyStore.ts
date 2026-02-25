@@ -5,6 +5,8 @@
  */
 
 import { create } from 'zustand';
+import type { StoreApi } from 'zustand/vanilla';
+import type { UseBoundStore } from 'zustand/react';
 
 import { AnchorRef } from '../types/unified';
 
@@ -113,7 +115,8 @@ export interface StudySession {
     started_at: string;
 }
 
-export const useStudyStore = create<StudyState>((set) => ({
+export const useStudyStore = create(
+  (set: StoreApi<StudyState>['setState']) => ({
     // Phase 1 Initial state
     contextPack: null,
     clarifyResponse: null,
@@ -129,15 +132,15 @@ export const useStudyStore = create<StudyState>((set) => ({
     modeState: null,
 
     // Phase 1 Actions
-    setContextPack: (pack) => set({ contextPack: pack }),
+    setContextPack: (pack: ContextPack | null) => set({ contextPack: pack }),
 
-    setClarifyResponse: (response) => set({
+    setClarifyResponse: (response: ClarifyResponse | null) => set({
         clarifyResponse: response,
         contextPack: response?.context_pack || null,
         isStudyPanelOpen: true,
     }),
 
-    toggleStudyPanel: () => set((state) => ({
+    toggleStudyPanel: () => set((state: StudyState) => ({
         isStudyPanelOpen: !state.isStudyPanelOpen
     })),
 
@@ -145,7 +148,7 @@ export const useStudyStore = create<StudyState>((set) => ({
 
     closeStudyPanel: () => set({ isStudyPanelOpen: false }),
 
-    setLoading: (loading) => set({ isLoading: loading }),
+    setLoading: (loading: boolean) => set({ isLoading: loading }),
 
     clearContext: () => set({
         contextPack: null,
@@ -155,9 +158,9 @@ export const useStudyStore = create<StudyState>((set) => ({
     }),
 
     // Phase 2 Actions
-    setSession: (session) => set({ session }),
+    setSession: (session: StudySession | null) => set({ session }),
 
-    setCurrentTask: (task) => set((state) => {
+    setCurrentTask: (task: TaskSpec | null) => set((state: StudyState) => {
         if (!task) return { currentTask: null };
 
         const newInteraction: Interaction = {
@@ -175,15 +178,15 @@ export const useStudyStore = create<StudyState>((set) => ({
         };
     }),
 
-    addToTaskHistory: (task) => set((state) => ({
+    addToTaskHistory: (task: { taskId: string; taskType: string; compositeScore?: number; createdAt: string }) => set((state: StudyState) => ({
         taskHistory: [task, ...state.taskHistory].slice(0, 10), // Keep last 10
     })),
 
-    addInteraction: (interaction) => set((state) => ({
+    addInteraction: (interaction: Interaction) => set((state: StudyState) => ({
         interactionHistory: [...state.interactionHistory, interaction]
     })),
 
-    updateLastInteraction: (update) => set((state) => {
+    updateLastInteraction: (update: Partial<Interaction>) => set((state: StudyState) => {
         if (state.interactionHistory.length === 0) return state;
         const newHistory = [...state.interactionHistory];
         newHistory[newHistory.length - 1] = {
@@ -193,9 +196,9 @@ export const useStudyStore = create<StudyState>((set) => ({
         return { interactionHistory: newHistory };
     }),
 
-    setLastEvaluation: (evaluation) => set({ lastEvaluation: evaluation }),
+    setLastEvaluation: (evaluation: EvaluationResult | null) => set({ lastEvaluation: evaluation }),
 
-    setModeState: (state) => set({ modeState: state }),
+    setModeState: (state: StudyState['modeState']) => set({ modeState: state }),
 
     clearSession: () => set({
         session: null,
@@ -206,4 +209,5 @@ export const useStudyStore = create<StudyState>((set) => ({
         modeState: null,
         isStudyPanelOpen: false,
     }),
-}));
+  })
+) as unknown as UseBoundStore<StoreApi<StudyState>>;

@@ -1,0 +1,9 @@
+{
+  "name": "lighthouse-regression",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "lighthouse": "^11.4.0",
+    "puppeteer": "^23.0.0"
+  }
+}

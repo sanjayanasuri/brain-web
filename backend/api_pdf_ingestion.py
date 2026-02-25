@@ -39,28 +39,24 @@ logger = logging.getLogger("brain_web")
 
 router = APIRouter(prefix="/pdf", tags=["pdf"])
 
-# Simple in-memory rate limiter (per user_id)
+# Simple in-memory rate limiter (per tenant:user for fairness across tenants)
 # In production, use Redis for distributed rate limiting
 _rate_limit_store: Dict[str, list] = defaultdict(list)
 _rate_limit_lock = threading.Lock()
 
 
-def _check_rate_limit(user_id: str) -> bool:
-    """Check if user has exceeded rate limit."""
+def _check_rate_limit(*, tenant_id: str, user_id: str) -> bool:
+    """Check if (tenant, user) has exceeded rate limit."""
+    key = f"{tenant_id}:{user_id}"
     with _rate_limit_lock:
         now = time.time()
-        # Clean old entries (older than 1 minute)
-        _rate_limit_store[user_id] = [
-            timestamp for timestamp in _rate_limit_store[user_id]
-            if now - timestamp < 60
+        _rate_limit_store[key] = [
+            ts for ts in _rate_limit_store[key]
+            if now - ts < 60
         ]
-        
-        # Check limit
-        if len(_rate_limit_store[user_id]) >= PDF_RATE_LIMIT_PER_MINUTE:
+        if len(_rate_limit_store[key]) >= PDF_RATE_LIMIT_PER_MINUTE:
             return False
-        
-        # Record this request
-        _rate_limit_store[user_id].append(now)
+        _rate_limit_store[key].append(now)
         return True
 
 
@@ -145,23 +141,24 @@ async def ingest_pdf_stream(
     - Resource cleanup
     """
     user_id = auth.get("user_id", "anonymous")
+    tenant_id = str(auth.get("tenant_id") or "").strip() or "default"
     ingestion_thread: Optional[threading.Thread] = None
     thread_session: Optional[Session] = None
-    
+
     # Read file content before generator (since generator can't use await)
     file_content = await file.read()
     file_size = len(file_content)
     _validate_file_size(file_size)
-    
+
     def generate():
         nonlocal ingestion_thread, thread_session
         try:
             logger.info(f"PDF ingestion stream generator started for user {user_id}, file: {file.filename}")
             # Send initial connection event immediately to establish stream
             yield f"data: {json.dumps({'type': 'progress', 'stage': 'initializing', 'message': 'Starting PDF ingestion...', 'progress': 1})}\n\n"
-            
-            # Rate limiting
-            if not _check_rate_limit(user_id):
+
+            # Rate limiting (tenant-scoped so one tenant cannot starve others)
+            if not _check_rate_limit(tenant_id=tenant_id, user_id=user_id):
                 logger.warning(f"Rate limit exceeded for user {user_id}")
                 yield f"data: {json.dumps({'type': 'error', 'message': f'Rate limit exceeded. Maximum {PDF_RATE_LIMIT_PER_MINUTE} PDFs per minute.'})}\n\n"
                 return
@@ -473,14 +470,15 @@ async def ingest_pdf(
         PDFIngestResponse with ingestion results and statistics
     """
     user_id = auth.get("user_id", "anonymous")
-    
-    # Rate limiting
-    if not _check_rate_limit(user_id):
+    tenant_id = str(auth.get("tenant_id") or "").strip() or "default"
+
+    # Rate limiting (tenant-scoped so one tenant cannot starve others)
+    if not _check_rate_limit(tenant_id=tenant_id, user_id=user_id):
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Maximum {PDF_RATE_LIMIT_PER_MINUTE} PDFs per minute."
         )
-    
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     

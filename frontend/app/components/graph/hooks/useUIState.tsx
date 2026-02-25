@@ -138,8 +138,10 @@ function uiReducer(state: UIState, action: UIAction): UIState {
       return { ...state, nodePanelTab: action.payload };
     case 'SET_ACTIVE_DOMAIN_PLUGINS':
       return { ...state, activeDomainPlugins: action.payload };
-    default:
+    default: {
+      const _: never = action;
       return state;
+    }
   }
 }
 

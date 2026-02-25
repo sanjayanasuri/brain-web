@@ -97,7 +97,7 @@ export default function ExplorerToolbar(props: Props & {
   const INK_COLORS = ['#2980b9', '#c0392b', '#27ae60', '#1c1c1e'];
 
   return (
-    <div className="explorer-toolbar" style={{
+    <div className="explorer-toolbar" data-testid="explorer-toolbar" style={{
       display: 'flex',
       flexDirection: 'row', // Horizontal
       alignItems: 'center',
@@ -107,20 +107,23 @@ export default function ExplorerToolbar(props: Props & {
       // Remove maxWidth constraint to allow stretching? It has width 100% already.
     }}>
       {/* Search Bar Group */}
-      <div style={{ flexShrink: 0, width: '300px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+      <div data-testid="explorer-toolbar-search" style={{ flexShrink: 0, width: '300px', display: 'flex', gap: '8px', alignItems: 'center' }}>
         <SearchBox
           activeGraphId={activeGraphId}
           graphs={graphs}
           placeholder="Search..."
           style={{ width: '100%' }}
+          dataTestId="explorer-toolbar-search-input"
         />
 
         {canFocus && onFocus && (
           <button
+            type="button"
             onClick={onFocus}
             className="pill"
             title="Center on selection"
             style={{ padding: '6px 12px', height: '36px' }}
+            data-testid="explorer-toolbar-focus"
           >
             Focus
           </button>
@@ -130,13 +133,14 @@ export default function ExplorerToolbar(props: Props & {
       <div style={{ width: '1px', height: '24px', background: 'var(--border)', margin: '0 4px' }} />
 
       {/* Tools Group (Right Side) */}
-      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+      <div data-testid="explorer-toolbar-tools" style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
         <div style={{ position: 'relative' }}>
           <GraphToolButton
             active={showContentIngest}
             onClick={onToggleContentIngest}
             icon={<ImagePlus size={22} />}
             label="Import"
+            testId="explorer-toolbar-import"
           />
           {showContentIngest && contentIngestPopover ? (
             <div style={{
@@ -157,12 +161,14 @@ export default function ExplorerToolbar(props: Props & {
           onClick={() => onModeChange('select')}
           icon={<MousePointer2 size={22} />}
           label="Select"
+          testId="explorer-toolbar-select"
         />
         <GraphToolButton
           active={mode === 'lasso'}
           onClick={() => onModeChange(mode === 'lasso' ? 'select' : 'lasso')}
           icon={<Lasso size={22} />}
           label="Lasso by drawing"
+          testId="explorer-toolbar-lasso"
         />
 
         <div style={{ position: 'relative' }}>
@@ -171,6 +177,7 @@ export default function ExplorerToolbar(props: Props & {
             onClick={() => onModeChange(mode === 'handwriting' ? 'select' : 'handwriting')}
             icon={<Pencil size={22} />}
             label="Sketch"
+            testId="explorer-toolbar-sketch"
           />
           {mode === 'handwriting' && (
             <div style={{
@@ -213,6 +220,7 @@ export default function ExplorerToolbar(props: Props & {
           onClick={onAddNode}
           icon={<PlusCircle size={22} />}
           label="Add Node"
+          testId="explorer-toolbar-add-node"
         />
 
         <GraphToolButton
@@ -220,6 +228,7 @@ export default function ExplorerToolbar(props: Props & {
           onClick={onResetView}
           icon={<Maximize2 size={22} />}
           label="Fit to View"
+          testId="explorer-toolbar-fit-to-view"
         />
       </div>
 
@@ -240,14 +249,16 @@ export default function ExplorerToolbar(props: Props & {
   );
 }
 
-function GraphToolButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
+function GraphToolButton({ active, onClick, icon, label, testId }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string; testId?: string }) {
   return (
     <button
+      type="button"
       onClick={(e) => {
         e.stopPropagation();
         onClick();
       }}
       title={label}
+      data-testid={testId}
       style={{
         width: '42px', // Enlarge button
         height: '42px', // Enlarge button

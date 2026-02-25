@@ -3,6 +3,8 @@
  * Tracks user's last session, recent views, pinned items, and activity
  */
 
+import { logEvent } from './eventsClient';
+
 export interface LastSession {
   graph_id?: string;
   graph_name?: string;
@@ -125,16 +127,16 @@ export function togglePinConcept(concept: { id: string; name: string }, graphId?
       localStorage.setItem(STORAGE_KEYS.PINNED_CONCEPTS, JSON.stringify(updated));
       
       // Log pin event (only when pinning, not unpinning)
-      import('./eventsClient').then(({ logEvent }) => {
+      try {
         logEvent({
           type: 'PINNED',
           concept_id: concept.id,
           graph_id: graphId,
           payload: { targetType: 'CONCEPT', targetId: concept.id },
         });
-      }).catch(() => {
-        // Ignore import errors
-      });
+      } catch {
+        // Ignore logging errors
+      }
     }
   } catch {
     // Ignore localStorage errors
@@ -236,7 +238,7 @@ export interface ExplorationSignal {
 }
 
 /**
- * Track a concept view event
+ * Track a concept view event (local + backend for activity/OTEL)
  */
 export function trackConceptViewed(conceptId: string, conceptName: string): void {
   trackEvent(EXPLORATION_EVENT_TYPES.CONCEPT_VIEWED, {
@@ -244,6 +246,12 @@ export function trackConceptViewed(conceptId: string, conceptName: string): void
     concept_name: conceptName,
   });
   pushRecentConceptView({ id: conceptId, name: conceptName });
+  logEvent({
+    type: 'CONCEPT_VIEWED',
+    concept_id: conceptId,
+    graph_id: getLastSession()?.graph_id,
+    payload: { concept_name: conceptName },
+  }).catch(() => {});
 }
 
 /**

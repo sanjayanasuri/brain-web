@@ -9,19 +9,24 @@ export async function emitChatMessageCreated(
     answer: string;
     answer_summary?: string;
     message_id?: string;
-  }
+  },
+  options?: { trace_id?: string; correlation_id?: string }
 ): Promise<{ event_id: string } | null> {
+  const body: Record<string, unknown> = {
+    event_type: 'ChatMessageCreated',
+    payload,
+    idempotency_key: `chat-msg-${sessionId}-${Date.now()}`,
+  };
+  if (options?.trace_id) body.trace_id = options.trace_id;
+  if (options?.correlation_id) body.correlation_id = options.correlation_id;
+
   const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/events`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(await getAuthHeaders()),
     },
-    body: JSON.stringify({
-      event_type: 'ChatMessageCreated',
-      payload,
-      idempotency_key: `chat-msg-${sessionId}-${Date.now()}`,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {

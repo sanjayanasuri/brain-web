@@ -12,6 +12,7 @@ import {
   type RelationshipReviewItem,
   type RelationshipReviewListResponse,
 } from '../api-client';
+import { logEvent } from '../lib/eventsClient';
 
 type SortField = 'confidence' | 'created_at';
 type SortOrder = 'asc' | 'desc';
@@ -32,10 +33,9 @@ export default function ReviewPage() {
   const [editingRelType, setEditingRelType] = useState<string>('');
 
   useEffect(() => {
-    // Read query params first (faster than API call)
-    const statusParam = searchParams.get('status');
-    const runIdParam = searchParams.get('ingestion_run_id');
-    const graphIdParam = searchParams.get('graph_id');
+    const statusParam = searchParams?.get('status');
+    const runIdParam = searchParams?.get('ingestion_run_id');
+    const graphIdParam = searchParams?.get('graph_id');
     
     if (statusParam && ['PROPOSED', 'ACCEPTED', 'REJECTED'].includes(statusParam)) {
       setStatus(statusParam as 'PROPOSED' | 'ACCEPTED' | 'REJECTED');
@@ -64,6 +64,12 @@ export default function ReviewPage() {
     if (!graphId) return;
     loadRelationships();
   }, [graphId, status, ingestionRunId]);
+
+  useEffect(() => {
+    if (graphId) {
+      logEvent({ type: 'REVIEW_OPENED', graph_id: graphId }).catch(() => {});
+    }
+  }, [graphId]);
 
   async function loadRelationships() {
     try {
@@ -132,9 +138,8 @@ export default function ReviewPage() {
       await acceptRelationships(graphId, edges);
       setSelectedIds(new Set());
       await loadRelationships();
-      // Preserve ingestion_run_id in URL after accept
       if (ingestionRunId) {
-        const params = new URLSearchParams(searchParams.toString());
+        const params = new URLSearchParams(searchParams?.toString() ?? '');
         params.set('ingestion_run_id', ingestionRunId);
         router.push(`/review?${params.toString()}`);
       }
@@ -158,9 +163,8 @@ export default function ReviewPage() {
       await rejectRelationships(graphId, edges);
       setSelectedIds(new Set());
       await loadRelationships();
-      // Preserve ingestion_run_id in URL after reject
       if (ingestionRunId) {
-        const params = new URLSearchParams(searchParams.toString());
+        const params = new URLSearchParams(searchParams?.toString() ?? '');
         params.set('ingestion_run_id', ingestionRunId);
         router.push(`/review?${params.toString()}`);
       }
@@ -180,9 +184,8 @@ export default function ReviewPage() {
         rel_type: rel.rel_type,
       }]);
       await loadRelationships();
-      // Preserve ingestion_run_id in URL after accept
       if (ingestionRunId) {
-        const params = new URLSearchParams(searchParams.toString());
+        const params = new URLSearchParams(searchParams?.toString() ?? '');
         params.set('ingestion_run_id', ingestionRunId);
         router.push(`/review?${params.toString()}`);
       }
@@ -202,9 +205,8 @@ export default function ReviewPage() {
         rel_type: rel.rel_type,
       }]);
       await loadRelationships();
-      // Preserve ingestion_run_id in URL after reject
       if (ingestionRunId) {
-        const params = new URLSearchParams(searchParams.toString());
+        const params = new URLSearchParams(searchParams?.toString() ?? '');
         params.set('ingestion_run_id', ingestionRunId);
         router.push(`/review?${params.toString()}`);
       }
@@ -276,7 +278,7 @@ export default function ReviewPage() {
             <button
               onClick={() => {
                 setIngestionRunId(null);
-                const params = new URLSearchParams(searchParams.toString());
+                const params = new URLSearchParams(searchParams?.toString() ?? '');
                 params.delete('ingestion_run_id');
                 router.push(`/review?${params.toString()}`);
               }}

@@ -99,10 +99,17 @@ for i in $(seq 0 $((count - 1))); do
       rendered="$(mktemp)"
       trap 'rm -f "$rendered"' EXIT
       desc=$(echo "$task" | jq -r '.description // ""')
-      sed -e "s|{{TASK_ID}}|$task_id|g" \
-          -e "s|{{BRANCH_NAME}}|$branch_name|g" \
-          -e "s|{{PREVIOUS_OUTCOME}}|tmux session exited before PR creation|g" \
-          -e "s|{{TASK_DESCRIPTION}}|$desc|g" "$retry_prompt" > "$rendered"
+      python3 - <<PY
+from pathlib import Path
+p=Path("$retry_prompt")
+out=Path("$rendered")
+text=p.read_text()
+text=text.replace("{{TASK_ID}}", """$task_id""")
+text=text.replace("{{BRANCH_NAME}}", """$branch_name""")
+text=text.replace("{{PREVIOUS_OUTCOME}}", "tmux session exited before PR creation")
+text=text.replace("{{TASK_DESCRIPTION}}", """$desc""")
+out.write_text(text)
+PY
       tmux new-session -d -s "$tmux_session" -c "$worktree" "cat '$rendered' | $agent_cmd; exec bash"
       retries=$((retries + 1))
       update_task "$task_id" "{\"retries\": $retries, \"updated_at\": \"$UPDATED_AT\"}"
