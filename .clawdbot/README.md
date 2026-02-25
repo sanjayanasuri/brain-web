@@ -69,6 +69,12 @@ export CLAWDBOT_REQUIRE_UI_SCREENSHOT=true
 ./.clawdbot/scripts/swarm-start.sh
 ```
 
+## Daily digest
+
+```bash
+./.clawdbot/scripts/ops-digest.sh
+```
+
 ## Example cron
 
 ```bash
