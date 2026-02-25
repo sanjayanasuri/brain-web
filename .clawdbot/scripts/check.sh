@@ -53,7 +53,7 @@ for i in $(seq 0 $((count - 1))); do
   screenshot_present=true
 
   if command -v gh >/dev/null 2>&1; then
-    pr_line=$(gh pr list --head "$branch_name" --json number,url --jq '.[0] | "\(.number) \(.url)"' 2>/dev/null || true)
+    pr_line=$(gh pr list --head "$branch_name" --json number,url --jq 'if length > 0 then "\(.[0].number) \(.[0].url)" else "" end' 2>/dev/null || true)
     if [[ -n "$pr_line" ]]; then
       pr_number="${pr_line%% *}"
       pr_url="${pr_line#* }"
@@ -65,11 +65,15 @@ for i in $(seq 0 $((count - 1))); do
         ci_passed=true
       fi
 
-      approval_count=$(gh api graphql -f query='query($owner:String!, $repo:String!, $number:Int!){ repository(owner:$owner, name:$repo){ pullRequest(number:$number){ reviews(states: APPROVED, first:100){ totalCount } } } }' \
-        -F owner="$(gh repo view --json owner --jq '.owner.login')" \
-        -F repo="$(gh repo view --json name --jq '.name')" \
-        -F number="$pr_number" \
-        --jq '.data.repository.pullRequest.reviews.totalCount' 2>/dev/null || echo 0)
+      if [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+        approval_count=$(gh api graphql -f query='query($owner:String!, $repo:String!, $number:Int!){ repository(owner:$owner, name:$repo){ pullRequest(number:$number){ reviews(states: APPROVED, first:100){ totalCount } } } }' \
+          -F owner="$(gh repo view --json owner --jq '.owner.login')" \
+          -F repo="$(gh repo view --json name --jq '.name')" \
+          -F number="$pr_number" \
+          --jq '.data.repository.pullRequest.reviews.totalCount' 2>/dev/null || echo 0)
+      else
+        approval_count=0
+      fi
       [[ "$approval_count" -ge "$MIN_APPROVALS" ]] && approvals_ok=true
 
       pr_body=$(gh pr view "$pr_number" --json body --jq '.body // ""' 2>/dev/null || echo "")
