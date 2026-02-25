@@ -29,14 +29,22 @@ export default function InlineQuizSession({ topic, graphId, onClose }: InlineQui
       const session = await startStudySession(`Quiz me on ${topic}`, undefined, undefined, 'quiz');
       setSessionId(session.session_id);
 
-      const task = await getNextTask(session.session_id, 'quiz');
-      if (task?.prompt) {
-        setQuestion(task.prompt);
-        setTaskId(task.task_id);
+      const initialTask = session.initial_task;
+      if (initialTask?.prompt) {
+        setQuestion(initialTask.prompt);
+        setTaskId(initialTask.task_id);
         setPhase('question');
         setQuestionCount(1);
       } else {
-        setPhase('complete');
+        const task = await getNextTask(session.session_id, 'quiz');
+        if (task?.prompt) {
+          setQuestion(task.prompt);
+          setTaskId(task.task_id);
+          setPhase('question');
+          setQuestionCount(1);
+        } else {
+          setPhase('complete');
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Failed to start quiz');
