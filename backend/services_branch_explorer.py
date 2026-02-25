@@ -173,6 +173,16 @@ def ensure_schema_constraints(session: Session) -> None:
                 except Exception as e:
                     logger.warning(f"Could not create artifact_captured_at_index: {e}")
 
+            # Index on Artifact.artifact_id for fast lookups (used by services_graph.get_artifact)
+            if "artifact_artifact_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX artifact_artifact_id_index IF NOT EXISTS "
+                        "FOR (a:Artifact) ON (a.artifact_id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create artifact_artifact_id_index: {e}")
+
             # Index on Concept.updated_at for sorting
             if "concept_updated_at_index" not in index_names:
                 try:
@@ -192,6 +202,146 @@ def ensure_schema_constraints(session: Session) -> None:
                     ).consume()
                 except Exception as e:
                     logger.warning(f"Could not create concept_created_at_index: {e}")
+
+            # Index on Concept.url_slug for fast slug lookups + uniqueness checks
+            if "concept_url_slug_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX concept_url_slug_index IF NOT EXISTS "
+                        "FOR (c:Concept) ON (c.url_slug)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create concept_url_slug_index: {e}")
+
+            # Index on Source(graph_id, url) for fast MERGE during artifact ingestion.
+            if "source_graph_url_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX source_graph_url_index IF NOT EXISTS "
+                        "FOR (s:Source) ON (s.graph_id, s.url)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create source_graph_url_index: {e}")
+
+            # Index on Meta.key for fast MERGE-based config reads/writes.
+            if "meta_key_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX meta_key_index IF NOT EXISTS "
+                        "FOR (m:Meta) ON (m.key)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create meta_key_index: {e}")
+
+            # Indexes for personalization and long-term memory nodes.
+            if "user_profile_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX user_profile_id_index IF NOT EXISTS "
+                        "FOR (u:UserProfile) ON (u.id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create user_profile_id_index: {e}")
+
+            if "focus_area_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX focus_area_id_index IF NOT EXISTS "
+                        "FOR (f:FocusArea) ON (f.id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create focus_area_id_index: {e}")
+
+            if "answer_record_answer_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX answer_record_answer_id_index IF NOT EXISTS "
+                        "FOR (a:AnswerRecord) ON (a.answer_id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create answer_record_answer_id_index: {e}")
+
+            if "feedback_answer_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX feedback_answer_id_index IF NOT EXISTS "
+                        "FOR (f:Feedback) ON (f.answer_id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create feedback_answer_id_index: {e}")
+
+            if "revision_answer_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX revision_answer_id_index IF NOT EXISTS "
+                        "FOR (r:Revision) ON (r.answer_id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create revision_answer_id_index: {e}")
+
+            if "style_feedback_feedback_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX style_feedback_feedback_id_index IF NOT EXISTS "
+                        "FOR (sf:StyleFeedback) ON (sf.feedback_id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create style_feedback_feedback_id_index: {e}")
+
+            if "conversation_summary_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX conversation_summary_id_index IF NOT EXISTS "
+                        "FOR (cs:ConversationSummary) ON (cs.id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create conversation_summary_id_index: {e}")
+
+            if "conversation_summary_user_tenant_timestamp_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX conversation_summary_user_tenant_timestamp_index IF NOT EXISTS "
+                        "FOR (cs:ConversationSummary) ON (cs.user_id, cs.tenant_id, cs.timestamp)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create conversation_summary_user_tenant_timestamp_index: {e}")
+
+            if "learning_topic_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX learning_topic_id_index IF NOT EXISTS "
+                        "FOR (lt:LearningTopic) ON (lt.id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create learning_topic_id_index: {e}")
+
+            if "learning_topic_last_mentioned_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX learning_topic_last_mentioned_index IF NOT EXISTS "
+                        "FOR (lt:LearningTopic) ON (lt.last_mentioned)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create learning_topic_last_mentioned_index: {e}")
+
+            # Indexes for lecture segments + analogies.
+            if "lecture_segment_segment_id_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX lecture_segment_segment_id_index IF NOT EXISTS "
+                        "FOR (seg:LectureSegment) ON (seg.segment_id)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create lecture_segment_segment_id_index: {e}")
+
+            if "analogy_tenant_label_lower_index" not in index_names:
+                try:
+                    session.run(
+                        "CREATE INDEX analogy_tenant_label_lower_index IF NOT EXISTS "
+                        "FOR (a:Analogy) ON (a.tenant_id, a.label_lower)"
+                    ).consume()
+                except Exception as e:
+                    logger.warning(f"Could not create analogy_tenant_label_lower_index: {e}")
         except Exception as e:
             logger.warning(f"Could not check/create indexes: {e}")
 
