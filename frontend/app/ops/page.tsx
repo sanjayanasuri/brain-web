@@ -8,6 +8,7 @@ import {
   steerAgentTask,
   killAgentTask,
   runAgentTick,
+  updateIdeaStatus,
   type AgentRun,
   type AgentIdea,
 } from '../api/agent-ops';
@@ -126,6 +127,11 @@ export default function OpsPage() {
                 <div key={it.id} style={{ fontSize: 13, border: '1px solid var(--border)', borderRadius: 8, padding: 8, background: 'var(--surface)' }}>
                   <strong>{it.title}</strong>
                   <div style={{ fontSize: 12, color: 'var(--muted)' }}>{it.status} · {it.suggested_scope || '-'}</div>
+                  <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+                    <button className="ui-button" onClick={async () => { await updateIdeaStatus(it.id, 'approved'); await refresh(); }}>Approve</button>
+                    <button className="ui-button" onClick={async () => { await updateIdeaStatus(it.id, 'deferred'); await refresh(); }}>Defer</button>
+                    <button className="ui-button" onClick={async () => { await updateIdeaStatus(it.id, 'denied'); await refresh(); }}>Deny</button>
+                  </div>
                 </div>
               ))}
             </div>

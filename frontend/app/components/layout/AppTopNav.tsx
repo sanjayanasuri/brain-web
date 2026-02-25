@@ -9,6 +9,7 @@ const DEFAULT_ITEMS: NavItem[] = [
   { label: 'Explorer', href: '/explorer' },
   { label: 'Quiz Me', href: '/learn' },
   { label: 'Reader', href: '/web-reader' },
+  { label: 'Ops', href: '/ops' },
   { label: 'Profile', href: '/profile-customization' },
 ];
 

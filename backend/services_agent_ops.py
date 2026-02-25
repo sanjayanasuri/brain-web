@@ -85,3 +85,38 @@ def run_tick() -> Dict[str, Any]:
         'stdout': proc.stdout[-2000:],
         'stderr': proc.stderr[-2000:],
     }
+
+
+def update_idea_status(idea_id: str, status: str) -> Dict[str, Any]:
+    if status not in {'approved', 'denied', 'deferred', 'proposed'}:
+        return {'ok': False, 'error': f'invalid status: {status}'}
+
+    ideas = _read_json(IDEAS_PATH, [])
+    if not isinstance(ideas, list):
+        ideas = []
+
+    found = False
+    for item in ideas:
+        if isinstance(item, dict) and item.get('id') == idea_id:
+            item['status'] = status
+            item['updated_at'] = __import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+            found = True
+            break
+
+    if not found:
+        return {'ok': False, 'error': f'idea not found: {idea_id}'}
+
+    IDEAS_PATH.write_text(json.dumps(ideas, indent=2) + '\n')
+
+    # If approved, dispatch immediately.
+    if status == 'approved':
+        dispatch = CLAWDBOT_DIR / 'scripts' / 'dispatch.sh'
+        proc = subprocess.run([str(dispatch)], cwd=str(REPO_ROOT), capture_output=True, text=True)
+        return {
+            'ok': proc.returncode == 0,
+            'code': proc.returncode,
+            'stdout': proc.stdout[-2000:],
+            'stderr': proc.stderr[-2000:],
+        }
+
+    return {'ok': True}

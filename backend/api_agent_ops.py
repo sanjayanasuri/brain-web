@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import require_auth
-from services_agent_ops import list_runs, list_ideas, spawn_task, steer_run, kill_run, run_tick
+from services_agent_ops import list_runs, list_ideas, spawn_task, steer_run, kill_run, run_tick, update_idea_status
 
 router = APIRouter(prefix='/agent-ops', tags=['agent-ops'])
 
@@ -24,6 +24,10 @@ class SteerReq(BaseModel):
 
 class KillReq(BaseModel):
     tmux_session: str
+
+
+class IdeaStatusReq(BaseModel):
+    status: str = Field(..., pattern='^(approved|denied|deferred|proposed)$')
 
 
 @router.get('/runs')
@@ -58,6 +62,14 @@ def post_kill(payload: KillReq, _: Any = Depends(require_auth)):
 @router.post('/tick')
 def post_tick(_: Any = Depends(require_auth)):
     out = run_tick()
+    if not out.get('ok'):
+        raise HTTPException(status_code=500, detail=out)
+    return out
+
+
+@router.post('/ideas/{idea_id}/status')
+def post_idea_status(idea_id: str, payload: IdeaStatusReq, _: Any = Depends(require_auth)):
+    out = update_idea_status(idea_id, payload.status)
     if not out.get('ok'):
         raise HTTPException(status_code=500, detail=out)
     return out

@@ -63,3 +63,13 @@ export async function runAgentTick() {
   if (!res.ok) throw new Error('Failed to run tick');
   return res.json();
 }
+
+export async function updateIdeaStatus(ideaId: string, status: 'approved' | 'denied' | 'deferred' | 'proposed') {
+  const res = await fetch(`${API_BASE_URL}/agent-ops/ideas/${ideaId}/status`, {
+    method: 'POST',
+    headers: await getApiHeaders(),
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error('Failed to update idea status');
+  return res.json();
+}
