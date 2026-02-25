@@ -186,11 +186,11 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
         <div className="responsive-panel chat-panel" data-testid="explorer-chat-panel" style={{
             maxWidth: isTutorMode ? '980px' : (state.isChatExpanded ? '700px' : '380px'),
             background: 'var(--panel)',
-            borderRadius: '20px',
+            borderRadius: '14px',
             border: '1px solid var(--border)',
             display: 'flex',
             flexDirection: 'column',
-            boxShadow: '0 20px 50px rgba(0,0,0,0.1)',
+            boxShadow: 'var(--shadow)',
             overflow: 'hidden',
             transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
             backdropFilter: 'blur(20px)',
@@ -285,10 +285,10 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                         style={{
                             flex: 1,
                             overflowY: 'auto',
-                            padding: '20px',
+                            padding: '14px',
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: '24px',
+                            gap: '16px',
                             scrollbarWidth: 'none'
                         }}
                     >
@@ -303,9 +303,8 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                 textAlign: 'center',
                                 padding: '40px'
                             }}>
-                                <div style={{ fontSize: '32px', marginBottom: '16px' }}></div>
-                                <div style={{ fontSize: '15px', fontWeight: 500, color: 'var(--ink)', marginBottom: '8px' }}>Explore your knowledge graph</div>
-                                <div style={{ fontSize: '13px', lineHeight: '1.5' }}>Ask about connections, summarize clusters, or find gaps in your research.</div>
+                                <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--ink)', marginBottom: '6px' }}>Ask about your graph</div>
+                                <div style={{ fontSize: '13px', lineHeight: '1.5' }}>Get connections, summaries, and gaps with citation-aware answers.</div>
                             </div>
                         )}
 
@@ -317,11 +316,11 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                     background: 'var(--accent)',
                                     color: 'white',
                                     padding: '12px 16px',
-                                    borderRadius: '18px 18px 2px 18px',
-                                    fontSize: '14px',
+                                    borderRadius: '12px 12px 4px 12px',
+                                    fontSize: '13px',
                                     lineHeight: '1.5',
                                     maxWidth: '85%',
-                                    boxShadow: '0 4px 12px rgba(37, 99, 235, 0.15)'
+                                    boxShadow: '0 2px 8px rgba(37, 99, 235, 0.12)'
                                 }}>
                                     {msg.question}
                                 </div>
@@ -331,9 +330,9 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                                     alignSelf: 'flex-start',
                                     background: 'var(--surface)',
                                     border: '1px solid var(--border)',
-                                    padding: '16px',
-                                    borderRadius: '2px 18px 18px 18px',
-                                    fontSize: '14px',
+                                    padding: '12px',
+                                    borderRadius: '4px 12px 12px 12px',
+                                    fontSize: '13px',
                                     lineHeight: '1.6',
                                     maxWidth: '90%',
                                     color: 'var(--ink)',
@@ -675,10 +674,10 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
 
                     {/* Input Area */}
                     <div style={{
-                        paddingTop: '16px',
-                        paddingRight: '20px',
-                        paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))',
-                        paddingLeft: '20px',
+                        paddingTop: '10px',
+                        paddingRight: '14px',
+                        paddingBottom: 'max(14px, env(safe-area-inset-bottom, 0px))',
+                        paddingLeft: '14px',
                         background: 'var(--panel)',
                         borderTop: '1px solid var(--border)'
                     }}>
