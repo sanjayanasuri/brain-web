@@ -274,21 +274,38 @@ export default function ChatMessageWithBranches({
       )}
 
       {role === 'assistant' && (
-        <button
-          onClick={handleFindInLecture}
-          style={{
-            alignSelf: 'flex-start',
-            padding: '6px 10px',
-            fontSize: '12px',
-            borderRadius: '6px',
-            border: '1px solid var(--border)',
-            background: 'var(--surface)',
-            color: 'var(--ink)',
-            cursor: 'pointer',
-          }}
-        >
-          Find in lecture
-        </button>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleFindInLecture}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '6px 10px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--ink)',
+              cursor: 'pointer',
+            }}
+          >
+            Find in lecture
+          </button>
+          <button
+            onClick={() => router.push('/explorer')}
+            style={{
+              alignSelf: 'flex-start',
+              padding: '6px 10px',
+              fontSize: '12px',
+              borderRadius: '6px',
+              border: '1px solid var(--accent, #3b82f6)',
+              background: 'rgba(37, 99, 235, 0.06)',
+              color: 'var(--accent, #3b82f6)',
+              cursor: 'pointer',
+            }}
+          >
+            🗺️ View Study Map
+          </button>
+        </div>
       )}
 
       {role === 'assistant' && answerId && (
