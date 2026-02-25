@@ -38,9 +38,10 @@ What it does:
 
 `scripts/notify.sh` tries, in order:
 
-1. Telegram bot API (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`)
-2. `openclaw system event --mode now`
-3. stdout fallback
+1. iMessage via `imsg` (`IMSG_TO`)
+2. Telegram bot API (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`)
+3. `openclaw system event --mode now`
+4. stdout fallback
 
 ## Retry behavior
 
