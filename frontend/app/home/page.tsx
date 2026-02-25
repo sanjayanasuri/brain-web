@@ -47,6 +47,25 @@ import StudyPanel from "../components/dashboard/StudyPanel";
 import VoiceAgentPanel from "../components/voice/VoiceAgentPanel";
 import { ActionButtons } from "../components/chat/ActionButtons";
 import WelcomeModal from "../components/onboarding/WelcomeModal";
+import InlineQuizSession from "../components/chat/InlineQuizSession";
+import RelatedNotes from "../components/chat/RelatedNotes";
+
+function isQuizIntent(text: string): string | null {
+  const lower = text.toLowerCase().trim();
+  const patterns = [
+    /^quiz\s+me\s+(?:on|about)\s+(.+)/i,
+    /^test\s+me\s+(?:on|about)\s+(.+)/i,
+    /^study\s+(?:session|quiz)\s+(?:on|about|for)\s+(.+)/i,
+    /^practice\s+(.+)/i,
+    /^assess\s+(?:me\s+(?:on|about)\s+)?(.+)/i,
+  ];
+  for (const p of patterns) {
+    const m = lower.match(p);
+    if (m) return m[1].replace(/[?.!]+$/, '').trim();
+  }
+  if (/^quiz me$/i.test(lower) || /^test me$/i.test(lower)) return 'general knowledge';
+  return null;
+}
 
 function HomePageInner() {
   const router = useRouter();
@@ -64,6 +83,7 @@ function HomePageInner() {
   const { isSidebarCollapsed, setIsSidebarCollapsed, showVoiceAgent, setShowVoiceAgent } = useSidebar();
   const [isRightSidebarCollapsed, setIsRightSidebarCollapsed] = useState(false);
   const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
+  const [quizTopic, setQuizTopic] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -184,6 +204,21 @@ function HomePageInner() {
     async (e?: React.FormEvent) => {
       e?.preventDefault();
       if (!query.trim() || loading) return;
+
+      // Detect quiz/test intent
+      const quizMatch = isQuizIntent(query.trim());
+      if (quizMatch) {
+        setQuizTopic(quizMatch);
+        const quizMsg: ChatMessage = {
+          id: Date.now().toString(),
+          role: "user",
+          content: query.trim(),
+          timestamp: Date.now(),
+        };
+        setMessages(prev => [...prev, quizMsg]);
+        setQuery("");
+        return;
+      }
 
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
@@ -811,6 +846,23 @@ function HomePageInner() {
                   statusMessages={statusMessages}
                   isStreaming={isStreaming}
                 />
+
+                {/* Related notes from user's documents */}
+                {messages.length >= 2 && messages[messages.length - 1]?.role === 'assistant' && !loading && (
+                  <RelatedNotes
+                    messageContent={messages[messages.length - 1].content}
+                    graphId={activeGraphId}
+                  />
+                )}
+
+                {/* Inline Quiz Session */}
+                {quizTopic && (
+                  <InlineQuizSession
+                    topic={quizTopic}
+                    graphId={activeGraphId}
+                    onClose={() => setQuizTopic(null)}
+                  />
+                )}
 
                 {/* Action Buttons from Tool Execution */}
                 {currentActions.length > 0 && (
