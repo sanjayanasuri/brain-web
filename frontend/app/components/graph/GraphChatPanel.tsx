@@ -228,13 +228,11 @@ export default function GraphChatPanel({ chatStreamRef, onAsk, onSelectAction, o
                     >
                         {state.isChatExpanded ? <MinimizeIcon size={16} /> : <MaximizeIcon size={16} />}
                     </button>
-                </div>
-
-                <div className="chat-orb-center">
                     <button
                         onClick={toggleStudyPanel}
                         className={`voice-orb-button ${isTutorMode ? 'is-active' : ''}`}
                         title={isTutorMode ? 'Close tutor mode' : 'Open tutor mode'}
+                        style={{ marginLeft: 6 }}
                     >
                         <span className="home-orb">
                             <span className="home-orb-core" />

@@ -544,10 +544,12 @@ function HomePageInner() {
           <div
             style={{
               width: "100%",
+              maxWidth: "1120px",
               display: "flex",
               flexDirection: "column",
-              gap: "24px",
-              alignItems: "center",
+              gap: "20px",
+              alignItems: "stretch",
+              margin: "0 auto",
             }}
           >
             {messages.length === 0 && (
@@ -555,36 +557,14 @@ function HomePageInner() {
                 style={{
                   display: "flex",
                   flexDirection: "column",
-                  alignItems: "center",
-                  gap: "24px",
+                  alignItems: "stretch",
+                  gap: "16px",
                   width: "100%",
                   paddingTop: "0",
                 }}
               >
-                <div
-                  onClick={() => setShowVoiceAgent(true)}
-                  style={{
-                    width: "120px",
-                    height: "120px",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    marginBottom: "0"
-                  }}
-                  title="Start Voice Session"
-                >
-                  <div style={{
-                    width: "80px",
-                    height: "80px",
-                    borderRadius: "50%",
-                    background: "var(--accent-gradient)",
-                    animation: "pulse 3s infinite ease-in-out",
-                    boxShadow: "0 0 50px rgba(37, 99, 235, 0.4)"
-                  }} />
-                </div>
-
-                <div style={{ textAlign: "center" }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                  <div style={{ textAlign: "left" }}>
                   {firstName && (
                     <div
                       style={{
@@ -620,6 +600,21 @@ function HomePageInner() {
                   >
                     Explore your knowledge graph or the web with agentic research.
                   </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowVoiceAgent(true)}
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: '50%',
+                      border: '1px solid var(--border)',
+                      background: 'var(--accent-gradient)',
+                      boxShadow: '0 6px 20px rgba(37,99,235,0.25)',
+                      cursor: 'pointer'
+                    }}
+                    title="Start Voice Session"
+                  />
                 </div>
 
                 <HomeFeedCard />
@@ -679,8 +674,8 @@ function HomePageInner() {
                 </form>
 
                 {/* Recent Conversations: Compact Vertical List */}
-                <div style={{ width: "100%", maxWidth: "600px", marginTop: "30px" }}>
-                  <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: "16px", textAlign: "center" }}>
+                <div style={{ width: "100%", maxWidth: "1000px", marginTop: "22px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: "600", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: "12px", textAlign: "left" }}>
                     Recent Conversations
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
