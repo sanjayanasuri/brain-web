@@ -1,10 +1,18 @@
 """
 Postgres database connection utility.
 Used for study sessions, usage tracking, and event synchronization.
+
+Multi-tenant RLS:
+- Tables with RLS (tenant- or user-scoped) require app.tenant_id / app.user_id
+  to be set per transaction. Use execute_query() / execute_update() (they apply
+  RLS from request context) or cursor_with_rls() when you need a cursor.
+- Use get_db_connection() + raw cursor only for tables that do not use RLS
+  (e.g. users table for auth lookups). Otherwise you risk cross-tenant data.
 """
 import atexit
 import logging
 import threading
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Optional, Tuple
 
@@ -116,6 +124,32 @@ def get_db_cursor(conn):
     return conn.cursor(cursor_factory=RealDictCursor)
 
 
+@contextmanager
+def cursor_with_rls(*, user_id: Optional[str] = None, tenant_id: Optional[str] = None):
+    """
+    Context manager: borrow a connection, apply RLS, yield a RealDictCursor.
+    Use for any code that touches tenant- or user-scoped tables. RLS settings
+    come from request context (set_request_db_identity) unless user_id/tenant_id
+    are passed. Caller can commit or let the context manager commit on success.
+    """
+    conn = get_db_connection()
+    error = False
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            apply_rls_session_settings(cur, user_id=user_id, tenant_id=tenant_id)
+            yield cur
+        conn.commit()
+    except Exception:
+        error = True
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        return_db_connection(conn, error=error)
+
+
 def execute_query(
     query: str,
     params: Optional[tuple] = None,
@@ -202,6 +236,17 @@ def init_postgres_db():
         );
         """,
         "CREATE INDEX IF NOT EXISTS idx_tenant_memberships_user ON tenant_memberships(user_id);",
+
+        # Per-user assistant profile (OpenClaw-like personalization in product)
+        """
+        CREATE TABLE IF NOT EXISTS assistant_profiles (
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            profile_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, tenant_id)
+        );
+        """,
 
         # Study Sessions Table
         """
