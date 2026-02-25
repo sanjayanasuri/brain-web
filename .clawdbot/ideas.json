@@ -40,7 +40,9 @@
     "id": "idea-20260225-3",
     "status": "approved",
     "created_at": "2026-02-25T05:32:25Z",
-    "updated_at": "2026-02-25T07:46:54Z"
+    "updated_at": "2026-02-25T07:46:54Z",
+    "priority": "p1",
+    "notes": "Aligned to current UI/quality sprint"
   },
   {
     "title": "Implement Detailed Feature Toggle System",
@@ -48,9 +50,11 @@
     "description": "Introduce a feature toggle system to enable or disable features seamlessly, facilitating easier testing and performance comparison.",
     "suggested_scope": "backend/feature_management",
     "id": "idea-20260225-4",
-    "status": "approved",
+    "status": "deferred",
     "created_at": "2026-02-25T05:32:25Z",
-    "updated_at": "2026-02-25T07:46:54Z"
+    "updated_at": "2026-02-25T07:46:54Z",
+    "priority": "p3",
+    "notes": "Defer until core UX/memory loops stabilize"
   },
   {
     "title": "Integrate Natural Language Processing Enhancements",
@@ -58,8 +62,10 @@
     "description": "Incorporate advanced NLP techniques to improve the comprehension and response quality of the agent system, which can significantly enhance the user experience.",
     "suggested_scope": "backend/nlp_engine",
     "id": "idea-20260225-5",
-    "status": "approved",
+    "status": "deferred",
     "created_at": "2026-02-25T05:32:25Z",
-    "updated_at": "2026-02-25T07:46:54Z"
+    "updated_at": "2026-02-25T07:46:54Z",
+    "priority": "p3",
+    "notes": "Defer until teaching + retrieval quality targets are met"
   }
 ]
