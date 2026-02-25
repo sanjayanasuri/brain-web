@@ -12,4 +12,6 @@ _Learn about the person you're helping. Update this as you go._
 
 _(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
 
-i care about getting my degree but more so using ai to improve my chances in the workplace. i care about system design and infrastructure. trying to figure out how to improve brain web which is my personal project about building a second brain but more importantly about ingesting content and building on existing ideas
+i care about getting my degree but more so using ai to improve my chances in the workplace. i care about system design and infrastructure. trying to figure out how to improve brain web which is my personal project about building a second brain but more importantly about ingesting content and building on existing ideas.
+
+Outside Brain Web: I’m also a DJ and I’ve been exploring a separate project to build a better interface for Rekordbox, especially around SoundCloud track matching. Key pain points: no clear visual dashboard of matched tracks, and weak visual filtering/navigation for library management. There is an existing repo for this on my computer (name currently unknown).
