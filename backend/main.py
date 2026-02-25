@@ -50,6 +50,7 @@ from api_graphs import router as graphs_router
 from api_branches import router as branches_router
 from api_contextual_branches import router as contextual_branches_router
 from api_notes_digest import router as notes_digest_router
+from api_digest_briefing import router as briefing_router
 from api_snapshots import router as snapshots_router
 from api_events import router as events_router, sessions_router
 from api_events_replay import router as events_replay_router
@@ -474,6 +475,7 @@ app.include_router(graphs_router)
 app.include_router(branches_router)
 app.include_router(contextual_branches_router)
 app.include_router(notes_digest_router)
+app.include_router(briefing_router)
 app.include_router(snapshots_router)
 app.include_router(events_router)
 app.include_router(sessions_router)

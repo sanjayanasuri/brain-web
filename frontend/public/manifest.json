@@ -1,7 +1,7 @@
 {
   "name": "Brain Web",
   "short_name": "Brain Web",
-  "description": "AI-powered knowledge graph for your ideas",
+  "description": "AI-powered study companion — notes, voice, and knowledge graph",
   "start_url": "/mobile",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -19,6 +19,30 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "/api/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "shortcuts": [
+    {
+      "name": "Voice Mode",
+      "short_name": "Voice",
+      "url": "/mobile?mode=voice",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Quick Note",
+      "short_name": "Note",
+      "url": "/lecture-editor",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
     }
   ]
 }
