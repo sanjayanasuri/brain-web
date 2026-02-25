@@ -59,6 +59,7 @@ from api_interest import router as interest_router
 from api_assistant import router as assistant_router
 from api_home import router as home_router
 from api_capture import router as capture_router
+from api_indexing_health import router as indexing_health_router
 from api_ingestion_runs import router as ingestion_runs_router
 from api_paths import router as paths_router
 from api_quality import router as quality_router
@@ -488,6 +489,7 @@ app.include_router(interest_router)
 app.include_router(assistant_router)
 app.include_router(home_router)
 app.include_router(capture_router)
+app.include_router(indexing_health_router)
 app.include_router(paths_router)
 app.include_router(quality_router)
 # Web ingestion router is always included but has local-only guard

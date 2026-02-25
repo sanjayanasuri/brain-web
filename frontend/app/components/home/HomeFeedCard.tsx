@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { getHomeFeed, type HomeFeed } from '../../api/home';
 import { dismissInterestSuggestion, markInterestSuggestionOpened } from '../../api/interest';
 import { createCapture, listCapture, promoteCapture, type CaptureItem } from '../../api/capture';
+import { getIndexingHealth, type IndexingHealth } from '../../api/indexing';
 
 export default function HomeFeedCard() {
   const [feed, setFeed] = useState<HomeFeed | null>(null);
@@ -11,14 +12,17 @@ export default function HomeFeedCard() {
   const [captureText, setCaptureText] = useState('');
   const [captureItems, setCaptureItems] = useState<CaptureItem[]>([]);
   const [captureSaving, setCaptureSaving] = useState(false);
+  const [indexing, setIndexing] = useState<IndexingHealth | null>(null);
 
   async function refreshHomeAndCapture() {
-    const [homeData, captures] = await Promise.all([
+    const [homeData, captures, health] = await Promise.all([
       getHomeFeed(),
       listCapture('new', 5),
+      getIndexingHealth().catch(() => null),
     ]);
     setFeed(homeData);
     setCaptureItems(captures);
+    setIndexing(health);
   }
 
   useEffect(() => {
@@ -58,7 +62,14 @@ export default function HomeFeedCard() {
   return (
     <div style={{ width: '100%', maxWidth: 900, marginTop: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>Quick Capture</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ fontWeight: 600 }}>Quick Capture</div>
+          {indexing && (
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+              OCR7d {indexing.ocr.success_7d}/{indexing.ocr.total_7d} · Tx24h {indexing.transcripts.chunks_24h}
+            </div>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
           <input
             value={captureText}
@@ -91,6 +102,12 @@ export default function HomeFeedCard() {
           </div>
         )}
       </div>
+
+      {indexing && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 10, background: 'var(--panel)', fontSize: 12, color: 'var(--muted)' }}>
+          Indexing Health · OCR avg conf: {indexing.ocr.avg_confidence_7d ? indexing.ocr.avg_confidence_7d.toFixed(2) : 'n/a'} · Evidence anchors 24h: {indexing.evidence.with_citations_24h}/{indexing.evidence.responses_24h}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
       <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>

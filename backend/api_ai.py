@@ -282,6 +282,23 @@ async def chat_stream_endpoint(
                 logger.info(f"Loaded unified context: {len(unified_context.get('chat_history', []))} messages, "
                            f"user_facts={'yes' if unified_context.get('user_facts') else 'no'}, "
                            f"lecture_context={'yes' if unified_context.get('lecture_context') else 'no'}")
+
+                # Add transcript-matched evidence context for better voice continuity/citations.
+                try:
+                    from services_voice_transcripts import search_voice_transcript_chunks
+                    voice_hits = search_voice_transcript_chunks(
+                        user_id=str(auth.get("user_id", "unknown")),
+                        tenant_id=str(auth.get("tenant_id", "default")),
+                        query=payload.message,
+                        limit=3,
+                    )
+                    if voice_hits:
+                        lines = [f"- {h.get('content','')[:180]}" for h in voice_hits if h.get('content')]
+                        voice_ctx = "\n".join(lines)
+                        prev_topics = unified_context.get("recent_topics") or ""
+                        unified_context["recent_topics"] = (prev_topics + "\n\nVoice transcript matches:\n" + voice_ctx).strip()
+                except Exception as e:
+                    logger.debug(f"Voice transcript match context unavailable: {e}")
             except Exception as e:
                 logger.warning(f"Failed to load unified context: {e}")
                 unified_context = {"user_facts": "", "lecture_context": "", "chat_history": []}
