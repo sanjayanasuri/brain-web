@@ -30,19 +30,21 @@ export default function ReaderPage() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', padding: '18px 16px', background: 'var(--background)' }}>
-      <div style={{ maxWidth: 980, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 700 }}>Reader</div>
-          <div style={{ fontSize: 13, color: 'var(--muted)' }}>Readable article view with relevance scoring, snippets, and AI context fit.</div>
+    <div className="app-shell">
+      <div className="app-container" style={{ maxWidth: 980 }}>
+        <div className="page-header-row">
+          <div>
+            <div className="page-title">Reader</div>
+            <div className="page-subtitle">Readable article view with relevance scoring, snippets, and AI context fit.</div>
+          </div>
+          <button className="ui-button" onClick={() => window.location.assign('/home')}>Home</button>
         </div>
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 12, background: 'var(--panel)', display: 'grid', gap: 8 }}>
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Article URL" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)' }} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="What should this be relevant to?" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)' }} />
+        <div className="ui-card" style={{ display: 'grid', gap: 8 }}>
+          <input className="ui-input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Article URL" />
+          <input className="ui-input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="What should this be relevant to?" />
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={run} disabled={loading} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}>{loading ? 'Loading…' : 'Analyze Article'}</button>
-            <button onClick={() => window.location.assign('/home')} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer' }}>Home</button>
+            <button className="ui-button" onClick={run} disabled={loading}>{loading ? 'Loading…' : 'Analyze Article'}</button>
           </div>
         </div>
 

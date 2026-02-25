@@ -21,7 +21,7 @@ export default function LearningInterventionsCard() {
   }, []);
 
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, background: 'var(--panel)' }}>
+    <div className="ui-card" style={{ padding: 14 }}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Learning Interventions</div>
       {loading ? (
         <div style={{ color: 'var(--muted)', fontSize: 13 }}>Loading…</div>

@@ -23,6 +23,7 @@ export default function ExplorerPage() {
                     padding: '10px 14px',
                     borderBottom: '1px solid var(--border)',
                     background: 'var(--panel)',
+                    boxShadow: 'var(--shadow)',
                 }}>
                     <div>
                         <div style={{ fontSize: 16, fontWeight: 700 }}>Explorer</div>
