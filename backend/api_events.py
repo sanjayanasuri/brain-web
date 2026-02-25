@@ -100,7 +100,18 @@ class ActivityEventCreate(BaseModel):
         'PATH_STEP_VIEWED',
         'PATH_EXITED',
         'DIGEST_OPENED',
-        'REVIEW_OPENED'
+        'REVIEW_OPENED',
+        'VOICE_SESSION',
+        'INGESTION_STARTED',
+        'INGESTION_COMPLETED',
+        'CANVAS_CAPTURED',
+        'QUIZ_STARTED',
+        'QUIZ_COMPLETED',
+        'MASTERY_UPDATED',
+        'CONCEPT_CURATED',
+        'BRANCH_CREATED',
+        'PROFILE_UPDATED',
+        'LENS_CHANGED'
     ]
     graph_id: Optional[str] = None
     concept_id: Optional[str] = None
@@ -400,6 +411,9 @@ def _compute_session_summary(session_events: List[ActivityEvent]) -> SessionSumm
                     concept_names[event.concept_id] = event.payload['concept_name']
         elif event.type == 'ANSWER_CREATED':
             counts.answers_created += 1
+        elif event.type == 'VOICE_SESSION':
+            # Consider voice sessions as a special count or just grouping
+            pass
         
         # Track graph_id frequency
         if event.graph_id:
@@ -492,6 +506,13 @@ def _compute_session_summary(session_events: List[ActivityEvent]) -> SessionSumm
     elif counts.answers_created > 0:
         summary = f"Asked {counts.answers_created} question{'s' if counts.answers_created != 1 else ''}"
     
+    # Final check for special session types
+    for event in reversed(sorted_events):
+        special = _get_special_summary(event.type, event.payload or {})
+        if special:
+            summary = special
+            break
+    
     return SessionSummary(
         session_id=session_id,
         start_at=start_at,
@@ -504,6 +525,38 @@ def _compute_session_summary(session_events: List[ActivityEvent]) -> SessionSumm
         counts=counts,
         highlights=highlights,
     )
+
+def _get_special_summary(event_type: str, payload: Dict[str, Any]) -> Optional[str]:
+    """Return a specialized summary for specific event types."""
+    if event_type == 'VOICE_SESSION':
+        if payload.get('title'): return f"Voice: {payload.get('title')}"
+        if payload.get('transcript_summary'): return f"Voice: {payload.get('transcript_summary')}"
+        return "Voice Session"
+    if event_type == 'INGESTION_STARTED':
+        return f"Starting Ingestion: {payload.get('title', 'Unknown Source')}"
+    if event_type == 'INGESTION_COMPLETED':
+        return f"Ingested: {payload.get('title', 'Unknown Source')}"
+    if event_type == 'QUIZ_COMPLETED':
+        return f"Finished Quiz: {payload.get('topics', 'General')}"
+    if event_type == 'MASTERY_UPDATED':
+        return f"Mastery {payload.get('direction', 'up')}: {payload.get('concept_name')}"
+    if event_type == 'CONCEPT_CURATED':
+        return f"Curated: {payload.get('concept_name')}"
+    if event_type == 'RELATIONSHIP_REVIEWED':
+        return f"Reviewed Relationship: {payload.get('predicate')}"
+    if event_type == 'CONCEPTS_MERGED':
+        return f"Merged: {payload.get('name')}"
+    if event_type == 'CONCEPT_PINNED':
+        return f"Pinned: {payload.get('concept_name')}"
+    if event_type == 'CANVAS_CAPTURED':
+        return f"Captured Canvas: {payload.get('title', 'Untitled')}"
+    if event_type == 'PROFILE_UPDATED':
+        return "Updated Tutor Persona"
+    if event_type == 'LENS_CHANGED':
+        return f"Switched Lens: {payload.get('lens_name')}"
+    if event_type == 'BRANCH_CREATED':
+        return f"Created Branch: {payload.get('branch_name', 'Untitled')}"
+    return None
 
 
 @sessions_router.get("/recent")

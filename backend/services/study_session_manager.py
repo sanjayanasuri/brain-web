@@ -116,6 +116,37 @@ def start_session(
     finally:
         pool.putconn(conn)
     
+    # Emit ActivityEvent for Quiz Start
+    try:
+        from db_neo4j import neo4j_session as get_neo_sess
+        # Handle the case where neo4j_session might be a mock or a session object
+        # If it's a context manager (like get_neo_sess()), we use it. 
+        # But if it's already a session object, we use it directly.
+        # For simplicity and safety, we'll use our own session if one isn't clearly provided.
+        with get_neo_sess() as neo_sess_internal:
+            target_sess = neo4j_session if neo4j_session else neo_sess_internal
+            event_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat() + "Z"
+            target_sess.run(
+                """
+                CREATE (e:ActivityEvent {
+                    id: $id,
+                    user_id: $user_id,
+                    graph_id: $graph_id,
+                    type: 'QUIZ_STARTED',
+                    payload: $payload,
+                    created_at: $created_at
+                })
+                """,
+                id=event_id,
+                user_id=user_id,
+                graph_id=graph_id,
+                payload={"session_id": session_id, "intent": intent, "topic_id": topic_id},
+                created_at=now
+            )
+    except Exception as e:
+        logger.warning(f"Failed to emit QUIZ_STARTED event: {e}")
+
     # Generate initial task
     try:
         logger.info(f"[study_session] Generating initial task for session {session_id}")
@@ -402,7 +433,7 @@ def end_session(session_id: str, *, user_id: str, tenant_id: str) -> SessionSumm
                 UPDATE study_sessions
                 SET ended_at = %s
                 WHERE id = %s AND user_id = %s AND tenant_id = %s
-                RETURNING started_at
+                RETURNING started_at, graph_id
             """, (ended_at, session_id, user_id, tenant_id))
             
             session_row = cur.fetchone()
@@ -427,7 +458,39 @@ def end_session(session_id: str, *, user_id: str, tenant_id: str) -> SessionSumm
             started = session_row["started_at"]
             duration_seconds = int((ended_at - started).total_seconds())
             
+            current_graph_id = session_row.get("graph_id")
+            
             conn.commit()
+
+            # Emit ActivityEvent for Quiz Completion
+            try:
+                from db_neo4j import neo4j_session as get_neo_sess
+                with get_neo_sess() as neo_sess:
+                    event_id = str(uuid.uuid4())
+                    now = datetime.utcnow().isoformat() + "Z"
+                    neo_sess.run(
+                        """
+                        CREATE (e:ActivityEvent {
+                            id: $id,
+                            user_id: $user_id,
+                            graph_id: $graph_id,
+                            type: 'QUIZ_COMPLETED',
+                            payload: $payload,
+                            created_at: $created_at
+                        })
+                        """,
+                        id=event_id,
+                        user_id=user_id,
+                        graph_id=current_graph_id,
+                        payload={
+                            "session_id": session_id, 
+                            "tasks_completed": stats["tasks_completed"] or 0,
+                            "avg_score": float(stats["avg_score"] or 0.0)
+                        },
+                        created_at=now
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to emit QUIZ_COMPLETED event: {e}")
     finally:
         pool.putconn(conn)
     

@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+import uuid
+from datetime import datetime
 
 from db_neo4j import get_neo4j_session
 from auth import require_auth
@@ -49,6 +51,35 @@ def create_branch_endpoint(
 ):
     user_id, tenant_id = _require_graph_identity(request)
     b = create_branch(session, payload.name, tenant_id=tenant_id, user_id=user_id)
+    
+    # Emit ActivityEvent for BRANCH_CREATED
+    try:
+        from services_branch_explorer import get_active_graph_context
+        graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
+        
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'BRANCH_CREATED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id=user_id,
+            graph_id=graph_id,
+            payload={"branch_id": b["branch_id"], "branch_name": b["name"]},
+            created_at=now
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("brain_web").warning(f"Failed to emit BRANCH_CREATED event: {e}")
+        
     return b
 
 

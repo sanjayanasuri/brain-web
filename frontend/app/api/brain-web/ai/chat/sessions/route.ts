@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { getCorrelationHeaders } from '../../../../_utils/correlation';
 
 export const dynamic = 'force-dynamic';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 export async function GET(request: NextRequest) {
+  const { requestId, headers: correlationHeaders } = getCorrelationHeaders(request);
   try {
     const token = await getToken({ req: request });
     const accessToken = (token as any)?.accessToken;
@@ -21,26 +23,27 @@ export async function GET(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...correlationHeaders,
       },
       cache: 'no-store',
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Chat Sessions API] Backend error:', errorText);
+      console.error(`[Chat Sessions API] [${requestId}] Backend error:`, errorText);
       return NextResponse.json(
         { error: 'Failed to fetch chat sessions' },
-        { status: response.status },
+        { status: response.status, headers: correlationHeaders },
       );
     }
 
     const data = await response.json();
-    return NextResponse.json(data);
+    return NextResponse.json(data, { headers: correlationHeaders });
   } catch (error) {
-    console.error('[Chat Sessions API] Error:', error);
+    console.error(`[Chat Sessions API] [${requestId}] Error:`, error);
     return NextResponse.json(
       { error: 'Internal server error' },
-      { status: 500 },
+      { status: 500, headers: correlationHeaders },
     );
   }
 }

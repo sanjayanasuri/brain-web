@@ -4,6 +4,8 @@ API endpoints for reviewing proposed relationships.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from neo4j import Session
+import uuid
+from datetime import datetime
 
 from db_neo4j import get_neo4j_session
 from models import (
@@ -113,6 +115,34 @@ def accept_relationships_endpoint(
                 reviewer=payload.reviewed_by,
             )
         
+        # Emit ActivityEvent for RELATIONSHIP_REVIEWED
+        try:
+            event_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat() + "Z"
+            session.run(
+                """
+                CREATE (e:ActivityEvent {
+                    id: $id,
+                    user_id: $user_id,
+                    graph_id: $graph_id,
+                    type: 'RELATIONSHIP_REVIEWED',
+                    payload: $payload,
+                    created_at: $created_at
+                })
+                """,
+                id=event_id,
+                user_id=payload.reviewed_by or "system",
+                graph_id=target_graph_id,
+                payload={
+                    "count": accepted,
+                    "action": "accept",
+                    "predicates": list(set(edge.rel_type for edge in payload.edges))
+                },
+                created_at=now
+            )
+        except Exception as e:
+            logging.getLogger("brain_web").warning(f"Failed to emit RELATIONSHIP_REVIEWED event: {e}")
+        
         return RelationshipReviewActionResponse(
             status="ok",
             action="accept",
@@ -163,6 +193,35 @@ def reject_relationships_endpoint(
                 prior_status="PROPOSED",
                 reviewer=payload.reviewed_by,
             )
+        
+        # Emit ActivityEvent for RELATIONSHIP_REVIEWED (reject)
+        try:
+            event_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat() + "Z"
+            session.run(
+                """
+                CREATE (e:ActivityEvent {
+                    id: $id,
+                    user_id: $user_id,
+                    graph_id: $graph_id,
+                    type: 'RELATIONSHIP_REVIEWED',
+                    payload: $payload,
+                    created_at: $created_at
+                })
+                """,
+                id=event_id,
+                user_id=payload.reviewed_by or "system",
+                graph_id=target_graph_id,
+                payload={
+                    "count": rejected,
+                    "action": "reject",
+                    "predicates": list(set(edge.rel_type for edge in payload.edges))
+                },
+                created_at=now
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger("brain_web").warning(f"Failed to emit RELATIONSHIP_REVIEWED event (reject): {e}")
         
         return RelationshipReviewActionResponse(
             status="ok",
@@ -397,6 +456,40 @@ def execute_merge_endpoint(
             reviewer=payload.reviewed_by,
             metadata=result,
         )
+        
+        # Emit ActivityEvent for CONCEPTS_MERGED
+        try:
+            event_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat() + "Z"
+            
+            # Fetch name if available in result
+            # merge_concepts result structure might vary, but usually has nodes
+            # If not, we'll use keep_node_id as name placeholder
+            node_name = payload.keep_node_id
+            
+            session.run(
+                """
+                CREATE (e:ActivityEvent {
+                    id: $id,
+                    user_id: $user_id,
+                    graph_id: $graph_id,
+                    type: 'CONCEPTS_MERGED',
+                    payload: $payload,
+                    created_at: $created_at
+                })
+                """,
+                id=event_id,
+                user_id=payload.reviewed_by or "system",
+                graph_id=payload.graph_id,
+                payload={
+                    "keep_node_id": payload.keep_node_id,
+                    "merge_node_id": payload.merge_node_id,
+                    "name": node_name
+                },
+                created_at=now
+            )
+        except Exception as e:
+            logging.getLogger("brain_web").warning(f"Failed to emit CONCEPTS_MERGED event: {e}")
         
         return MergeExecuteResponse(
             status="ok",

@@ -11,6 +11,8 @@ from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 
 from config import POSTGRES_CONNECTION_STRING
+import uuid
+from db_neo4j import neo4j_session
 
 
 _pool: Optional[ThreadedConnectionPool] = None
@@ -356,5 +358,39 @@ def update_concept_mastery(
             ))
             
             conn.commit()
+            
+            # Emit ActivityEvent for Mastery Update
+            try:
+                with neo4j_session() as neo_sess:
+                    event_id = str(uuid.uuid4())
+                    now = datetime.utcnow().isoformat() + "Z"
+                    
+                    # Try to get active graph_id if possible, otherwise None
+                    # Note: Since this is service-level, we don't have the GraphSpace node easily.
+                    # We'll leave graph_id as None or fetch it if crucial.
+                    
+                    neo_sess.run(
+                        """
+                        CREATE (e:ActivityEvent {
+                            id: $id,
+                            user_id: $user_id,
+                            graph_id: $graph_id,
+                            type: 'MASTERY_UPDATED',
+                            payload: $payload,
+                            created_at: $created_at
+                        })
+                        """,
+                        id=event_id,
+                        user_id=user_id,
+                        graph_id=None, # TBD if we can get this easily
+                        payload={
+                            "concept_name": concept_name,
+                            "direction": "up" if success else "down"
+                        },
+                        created_at=now
+                    )
+            except Exception as e:
+                # Don't fail the mastery update if event emission fails
+                pass
     finally:
         pool.putconn(conn)

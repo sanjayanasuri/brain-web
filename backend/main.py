@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 
 
 from api_auth import router as auth_router
+from api_v1_api_keys import router as api_keys_router
+from api_v1_ingest import router as ingest_v1_router
 from api_health import router as health_router
 from db_postgres import init_postgres_db
 from api_concepts import router as concepts_router
@@ -40,6 +42,8 @@ if os.getenv("NODE_ENV", "development") != "production":
         pass
 from api_answers import router as answers_router
 from api_resources import router as resources_router
+from api_refresh import router as refresh_router
+from api_templates import router as templates_router
 from api_tests import router as tests_router
 from api_gaps import router as gaps_router
 from api_graphs import router as graphs_router
@@ -73,6 +77,7 @@ from api_dashboard import router as dashboard_router
 from api_exams import router as exams_router
 from api_calendar import router as calendar_router
 from api_scheduler import tasks_router, schedule_router
+from api_observability_ingest import router as observability_ingest_router
 
 # Phase 4: Analytics router
 try:
@@ -94,6 +99,91 @@ from config import REQUEST_TIMEOUT_SECONDS
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("brain_web")
+
+
+def _log_json(level: int, payload: dict) -> None:
+    logger.log(level, json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+
+
+def _request_meta(request: Request) -> dict:
+    return {
+        "request_id": getattr(request.state, "request_id", None),
+        "session_id": getattr(request.state, "session_id", None),
+        "user_id": getattr(request.state, "user_id", None),
+        "tenant_id": getattr(request.state, "tenant_id", None),
+        "client_ip": getattr(request.state, "client_ip", None),
+        "method": request.method,
+        "route": request.url.path,
+    }
+
+
+def _sentry_enabled() -> bool:
+    try:
+        return sentry_sdk is not None and sentry_sdk.Hub.current.client is not None  # type: ignore[attr-defined]
+    except Exception:
+        return False
+
+
+def _sentry_set_request_scope(request: Request) -> None:
+    if not _sentry_enabled():
+        return
+    try:
+        with sentry_sdk.configure_scope() as scope:  # type: ignore[union-attr]
+            scope.set_tag("request_id", getattr(request.state, "request_id", None))
+            scope.set_tag("session_id", getattr(request.state, "session_id", None))
+            scope.set_tag("tenant_id", getattr(request.state, "tenant_id", None))
+            scope.set_tag("user_id", getattr(request.state, "user_id", None))
+            scope.set_tag("client_ip", getattr(request.state, "client_ip", None))
+            scope.set_tag("route", request.url.path)
+            scope.set_tag("method", request.method)
+    except Exception:
+        return
+
+# Optional Sentry error monitoring (env-gated)
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+except Exception:
+    sentry_sdk = None
+
+
+def _init_sentry() -> None:
+    if sentry_sdk is None:
+        return
+
+    dsn = os.getenv("SENTRY_DSN_BACKEND") or os.getenv("SENTRY_DSN")
+    if not dsn:
+        return
+
+    try:
+        traces_sample_rate = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0") or 0)
+    except ValueError:
+        traces_sample_rate = 0.0
+
+    try:
+        profiles_sample_rate = float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0") or 0)
+    except ValueError:
+        profiles_sample_rate = 0.0
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT") or os.getenv("ENVIRONMENT") or os.getenv("NODE_ENV") or "development",
+        release=os.getenv("RELEASE") or os.getenv("GIT_SHA"),
+        send_default_pii=False,
+        traces_sample_rate=traces_sample_rate,
+        profiles_sample_rate=profiles_sample_rate,
+        integrations=[
+            FastApiIntegration(),
+            StarletteIntegration(),
+            LoggingIntegration(level=logging.INFO, event_level=logging.ERROR),
+        ],
+    )
+    logger.info("[Sentry] Backend monitoring enabled")
+
+
+_init_sentry()
 
 # --- FastAPI/Starlette compatibility (dev/test) ---
 # Some dev environments have Starlette>=0.40 installed where Middleware iterates
@@ -167,6 +257,7 @@ async def lifespan(app: FastAPI):
     Replaces deprecated @app.on_event("startup") pattern.
     """
     # Startup
+    refresh_scheduler_task = None
     try:
         from config import NEO4J_URI
 
@@ -238,6 +329,52 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Tasks] ⚠ Failed to start AI task queue: {e}")
         logger.warning(f"Failed to start AI task queue: {e}")
+
+    # Start generic refresh auto-update scheduler (env-gated)
+    try:
+        refresh_scheduler_enabled = str(os.getenv("ENABLE_REFRESH_AUTO_UPDATES", "")).lower() in {"1", "true", "yes", "on"}
+        if refresh_scheduler_enabled:
+            import asyncio
+            from db_neo4j import neo4j_session
+            from services_refresh_bindings import run_due_refreshes_for_all_active_contexts
+
+            refresh_interval_seconds = max(30, int(os.getenv("REFRESH_SCHEDULER_INTERVAL_SECONDS", "300") or 300))
+            refresh_limit_contexts = max(1, min(int(os.getenv("REFRESH_SCHEDULER_MAX_CONTEXTS", "25") or 25), 500))
+            refresh_limit_nodes = max(1, min(int(os.getenv("REFRESH_SCHEDULER_MAX_NODES_PER_CONTEXT", "10") or 10), 100))
+            refresh_scan_limit = max(1, min(int(os.getenv("REFRESH_SCHEDULER_SCAN_LIMIT_PER_CONTEXT", "200") or 200), 5000))
+
+            async def refresh_scheduler_loop():
+                # Small startup delay to avoid competing with app boot.
+                await asyncio.sleep(min(10, refresh_interval_seconds))
+                while True:
+                    try:
+                        with neo4j_session() as session:
+                            summary = await run_due_refreshes_for_all_active_contexts(
+                                session=session,
+                                limit_contexts=refresh_limit_contexts,
+                                limit_nodes_per_context=refresh_limit_nodes,
+                                scan_limit_per_context=refresh_scan_limit,
+                                force=False,
+                            )
+                        if int(summary.get("runs_triggered") or 0) > 0 or int(summary.get("runs_failed") or 0) > 0:
+                            logger.info(
+                                "[Refresh Scheduler] contexts=%s triggered=%s failed=%s resources=%s",
+                                summary.get("contexts_processed"),
+                                summary.get("runs_triggered"),
+                                summary.get("runs_failed"),
+                                summary.get("resources_created"),
+                            )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error(f"[Refresh Scheduler] Loop error: {e}", exc_info=True)
+                    await asyncio.sleep(refresh_interval_seconds)
+
+            refresh_scheduler_task = asyncio.create_task(refresh_scheduler_loop())
+            print(f"[Refresh Scheduler] Enabled (interval={refresh_interval_seconds}s)")
+    except Exception as e:
+        print(f"[Refresh Scheduler] ⚠ Failed to start: {e}")
+        logger.warning(f"Failed to start refresh scheduler: {e}")
     
     yield  # App runs here
     
@@ -257,6 +394,13 @@ async def lifespan(app: FastAPI):
             print("[Tasks] Background AI task queue stopped")
     except Exception:
         pass
+
+    if refresh_scheduler_task is not None:
+        try:
+            refresh_scheduler_task.cancel()
+            print("[Refresh Scheduler] Background task cancelled")
+        except Exception:
+            pass
 
 
 app = FastAPI(
@@ -308,7 +452,10 @@ if "*" in origins:
 app.add_middleware(TimeoutMiddleware)
 
 app.include_router(auth_router)
+app.include_router(api_keys_router)
+app.include_router(ingest_v1_router)
 app.include_router(health_router)
+app.include_router(observability_ingest_router)
 app.include_router(concepts_router)
 app.include_router(ai_router)
 app.include_router(retrieval_router)
@@ -320,6 +467,8 @@ app.include_router(preferences_router)
 app.include_router(feedback_router)
 app.include_router(answers_router)
 app.include_router(resources_router)
+app.include_router(refresh_router)
+app.include_router(templates_router)
 app.include_router(gaps_router)
 app.include_router(graphs_router)
 app.include_router(branches_router)
@@ -514,6 +663,7 @@ async def auth_middleware(request: Request, call_next):
     request.state.user_id = user_context.get("user_id")
     request.state.tenant_id = user_context.get("tenant_id")
     request.state.is_authenticated = user_context.get("is_authenticated", False)
+    _sentry_set_request_scope(request)
 
     # Propagate request identity to graph-context services for strict per-user scoping.
     identity_tokens = set_request_graph_identity(request.state.user_id, request.state.tenant_id)
@@ -528,6 +678,21 @@ async def auth_middleware(request: Request, call_next):
         try:
             response = await call_next(request)
         except HTTPException as e:
+            if e.status_code >= 500:
+                _log_json(
+                    logging.ERROR,
+                    {
+                        "event": "http_exception",
+                        "status": e.status_code,
+                        "detail": e.detail,
+                        **_request_meta(request),
+                    },
+                )
+                if _sentry_enabled():
+                    try:
+                        sentry_sdk.capture_exception(e)  # type: ignore[union-attr]
+                    except Exception:
+                        pass
             response = JSONResponse(status_code=e.status_code, content={"detail": e.detail})
         except Exception:
             # Let exception handlers do sanitization; still record metrics/logs here
@@ -553,6 +718,7 @@ async def auth_middleware(request: Request, call_next):
         # Set response headers
         if isinstance(response, Response):
             response.headers["x-request-id"] = request_id
+            response.headers["x-session-id"] = session_id
         return response
     finally:
         reset_request_db_identity(db_identity_tokens)
@@ -573,10 +739,22 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     Handle HTTP exceptions (4xx, 5xx).
     Logs the error with appropriate level and returns JSON response with CORS headers.
     """
-    if exc.status_code >= 500:
-        logger.error(f"HTTP {exc.status_code} error on {request.method} {request.url.path}: {exc.detail}")
-    else:
-        logger.warning(f"HTTP {exc.status_code} error on {request.method} {request.url.path}: {exc.detail}")
+    level = logging.ERROR if exc.status_code >= 500 else logging.WARNING
+    _log_json(
+        level,
+        {
+            "event": "http_exception",
+            "status": exc.status_code,
+            "detail": exc.detail,
+            **_request_meta(request),
+        },
+    )
+
+    if exc.status_code >= 500 and _sentry_enabled():
+        try:
+            sentry_sdk.capture_exception(exc)  # type: ignore[union-attr]
+        except Exception:
+            pass
     
     response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     
@@ -593,9 +771,18 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """
     Handle request validation errors (422).
     """
-    logger.warning(f"Validation error on {request.method} {request.url.path}: {exc.errors()}")
     from fastapi.encoders import jsonable_encoder
-    response = JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
+    errors = jsonable_encoder(exc.errors())
+    _log_json(
+        logging.WARNING,
+        {
+            "event": "validation_error",
+            "status": 422,
+            "errors": errors,
+            **_request_meta(request),
+        },
+    )
+    response = JSONResponse(status_code=422, content={"detail": errors})
     
     origin = request.headers.get("origin")
     if origin:
@@ -615,7 +802,16 @@ async def general_exception_handler(request: Request, exc: Exception):
     is_neo4j_error = "neo4j" in str(type(exc)).lower() or "ServiceUnavailable" in exc_name or "ConnectionRefused" in exc_name
     
     if is_neo4j_error:
-        logger.warning(f"Neo4j connection error detected: {exc}")
+        _log_json(
+            logging.WARNING,
+            {
+                "event": "dependency_unreachable",
+                "dependency": "neo4j",
+                "exc_type": exc_name,
+                "error": str(exc),
+                **_request_meta(request),
+            },
+        )
         response = JSONResponse(
             status_code=503,
             content={
@@ -627,7 +823,22 @@ async def general_exception_handler(request: Request, exc: Exception):
             }
         )
     else:
-        logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=30))
+        _log_json(
+            logging.ERROR,
+            {
+                "event": "unhandled_exception",
+                "exc_type": exc_name,
+                "error": str(exc),
+                "traceback": tb,
+                **_request_meta(request),
+            },
+        )
+        if _sentry_enabled():
+            try:
+                sentry_sdk.capture_exception(exc)  # type: ignore[union-attr]
+            except Exception:
+                pass
         response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
     
     # Ensure CORS headers are present even when bypassing middleware

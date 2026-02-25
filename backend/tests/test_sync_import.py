@@ -12,12 +12,7 @@ try:
             methods = ', '.join(route.methods) if route.methods else 'N/A'
             print(f"  {methods:8} {route.path}")
     
-    # Test the capture function import
-    from services_sync_capture import capture_selection_into_graph
-    print(f"\n✓ capture_selection_into_graph imported successfully")
-    
 except Exception as e:
     print(f"✗ ERROR: {e}")
     import traceback
     traceback.print_exc()
-

@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel
+import uuid
 
 # Every time a client hits an API endpoint, FastAPI opens a fresh connection to Neo4j. It runs the query. Then, closes the connection.
 # This avoids sharing one long-lived session across requests. Futhermore, it prevents race conditions. 
@@ -678,6 +679,65 @@ def update_concept_endpoint(
     # Auto-export to CSV after updating - only export the graph that was modified
     auto_export_csv(background_tasks, export_per_graph=True, graph_id=graph_id_for_export)
     return concept
+
+
+@router.post("/{node_id}/pin")
+def pin_concept_endpoint(
+    node_id: str,
+    pinned: bool = Query(True),
+    session=Depends(get_neo4j_session)
+):
+    """
+    Pin or unpin a concept in the graph.
+    
+    PURPOSE:
+    Allows users to highlight important concepts for quick access. 
+    Pinned concepts can be prioritized in search and UI.
+    
+    HOW IT WORKS:
+    - Updates 'pinned' property on the Concept node in Neo4j.
+    - Emits a CONCEPT_PINNED activity event.
+    """
+    ensure_graph_scoping_initialized(session)
+    graph_id, branch_id = get_active_graph_context(session)
+    
+    # Update Neo4j
+    query = """
+    MATCH (c:Concept {graph_id: $graph_id, node_id: $node_id})
+    SET c.pinned = $pinned
+    RETURN c.name AS name
+    """
+    result = session.run(query, graph_id=graph_id, node_id=node_id, pinned=pinned)
+    record = result.single()
+    if not record:
+        raise HTTPException(status_code=404, detail="Concept not found")
+    
+    # Emit ActivityEvent
+    try:
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'CONCEPT_PINNED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id="system", 
+            graph_id=graph_id,
+            payload={"node_id": node_id, "concept_name": record["name"], "pinned": pinned},
+            created_at=now
+        )
+    except Exception as e:
+         import logging
+         logging.getLogger("brain_web").warning(f"Failed to emit CONCEPT_PINNED event: {e}")
+        
+    return {"status": "ok", "pinned": pinned, "name": record["name"]}
 
 
 @router.post("/relationship")

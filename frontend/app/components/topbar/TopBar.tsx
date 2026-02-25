@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { listGraphs, selectGraph, createGraph, searchConcepts, searchResources, getConcept, createConcept, deleteConcept, createRelationshipByIds, type CreateGraphOptions, type GraphSummary, type Concept, type Resource } from '../../api-client';
+import { listGraphs, listWorkspaceTemplates, selectGraph, createGraph, searchConcepts, searchResources, getConcept, createConcept, deleteConcept, createRelationshipByIds, updateGraphRefreshDefaults, type CreateGraphOptions, type GraphSummary, type Concept, type Resource, type RefreshBindingConfig, type WorkspaceTemplate } from '../../api-client';
 import { useSidebar } from '../context-providers/SidebarContext';
 import { useTheme } from '../context-providers/ThemeProvider';
 import { setLastSession, getRecentConceptViews, pushRecentConceptView, getLastSession, togglePinConcept, isConceptPinned } from '../../lib/sessionState';
@@ -58,6 +58,7 @@ const GRAPH_TEMPLATES = [
     description: 'Start with an empty graph and build from scratch.',
     tags: ['flexible', 'general'],
     intent: 'Explore ideas and connect concepts freely.',
+    refreshPresetId: 'none',
   },
   {
     id: 'lecture',
@@ -65,6 +66,7 @@ const GRAPH_TEMPLATES = [
     description: 'Turn classes into connected study maps.',
     tags: ['slides', 'readings', 'definitions'],
     intent: 'Capture lecture concepts and build exam-ready connections.',
+    refreshPresetId: 'none',
   },
   {
     id: 'literature',
@@ -72,8 +74,646 @@ const GRAPH_TEMPLATES = [
     description: 'Map papers, methods, and research gaps.',
     tags: ['citations', 'methods', 'summaries'],
     intent: 'Synthesize a research landscape and highlight gaps.',
+    refreshPresetId: 'literature_review',
+  },
+  {
+    id: 'news_tracking',
+    label: 'News tracking',
+    description: 'Monitor topics, people, and organizations for updates.',
+    tags: ['news', 'monitoring', 'alerts'],
+    intent: 'Track a topic over time and collect high-signal updates.',
+    refreshPresetId: 'news_tracking',
+  },
+  {
+    id: 'stock_research',
+    label: 'Stock research',
+    description: 'Track companies with live metrics, news, and organizational changes.',
+    tags: ['markets', 'earnings', 'company'],
+    intent: 'Build and maintain an investment/company research workspace.',
+    refreshPresetId: 'stock_research',
+  },
+  {
+    id: 'person_research',
+    label: 'Person research',
+    description: 'Track people, role changes, appearances, and related news.',
+    tags: ['people', 'profiles', 'changes'],
+    intent: 'Follow important people and how their roles and influence evolve.',
+    refreshPresetId: 'person_research',
   },
 ];
+
+type RefreshTemplatePresetId =
+  | 'none'
+  | 'literature_review'
+  | 'news_tracking'
+  | 'stock_research'
+  | 'person_research';
+
+const REFRESH_TEMPLATE_PRESETS: Record<
+  RefreshTemplatePresetId,
+  { label: string; description: string; defaults: RefreshBindingConfig | null }
+> = {
+  none: {
+    label: 'No refresh defaults',
+    description: 'New nodes will not auto-check for updates unless you enable it per node.',
+    defaults: null,
+  },
+  literature_review: {
+    label: 'Literature review updates',
+    description: 'Periodic paper/news scans and summaries for each node.',
+    defaults: {
+      version: 1,
+      enabled: true,
+      inherit_workspace_defaults: true,
+      triggers: ['manual', 'on_open', 'scheduled'],
+      ttl_seconds: 86400,
+      checks: [
+        {
+          check_id: 'lit-news',
+          kind: 'exa_news',
+          title: 'Recent headlines',
+          query: '{{concept_name}} research news',
+          enabled: true,
+          params: { max_age_hours: 24, limit: 6 },
+        },
+        {
+          check_id: 'lit-summary',
+          kind: 'exa_answer',
+          title: 'Recent developments summary',
+          query: 'latest developments in {{concept_name}} research',
+          enabled: true,
+          params: { max_age_hours: 72 },
+        },
+      ],
+    },
+  },
+  news_tracking: {
+    label: 'News tracking updates',
+    description: 'Headline feed + grounded summary for each node/topic.',
+    defaults: {
+      version: 1,
+      enabled: true,
+      inherit_workspace_defaults: true,
+      triggers: ['manual', 'on_open', 'scheduled'],
+      ttl_seconds: 3600,
+      checks: [
+        {
+          check_id: 'news-feed',
+          kind: 'exa_news',
+          title: 'News feed',
+          query: '{{concept_name}}',
+          enabled: true,
+          params: { max_age_hours: 6, limit: 8 },
+        },
+        {
+          check_id: 'news-summary',
+          kind: 'exa_answer',
+          title: 'What changed',
+          query: 'What are the latest relevant updates about {{concept_name}}?',
+          enabled: true,
+          params: { category: 'news', max_age_hours: 12 },
+        },
+      ],
+    },
+  },
+  stock_research: {
+    label: 'Company / stock research updates',
+    description: 'Live metric snapshot, company news, and organizational changes per node.',
+    defaults: {
+      version: 1,
+      enabled: true,
+      inherit_workspace_defaults: true,
+      triggers: ['manual', 'on_open', 'scheduled'],
+      ttl_seconds: 1800,
+      checks: [
+        {
+          check_id: 'live-metric',
+          kind: 'live_metric',
+          title: 'Live metric snapshot',
+          query: '{{concept_name}} stock price',
+          enabled: true,
+          params: {},
+        },
+        {
+          check_id: 'company-news',
+          kind: 'exa_news',
+          title: 'Company headlines',
+          query: '{{concept_name}} company news',
+          enabled: true,
+          params: { max_age_hours: 12, limit: 8 },
+        },
+        {
+          check_id: 'org-changes',
+          kind: 'exa_answer',
+          title: 'Organizational changes',
+          query: 'recent organizational changes leadership changes or restructuring at {{concept_name}}',
+          enabled: true,
+          params: { category: 'news', max_age_hours: 72 },
+        },
+      ],
+    },
+  },
+  person_research: {
+    label: 'Person research updates',
+    description: 'Track role changes, public appearances, and latest mentions per node.',
+    defaults: {
+      version: 1,
+      enabled: true,
+      inherit_workspace_defaults: true,
+      triggers: ['manual', 'on_open', 'scheduled'],
+      ttl_seconds: 21600,
+      checks: [
+        {
+          check_id: 'person-news',
+          kind: 'exa_news',
+          title: 'Recent mentions',
+          query: '{{concept_name}}',
+          enabled: true,
+          params: { max_age_hours: 24, limit: 6 },
+        },
+        {
+          check_id: 'role-change',
+          kind: 'exa_answer',
+          title: 'Role and org changes',
+          query: 'latest role changes title changes employer changes for {{concept_name}}',
+          enabled: true,
+          params: { max_age_hours: 168 },
+        },
+      ],
+    },
+  },
+};
+
+function getTemplateRefreshPresetId(templateId: string): RefreshTemplatePresetId {
+  const template = GRAPH_TEMPLATES.find((item) => item.id === templateId);
+  return (template?.refreshPresetId as RefreshTemplatePresetId) || 'none';
+}
+
+function cloneRefreshDefaults(config: RefreshBindingConfig | null): RefreshBindingConfig | null {
+  if (!config) return null;
+  return {
+    version: config.version || 1,
+    enabled: Boolean(config.enabled),
+    inherit_workspace_defaults: config.inherit_workspace_defaults ?? true,
+    triggers: Array.isArray(config.triggers) ? [...config.triggers] : ['manual'],
+    ttl_seconds: typeof config.ttl_seconds === 'number' ? config.ttl_seconds : 3600,
+    checks: Array.isArray(config.checks)
+      ? config.checks.map((check) => ({
+          check_id: check.check_id || null,
+          kind: check.kind,
+          query: check.query,
+          title: check.title || null,
+          enabled: check.enabled ?? true,
+          params: check.params ? { ...check.params } : {},
+        }))
+      : [],
+  };
+}
+
+type BuiltInGraphTemplate = (typeof GRAPH_TEMPLATES)[number];
+
+type CreateGraphTemplateOption = {
+  id: string;
+  source: 'builtin' | 'custom';
+  label: string;
+  description: string;
+  tags: string[];
+  intent?: string;
+  refreshPresetId?: RefreshTemplatePresetId;
+  customTemplate?: WorkspaceTemplate;
+};
+
+function isCustomTemplateOptionId(value: string): boolean {
+  return value.startsWith('custom:');
+}
+
+function customTemplateOptionId(templateId: string): string {
+  return `custom:${templateId}`;
+}
+
+type TemplateStarterNodeSeed = {
+  key: string;
+  name: string;
+  type?: string;
+  description?: string;
+  domain?: string;
+};
+
+type TemplateStarterEdgeSeed = {
+  sourceKey: string;
+  targetKey: string;
+  predicate: string;
+};
+
+type TemplateStarterSeed = {
+  nodes: TemplateStarterNodeSeed[];
+  edges: TemplateStarterEdgeSeed[];
+};
+
+const BUILTIN_TEMPLATE_STARTERS: Record<string, TemplateStarterSeed> = {
+  lecture: {
+    nodes: [
+      { key: 'course_topic', name: 'Course Topic', type: 'Topic' },
+      { key: 'lecture_concept', name: 'Lecture Concept', type: 'Concept' },
+      { key: 'definition', name: 'Core Definition', type: 'Definition' },
+      { key: 'example', name: 'Worked Example', type: 'Example' },
+    ],
+    edges: [
+      { sourceKey: 'course_topic', targetKey: 'lecture_concept', predicate: 'covers' },
+      { sourceKey: 'lecture_concept', targetKey: 'definition', predicate: 'defines' },
+      { sourceKey: 'lecture_concept', targetKey: 'example', predicate: 'illustrated_by' },
+    ],
+  },
+  literature: {
+    nodes: [
+      { key: 'research_topic', name: 'Research Topic', type: 'Topic' },
+      { key: 'paper_a', name: 'Reference Paper A', type: 'Paper' },
+      { key: 'paper_b', name: 'Reference Paper B', type: 'Paper' },
+      { key: 'method', name: 'Core Method', type: 'Method' },
+    ],
+    edges: [
+      { sourceKey: 'paper_a', targetKey: 'research_topic', predicate: 'studies' },
+      { sourceKey: 'paper_b', targetKey: 'research_topic', predicate: 'studies' },
+      { sourceKey: 'paper_a', targetKey: 'method', predicate: 'uses' },
+      { sourceKey: 'paper_b', targetKey: 'method', predicate: 'compares' },
+    ],
+  },
+  news_tracking: {
+    nodes: [
+      { key: 'event', name: 'Tracked Event', type: 'Event' },
+      { key: 'organization', name: 'Primary Organization', type: 'Organization' },
+      { key: 'person', name: 'Primary Person', type: 'Person' },
+      { key: 'claim', name: 'Key Claim', type: 'Claim' },
+    ],
+    edges: [
+      { sourceKey: 'event', targetKey: 'organization', predicate: 'involves' },
+      { sourceKey: 'event', targetKey: 'person', predicate: 'announced_by' },
+      { sourceKey: 'claim', targetKey: 'event', predicate: 'supports' },
+    ],
+  },
+  stock_research: {
+    nodes: [
+      { key: 'company', name: 'Target Company', type: 'Company' },
+      { key: 'ticker', name: 'Primary Ticker', type: 'Ticker' },
+      { key: 'executive', name: 'Lead Executive', type: 'Executive' },
+      { key: 'product', name: 'Key Product Line', type: 'Product' },
+      { key: 'competitor', name: 'Primary Competitor', type: 'Competitor' },
+    ],
+    edges: [
+      { sourceKey: 'company', targetKey: 'ticker', predicate: 'listed_as' },
+      { sourceKey: 'executive', targetKey: 'company', predicate: 'leads' },
+      { sourceKey: 'company', targetKey: 'product', predicate: 'ships' },
+      { sourceKey: 'company', targetKey: 'competitor', predicate: 'competes_with' },
+    ],
+  },
+  person_research: {
+    nodes: [
+      { key: 'person', name: 'Target Person', type: 'Person' },
+      { key: 'organization', name: 'Current Organization', type: 'Organization' },
+      { key: 'project', name: 'Key Project', type: 'Project' },
+      { key: 'event', name: 'Recent Event', type: 'Event' },
+    ],
+    edges: [
+      { sourceKey: 'person', targetKey: 'organization', predicate: 'works_at' },
+      { sourceKey: 'person', targetKey: 'project', predicate: 'works_on' },
+      { sourceKey: 'person', targetKey: 'event', predicate: 'mentioned_in' },
+      { sourceKey: 'organization', targetKey: 'event', predicate: 'announced' },
+    ],
+  },
+};
+
+function normalizeSeedToken(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function sanitizePredicate(value: string): string {
+  const normalized = normalizeSeedToken(value);
+  return normalized || 'related_to';
+}
+
+function buildStarterNodeLabel(typeLabel: string, index: number): string {
+  const key = normalizeSeedToken(typeLabel);
+  if (!key) return `Node ${index + 1}`;
+  if (key.includes('company')) return 'Target Company';
+  if (key.includes('ticker')) return 'Primary Ticker';
+  if (key.includes('executive')) return 'Lead Executive';
+  if (key.includes('competitor')) return 'Primary Competitor';
+  if (key.includes('supplier')) return 'Key Supplier';
+  if (key.includes('product')) return 'Key Product';
+  if (key.includes('person')) return 'Target Person';
+  if (key.includes('organization') || key === 'org') return 'Primary Organization';
+  if (key.includes('event')) return 'Tracked Event';
+  if (key.includes('project')) return 'Key Project';
+  if (key.includes('claim')) return 'Key Claim';
+  if (key.includes('location')) return 'Relevant Location';
+  if (key.includes('paper')) return 'Reference Paper';
+  if (key.includes('method')) return 'Core Method';
+  if (key.includes('topic')) return 'Research Topic';
+  return `${String(typeLabel).trim() || 'Node'} ${index + 1}`;
+}
+
+function buildUniqueSeedKey(base: string, used: Set<string>, fallbackIndex: number): string {
+  let key = normalizeSeedToken(base) || `node_${fallbackIndex + 1}`;
+  if (!used.has(key)) {
+    used.add(key);
+    return key;
+  }
+  let n = 2;
+  while (used.has(`${key}_${n}`)) n += 1;
+  const next = `${key}_${n}`;
+  used.add(next);
+  return next;
+}
+
+function parseConnectionPattern(pattern: string): { sourceType: string; targetType: string; predicate: string } | null {
+  const raw = String(pattern || '').trim();
+  if (!raw) return null;
+
+  const arrowMatch = raw.match(/^(.*?)\s*(?:<->|↔|->|→)\s*(.*)$/);
+  if (!arrowMatch) return null;
+
+  const sourceType = (arrowMatch[1] || '').trim();
+  let targetPart = (arrowMatch[2] || '').trim();
+  if (!sourceType || !targetPart) return null;
+
+  let predicate = 'related_to';
+  const parenMatch = targetPart.match(/\(([^)]+)\)/);
+  if (parenMatch && parenMatch[1]) {
+    const firstPredicate = parenMatch[1]
+      .split(',')
+      .map((item) => item.trim())
+      .find(Boolean);
+    if (firstPredicate) {
+      predicate = sanitizePredicate(firstPredicate);
+    }
+    targetPart = targetPart.replace(parenMatch[0], '').trim();
+  }
+
+  return {
+    sourceType,
+    targetType: targetPart,
+    predicate,
+  };
+}
+
+function buildCustomTemplateStarterSeed(template: WorkspaceTemplate): TemplateStarterSeed | null {
+  const typeList = Array.from(
+    new Set((template.node_types || []).map((item) => String(item || '').trim()).filter(Boolean)),
+  ).slice(0, 8);
+  const starterNames = (template.starter_nodes || [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  if (typeList.length === 0 && starterNames.length === 0) return null;
+
+  const usedKeys = new Set<string>();
+  const nodes: TemplateStarterNodeSeed[] = [];
+  const maxCount = Math.max(typeList.length, starterNames.length);
+  for (let index = 0; index < maxCount; index += 1) {
+    const typeLabel = typeList[index];
+    const starterName = starterNames[index];
+    const name = starterName || (typeLabel ? buildStarterNodeLabel(typeLabel, index) : `Node ${index + 1}`);
+    nodes.push({
+      key: buildUniqueSeedKey(starterName || typeLabel || `node_${index + 1}`, usedKeys, index),
+      name,
+      type: typeLabel || undefined,
+    });
+  }
+
+  const keyByType = new Map<string, string>();
+  for (const node of nodes) {
+    if (node.type) {
+      const normalizedType = normalizeSeedToken(node.type);
+      if (normalizedType && !keyByType.has(normalizedType)) {
+        keyByType.set(normalizedType, node.key);
+      }
+    }
+  }
+
+  const edges: TemplateStarterEdgeSeed[] = [];
+  const seenEdges = new Set<string>();
+  for (const pattern of template.connection_patterns || []) {
+    const parsed = parseConnectionPattern(pattern);
+    if (!parsed) continue;
+    const sourceKey = keyByType.get(normalizeSeedToken(parsed.sourceType));
+    const targetKey = keyByType.get(normalizeSeedToken(parsed.targetType));
+    if (!sourceKey || !targetKey || sourceKey === targetKey) continue;
+    const edgeKey = `${sourceKey}|${parsed.predicate}|${targetKey}`;
+    if (seenEdges.has(edgeKey)) continue;
+    seenEdges.add(edgeKey);
+    edges.push({ sourceKey, targetKey, predicate: parsed.predicate });
+    if (edges.length >= 12) break;
+  }
+
+  if (edges.length === 0 && nodes.length > 1) {
+    for (let i = 1; i < nodes.length; i += 1) {
+      edges.push({
+        sourceKey: nodes[0].key,
+        targetKey: nodes[i].key,
+        predicate: 'related_to',
+      });
+    }
+  }
+
+  return { nodes, edges };
+}
+
+function resolveTemplateStarterSeed(params: {
+  builtInTemplate: BuiltInGraphTemplate | null;
+  customTemplate: WorkspaceTemplate | null;
+}): TemplateStarterSeed | null {
+  const { builtInTemplate, customTemplate } = params;
+  if (customTemplate) return buildCustomTemplateStarterSeed(customTemplate);
+  if (builtInTemplate) return BUILTIN_TEMPLATE_STARTERS[builtInTemplate.id] || null;
+  return null;
+}
+
+function deriveSeedDomain(
+  builtInTemplate: BuiltInGraphTemplate | null,
+  customTemplate: WorkspaceTemplate | null,
+): string {
+  const raw = customTemplate?.vertical || builtInTemplate?.id || 'general';
+  const normalized = normalizeSeedToken(raw).replace(/_+/g, '_');
+  return normalized || 'general';
+}
+
+async function seedStarterTemplateGraph(params: {
+  graphId: string;
+  builtInTemplate: BuiltInGraphTemplate | null;
+  customTemplate: WorkspaceTemplate | null;
+}): Promise<{ nodesCreated: number; edgesCreated: number }> {
+  const { graphId, builtInTemplate, customTemplate } = params;
+  const seed = resolveTemplateStarterSeed({ builtInTemplate, customTemplate });
+  if (!seed || !seed.nodes.length) {
+    return { nodesCreated: 0, edgesCreated: 0 };
+  }
+
+  const domain = deriveSeedDomain(builtInTemplate, customTemplate);
+  const createdConcepts = new Map<string, Concept>();
+  let nodesCreated = 0;
+  let edgesCreated = 0;
+
+  for (const node of seed.nodes.slice(0, 12)) {
+    try {
+      const created = await createConcept({
+        name: node.name,
+        domain: node.domain || domain,
+        type: node.type || 'concept',
+        description: node.description || null,
+        graph_id: graphId,
+      });
+      createdConcepts.set(node.key, created);
+      nodesCreated += 1;
+    } catch (error) {
+      console.error('Failed to create starter template node:', node, error);
+    }
+  }
+
+  for (const edge of seed.edges.slice(0, 24)) {
+    const source = createdConcepts.get(edge.sourceKey);
+    const target = createdConcepts.get(edge.targetKey);
+    if (!source || !target || source.node_id === target.node_id) continue;
+    try {
+      await createRelationshipByIds(source.node_id, target.node_id, sanitizePredicate(edge.predicate));
+      edgesCreated += 1;
+    } catch (error) {
+      console.error('Failed to create starter template relationship:', edge, error);
+    }
+  }
+
+  return { nodesCreated, edgesCreated };
+}
+
+function MiniStarterSeedPreview({
+  seed,
+  templateLabel,
+}: {
+  seed: TemplateStarterSeed | null;
+  templateLabel?: string;
+}) {
+  if (!seed || !seed.nodes.length) {
+    return (
+      <div
+        style={{
+          border: '1px dashed var(--border)',
+          borderRadius: '8px',
+          padding: '10px',
+          color: 'var(--muted)',
+          fontSize: '12px',
+          background: 'rgba(255,255,255,0.55)',
+        }}
+      >
+        No starter nodes for this template. This workspace will start empty.
+      </div>
+    );
+  }
+
+  const visibleNodes = seed.nodes.slice(0, 6);
+  const points = [
+    { x: 26, y: 28 },
+    { x: 94, y: 18 },
+    { x: 160, y: 28 },
+    { x: 52, y: 92 },
+    { x: 128, y: 94 },
+    { x: 94, y: 58 },
+  ];
+  const pointByKey = new Map(visibleNodes.map((node, idx) => [node.key, points[idx]] as const));
+  const visibleEdges = (seed.edges || []).filter((edge) => pointByKey.has(edge.sourceKey) && pointByKey.has(edge.targetKey)).slice(0, 12);
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
+        padding: '10px',
+        background: 'rgba(255,255,255,0.6)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ink)' }}>
+          Starter seed preview{templateLabel ? ` · ${templateLabel}` : ''}
+        </div>
+        <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+          {seed.nodes.length} nodes · {seed.edges.length} links
+        </div>
+      </div>
+
+      <svg
+        viewBox="0 0 186 118"
+        width="100%"
+        height="118"
+        style={{ display: 'block', borderRadius: '8px', border: '1px solid var(--border)', background: 'rgba(255,255,255,0.7)' }}
+      >
+        {visibleEdges.length > 0
+          ? visibleEdges.map((edge, index) => {
+              const a = pointByKey.get(edge.sourceKey);
+              const b = pointByKey.get(edge.targetKey);
+              if (!a || !b) return null;
+              return (
+                <line
+                  key={`${edge.sourceKey}-${edge.predicate}-${edge.targetKey}-${index}`}
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  stroke="rgba(99,102,241,0.28)"
+                  strokeWidth="1.4"
+                />
+              );
+            })
+          : visibleNodes.map((_, idx) => {
+              if (idx === 0) return null;
+              return (
+                <line
+                  key={`fallback-${idx}`}
+                  x1={points[0].x}
+                  y1={points[0].y}
+                  x2={points[idx].x}
+                  y2={points[idx].y}
+                  stroke="rgba(100,116,139,0.28)"
+                  strokeWidth="1.3"
+                />
+              );
+            })}
+
+        {visibleNodes.map((node, idx) => (
+          <g key={node.key} transform={`translate(${points[idx].x},${points[idx].y})`}>
+            <circle r={idx === 0 ? 12 : 9.5} fill={idx === 0 ? 'rgba(99,102,241,0.18)' : 'white'} stroke="rgba(99,102,241,0.55)" strokeWidth="1.2" />
+            <text x={0} y={idx === 0 ? 25 : 22} textAnchor="middle" style={{ fontSize: '7px', fill: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+              {node.name.length > 12 ? `${node.name.slice(0, 12)}…` : node.name}
+            </text>
+          </g>
+        ))}
+      </svg>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '4px' }}>
+        {seed.nodes.slice(0, 5).map((node) => (
+          <div key={`seed-node-${node.key}`} style={{ fontSize: '11px', color: 'var(--muted)' }}>
+            <span style={{ color: 'var(--ink)' }}>{node.name}</span>
+            {node.type ? <span> · {node.type}</span> : null}
+          </div>
+        ))}
+        {seed.nodes.length > 5 && (
+          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>+ {seed.nodes.length - 5} more starter nodes</div>
+        )}
+      </div>
+
+      {seed.edges.length > 0 && (
+        <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+          Link predicates: {Array.from(new Set(seed.edges.slice(0, 6).map((edge) => edge.predicate))).join(', ')}
+          {seed.edges.length > 6 ? ', …' : ''}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface RecentConcept {
   node_id: string;
@@ -885,10 +1525,15 @@ export default function TopBar() {
   const [createGraphLoading, setCreateGraphLoading] = useState(false);
   const [createGraphTemplateId, setCreateGraphTemplateId] = useState('blank');
   const [createGraphIntent, setCreateGraphIntent] = useState('');
+  const [createGraphApplyRefreshDefaults, setCreateGraphApplyRefreshDefaults] = useState(false);
+  const [createGraphRefreshPresetId, setCreateGraphRefreshPresetId] = useState<RefreshTemplatePresetId>('none');
+  const [customTemplates, setCustomTemplates] = useState<WorkspaceTemplate[]>([]);
+  const [customTemplatesLoading, setCustomTemplatesLoading] = useState(false);
   const [graphSearchQuery, setGraphSearchQuery] = useState('');
   const [scopePickerSearchQuery, setScopePickerSearchQuery] = useState('');
   const graphSwitcherRef = useRef<HTMLDivElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
+  const createGraphDeepLinkHandledRef = useRef<string | null>(null);
   const [isNewNoteModalOpen, setNewNoteModalOpen] = useState(false);
 
 
@@ -913,6 +1558,32 @@ export default function TopBar() {
       }
     }
     loadGraphs();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCustomTemplates() {
+      try {
+        setCustomTemplatesLoading(true);
+        const response = await listWorkspaceTemplates();
+        if (!cancelled) {
+          setCustomTemplates(Array.isArray(response.templates) ? response.templates : []);
+        }
+      } catch (err) {
+        console.warn('Failed to load custom templates:', err);
+        if (!cancelled) {
+          setCustomTemplates([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setCustomTemplatesLoading(false);
+        }
+      }
+    }
+    void loadCustomTemplates();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Update active graph when URL changes - sync with URL param
@@ -1821,6 +2492,8 @@ export default function TopBar() {
     setCreateGraphError(null);
     setCreateGraphTemplateId('blank');
     setCreateGraphIntent('');
+    setCreateGraphRefreshPresetId('none');
+    setCreateGraphApplyRefreshDefaults(false);
     setCreateGraphOpen(true);
     setNewMenuOpen(false);
     setGraphSwitcherOpen(false);
@@ -1833,14 +2506,25 @@ export default function TopBar() {
       return;
     }
 
-    const selectedTemplate = GRAPH_TEMPLATES.find(template => template.id === createGraphTemplateId);
+    const selectedBuiltInTemplate = GRAPH_TEMPLATES.find(template => template.id === createGraphTemplateId);
+    const selectedCustomTemplate = isCustomTemplateOptionId(createGraphTemplateId)
+      ? customTemplates.find((template) => customTemplateOptionId(template.template_id) === createGraphTemplateId)
+      : null;
     const options: CreateGraphOptions = {};
 
-    if (selectedTemplate && selectedTemplate.id !== 'blank') {
-      options.template_id = selectedTemplate.id;
-      options.template_label = selectedTemplate.label;
-      options.template_description = selectedTemplate.description;
-      options.template_tags = selectedTemplate.tags;
+    if (selectedBuiltInTemplate && selectedBuiltInTemplate.id !== 'blank') {
+      options.template_id = selectedBuiltInTemplate.id;
+      options.template_label = selectedBuiltInTemplate.label;
+      options.template_description = selectedBuiltInTemplate.description;
+      options.template_tags = selectedBuiltInTemplate.tags;
+    } else if (selectedCustomTemplate) {
+      options.template_id = selectedCustomTemplate.template_id;
+      options.template_label = selectedCustomTemplate.label;
+      options.template_description = selectedCustomTemplate.description || undefined;
+      options.template_tags = selectedCustomTemplate.tags || [];
+      if (!createGraphIntent.trim() && selectedCustomTemplate.intent) {
+        options.intent = selectedCustomTemplate.intent;
+      }
     }
 
     if (createGraphIntent.trim()) {
@@ -1851,6 +2535,39 @@ export default function TopBar() {
     setCreateGraphError(null);
     try {
       const result = await createGraph(name, Object.keys(options).length ? options : undefined);
+
+      if (createGraphApplyRefreshDefaults) {
+        const defaults = selectedCustomTemplate?.refresh_defaults
+          ? cloneRefreshDefaults(selectedCustomTemplate.refresh_defaults)
+          : cloneRefreshDefaults(REFRESH_TEMPLATE_PRESETS[createGraphRefreshPresetId]?.defaults || null);
+        if (defaults) {
+          try {
+            await updateGraphRefreshDefaults(result.active_graph_id, defaults);
+          } catch (refreshDefaultsErr) {
+            console.error('Failed to apply workspace refresh defaults:', refreshDefaultsErr);
+          }
+        }
+      }
+
+      try {
+        await selectGraph(result.active_graph_id);
+        const seeded = await seedStarterTemplateGraph({
+          graphId: result.active_graph_id,
+          builtInTemplate: selectedBuiltInTemplate && selectedBuiltInTemplate.id !== 'blank' ? selectedBuiltInTemplate : null,
+          customTemplate: selectedCustomTemplate || null,
+        });
+        if (seeded.nodesCreated || seeded.edgesCreated) {
+          console.info('Seeded starter workspace graph from template', {
+            graph_id: result.active_graph_id,
+            nodes_created: seeded.nodesCreated,
+            edges_created: seeded.edgesCreated,
+            template_id: selectedCustomTemplate?.template_id || selectedBuiltInTemplate?.id || null,
+          });
+        }
+      } catch (seedErr) {
+        console.error('Failed to generate starter node/check set from template:', seedErr);
+      }
+
       setActiveGraphId(result.active_graph_id);
       addRecentGraph(result.active_graph_id);
 
@@ -1872,7 +2589,7 @@ export default function TopBar() {
     } finally {
       setCreateGraphLoading(false);
     }
-  }, [createGraphName, router]);
+  }, [createGraphName, createGraphApplyRefreshDefaults, createGraphRefreshPresetId, createGraphTemplateId, createGraphIntent, customTemplates, pathname, router]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -1903,6 +2620,55 @@ export default function TopBar() {
     }
   }, [createGraphOpen]);
 
+  useEffect(() => {
+    const createGraphFlag = searchParams?.get('create_graph');
+    if (createGraphFlag !== '1') return;
+
+    const templateSource = (searchParams?.get('template_source') || 'builtin').toLowerCase();
+    const templateIdParam = (searchParams?.get('template_id') || '').trim();
+    const key = `${searchParams?.toString() || ''}|custom_count=${customTemplates.length}|loading=${customTemplatesLoading ? 1 : 0}`;
+    if (createGraphDeepLinkHandledRef.current === key) return;
+
+    if (templateSource === 'custom' && customTemplatesLoading) {
+      return;
+    }
+
+    handleCreateGraph();
+
+    if (templateIdParam) {
+      if (templateSource === 'custom') {
+        const customTemplate = customTemplates.find((t) => t.template_id === templateIdParam);
+        if (customTemplate) {
+          setCreateGraphTemplateId(customTemplateOptionId(customTemplate.template_id));
+          setCreateGraphApplyRefreshDefaults(Boolean(customTemplate.refresh_defaults));
+          setCreateGraphRefreshPresetId('none');
+          if (!createGraphName.trim()) {
+            setCreateGraphName(customTemplate.label);
+          }
+          if (customTemplate.intent) {
+            setCreateGraphIntent(customTemplate.intent);
+          }
+        }
+      } else {
+        const builtin = GRAPH_TEMPLATES.find((t) => t.id === templateIdParam);
+        if (builtin) {
+          setCreateGraphTemplateId(builtin.id);
+          const recommendedPreset = getTemplateRefreshPresetId(builtin.id);
+          setCreateGraphRefreshPresetId(recommendedPreset);
+          setCreateGraphApplyRefreshDefaults(recommendedPreset !== 'none');
+          if (!createGraphName.trim()) {
+            setCreateGraphName(builtin.label);
+          }
+          if (builtin.intent) {
+            setCreateGraphIntent(builtin.intent);
+          }
+        }
+      }
+    }
+
+    createGraphDeepLinkHandledRef.current = key;
+  }, [searchParams, customTemplates, customTemplatesLoading, handleCreateGraph]);
+
   const recentGraphIds = getRecentGraphs();
   const pinnedGraphIds = getPinnedGraphs();
 
@@ -1928,6 +2694,40 @@ export default function TopBar() {
   );
 
   const currentGraph = graphs.find(g => g.graph_id === activeGraphId);
+  const createGraphTemplateOptions = useMemo<CreateGraphTemplateOption[]>(() => {
+    const builtins: CreateGraphTemplateOption[] = GRAPH_TEMPLATES.map((template) => ({
+      id: template.id,
+      source: 'builtin',
+      label: template.label,
+      description: template.description,
+      tags: [...template.tags],
+      intent: template.intent,
+      refreshPresetId: template.refreshPresetId as RefreshTemplatePresetId,
+    }));
+    const customs: CreateGraphTemplateOption[] = (customTemplates || []).map((template) => ({
+      id: customTemplateOptionId(template.template_id),
+      source: 'custom',
+      label: template.label,
+      description: template.description || 'Custom template',
+      tags: Array.isArray(template.tags) ? template.tags : [],
+      intent: template.intent || undefined,
+      customTemplate: template,
+    }));
+    return [...builtins, ...customs];
+  }, [customTemplates]);
+  const selectedCreateTemplateOption = createGraphTemplateOptions.find((t) => t.id === createGraphTemplateId) || null;
+  const createGraphStarterSeedPreview = useMemo(() => {
+    if (!selectedCreateTemplateOption) return null;
+    const builtInTemplate =
+      selectedCreateTemplateOption.source === 'builtin'
+        ? (GRAPH_TEMPLATES.find((template) => template.id === selectedCreateTemplateOption.id) || null)
+        : null;
+    const customTemplate =
+      selectedCreateTemplateOption.source === 'custom'
+        ? (selectedCreateTemplateOption.customTemplate || null)
+        : null;
+    return resolveTemplateStarterSeed({ builtInTemplate, customTemplate });
+  }, [selectedCreateTemplateOption]);
   const graphDisplayName = currentGraph?.name || activeGraphId || 'Default Graph';
 
   // Format metadata line for graph
@@ -2655,7 +3455,9 @@ export default function TopBar() {
               border: '1px solid var(--border)',
               boxShadow: '0 16px 40px rgba(15, 23, 42, 0.2)',
               width: '100%',
-              maxWidth: '420px',
+              maxWidth: '620px',
+              maxHeight: 'calc(100vh - 48px)',
+              overflowY: 'auto',
               padding: '20px',
               display: 'flex',
               flexDirection: 'column',
@@ -2678,8 +3480,11 @@ export default function TopBar() {
               <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
                 Pick a starting point
               </div>
+              {customTemplatesLoading && (
+                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>Loading custom templates...</div>
+              )}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                {GRAPH_TEMPLATES.map((template) => {
+                {createGraphTemplateOptions.map((template) => {
                   const isSelected = createGraphTemplateId === template.id;
                   return (
                     <button
@@ -2687,7 +3492,15 @@ export default function TopBar() {
                       type="button"
                       onClick={() => {
                         setCreateGraphTemplateId(template.id);
-                        if (!createGraphIntent.trim()) {
+                        if (template.source === 'builtin') {
+                          const recommendedPreset = getTemplateRefreshPresetId(template.id);
+                          setCreateGraphRefreshPresetId(recommendedPreset);
+                          setCreateGraphApplyRefreshDefaults(recommendedPreset !== 'none');
+                        } else {
+                          setCreateGraphRefreshPresetId('none');
+                          setCreateGraphApplyRefreshDefaults(Boolean(template.customTemplate?.refresh_defaults));
+                        }
+                        if (!createGraphIntent.trim() && template.intent) {
                           setCreateGraphIntent(template.intent);
                         }
                       }}
@@ -2708,13 +3521,38 @@ export default function TopBar() {
                         {template.description}
                       </div>
                       <div style={{ fontSize: '11px', color: 'var(--accent)', marginTop: '6px' }}>
-                        {template.tags.join(' · ')}
+                        {[...(template.tags || []), template.source === 'custom' ? 'custom' : 'built-in'].join(' · ')}
                       </div>
                     </button>
                   );
                 })}
               </div>
             </div>
+            {selectedCreateTemplateOption && (
+              <div
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  background: 'var(--panel)',
+                  padding: '10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px',
+                }}
+              >
+                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                  Preview of starter nodes/links created from the selected template.
+                </div>
+                <MiniStarterSeedPreview seed={createGraphStarterSeedPreview} templateLabel={selectedCreateTemplateOption.label} />
+                {selectedCreateTemplateOption.source === 'custom' && selectedCreateTemplateOption.customTemplate && (
+                  <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                    {selectedCreateTemplateOption.customTemplate.starter_nodes?.length
+                      ? 'Using explicit starter node names from this custom template.'
+                      : 'No explicit starter node names set; preview is derived from node types and connection patterns.'}
+                  </div>
+                )}
+              </div>
+            )}
             <input
               ref={createGraphInputRef}
               type="text"
@@ -2755,6 +3593,92 @@ export default function TopBar() {
                 backgroundColor: 'white',
               }}
             />
+            <div
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                padding: '10px',
+                background: 'var(--panel)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: 'var(--ink)' }}>
+                <input
+                  type="checkbox"
+                  checked={createGraphApplyRefreshDefaults}
+                  onChange={(event) => setCreateGraphApplyRefreshDefaults(event.target.checked)}
+                />
+                {selectedCreateTemplateOption?.source === 'custom'
+                  ? 'Apply custom template refresh defaults'
+                  : 'Apply workspace update-check defaults'}
+              </label>
+
+              {selectedCreateTemplateOption?.source === 'custom' && selectedCreateTemplateOption.customTemplate ? (
+                <>
+                  <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                    Uses refresh defaults defined in custom template: <strong style={{ color: 'var(--ink)' }}>{selectedCreateTemplateOption.customTemplate.label}</strong>
+                  </div>
+                  {createGraphApplyRefreshDefaults && selectedCreateTemplateOption.customTemplate.refresh_defaults && (
+                    <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                      Triggers: {(selectedCreateTemplateOption.customTemplate.refresh_defaults.triggers || []).join(', ')} · TTL:{' '}
+                      {Math.round((selectedCreateTemplateOption.customTemplate.refresh_defaults.ttl_seconds || 0) / 60)} min · Checks:{' '}
+                      {selectedCreateTemplateOption.customTemplate.refresh_defaults.checks?.length || 0}
+                    </div>
+                  )}
+                  {!selectedCreateTemplateOption.customTemplate.refresh_defaults && (
+                    <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                      This custom template has no saved workspace refresh defaults.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--muted)' }}>Preset</span>
+                    <select
+                      value={createGraphRefreshPresetId}
+                      onChange={(event) => {
+                        setCreateGraphRefreshPresetId(event.target.value as RefreshTemplatePresetId);
+                        if (event.target.value === 'none') setCreateGraphApplyRefreshDefaults(false);
+                      }}
+                      style={{
+                        flex: '1 1 220px',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        padding: '6px 8px',
+                        fontSize: '12px',
+                        color: 'var(--ink)',
+                        background: 'white',
+                      }}
+                    >
+                      {Object.entries(REFRESH_TEMPLATE_PRESETS).map(([id, preset]) => (
+                        <option key={id} value={id}>{preset.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                    {REFRESH_TEMPLATE_PRESETS[createGraphRefreshPresetId]?.description}
+                  </div>
+
+                  {createGraphApplyRefreshDefaults && REFRESH_TEMPLATE_PRESETS[createGraphRefreshPresetId]?.defaults && (
+                    <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                      Triggers: {REFRESH_TEMPLATE_PRESETS[createGraphRefreshPresetId].defaults?.triggers.join(', ')} · TTL:{' '}
+                      {Math.round((REFRESH_TEMPLATE_PRESETS[createGraphRefreshPresetId].defaults?.ttl_seconds || 0) / 60)} min · Checks:{' '}
+                      {REFRESH_TEMPLATE_PRESETS[createGraphRefreshPresetId].defaults?.checks.length || 0}
+                    </div>
+                  )}
+                </>
+              )}
+              <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                <Link href="/templates" style={{ color: 'var(--accent)' }}>
+                  Open template blueprints
+                </Link>
+                {' '}to design how person/company/news-event templates connect.
+              </div>
+            </div>
             {createGraphError && (
               <div style={{ color: '#b91c1c', fontSize: '12px' }}>{createGraphError}</div>
             )}

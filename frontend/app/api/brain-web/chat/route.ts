@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
 import fs from 'fs';
 import path from 'path';
+import { getCorrelationHeaders } from '../../_utils/correlation';
 import {
   queryRouterAgent,
   profileUpdateAgent,
@@ -36,17 +37,17 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 /**
  * Perform web search and fetch full content using Brain Web's native web search API
  * 
- * Uses SearXNG to search, then fetches full content from links.
- * This provides comprehensive information by actually scraping the pages, not just snippets.
+ * Uses Brain Web's unified real-time retrieval backend (Exa for web/docs + structured providers for live metrics).
+ * This provides comprehensive information by returning full content / structured snapshots, not just snippets.
  * 
  * Flow:
- * 1. Calls backend /web-search/search-and-fetch endpoint (searches via SearXNG and fetches full content)
+ * 1. Calls backend /web-search/search-and-fetch endpoint (unified search + fetch)
  * 2. Falls back to /web-search/search if search-and-fetch fails (returns links only)
  * 
  * Benefits:
  * - Native Brain Web integration (no external dependencies)
- * - SearXNG aggregates multiple search engines (Google, Bing, DuckDuckGo, Brave, etc.)
- * - Full content extraction (Trafilatura - Firecrawl-quality)
+ * - Exa-native web search and extraction
+ * - Structured live metric providers (e.g., stock quote snapshots)
  * - Privacy-respecting (no tracking)
  * - Self-hostable (full control)
  */
@@ -231,18 +232,20 @@ function getBackendHeaders(): Record<string, string> {
 }
 
 async function getBackendHeadersForRequest(request: NextRequest): Promise<Record<string, string>> {
+  const { headers: correlationHeaders } = getCorrelationHeaders(request);
   const authorization = request.headers.get('authorization');
   if (authorization) {
     return {
       'Content-Type': 'application/json',
       'Authorization': authorization,
+      ...correlationHeaders,
     };
   }
 
   // Jest runs in a JS DOM environment and can struggle with NextAuth's jose dependencies.
   // For route tests we can safely fall back to the dev token path.
   if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
-    return getBackendHeaders();
+    return { ...getBackendHeaders(), ...correlationHeaders };
   }
 
   try {
@@ -253,13 +256,14 @@ async function getBackendHeadersForRequest(request: NextRequest): Promise<Record
       return {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${accessToken}`,
+        ...correlationHeaders,
       };
     }
   } catch (error) {
     console.warn('[Chat API] Failed to read NextAuth token, falling back to dev token:', error);
   }
 
-  return getBackendHeaders();
+  return { ...getBackendHeaders(), ...correlationHeaders };
 }
 
 interface Concept {

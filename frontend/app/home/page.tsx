@@ -4,6 +4,10 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  createRequestId,
+  getOrCreateBrowserSessionId,
+} from "../../lib/observability/correlation";
+import {
   getFocusAreas,
   listGraphs,
   type FocusArea,
@@ -209,10 +213,17 @@ function HomePageInner() {
       }
 
       try {
+        const sessionId = getOrCreateBrowserSessionId();
+        const requestId = createRequestId();
+
         // Call streaming endpoint
         const response = await fetch("/api/brain-web/chat/stream", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-request-id": requestId,
+            ...(sessionId ? { "x-session-id": sessionId } : {}),
+          },
           body: JSON.stringify({
             message: userMessage.content,
             mode: "graphrag",

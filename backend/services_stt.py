@@ -12,7 +12,7 @@ import logging
 import os
 import subprocess
 import tempfile
-from typing import Optional
+from typing import Optional, Dict, Any, Union
 
 import wave
 
@@ -143,6 +143,37 @@ def transcribe_wav_bytes(
     return (getattr(result, "text", None) or "").strip()
 
 
+def transcribe_wav_with_metadata(
+    audio_bytes: bytes,
+    *,
+    model: str = "whisper-1",
+    language: Optional[str] = "en",
+) -> Dict[str, Any]:
+    """
+    Transcribe WAV bytes and return the full verbose_json response (including timestamps).
+    """
+    if not audio_bytes:
+        return {}
+
+    client = _get_openai_client()
+    buf = io.BytesIO(audio_bytes)
+    buf.name = "audio.wav"
+    
+    # We use verbose_json to get segment and word level data if needed
+    result = client.audio.transcriptions.create(
+        model=model,
+        file=buf,
+        language=language,
+        response_format="verbose_json",
+        timestamp_granularities=["word", "segment"]
+    )
+    
+    # The OpenAI SDK returns a Transcription object which can be cast to dict
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    return dict(result)
+
+
 def transcribe_webm_bytes(
     audio_bytes: bytes,
     *,
@@ -175,6 +206,55 @@ def transcribe_webm_bytes(
         wav_path = _ffmpeg_to_wav(webm_path)
         try:
             return _transcribe_file(client=client, path=wav_path, model=model, language=language)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except Exception:
+                pass
+    finally:
+        try:
+            os.unlink(webm_path)
+        except Exception:
+            pass
+
+
+def transcribe_webm_with_metadata(
+    audio_bytes: bytes,
+    *,
+    model: str = "whisper-1",
+    language: Optional[str] = "en",
+) -> Dict[str, Any]:
+    """
+    Transcribe WebM bytes and return full metadata.
+    """
+    if not audio_bytes:
+        return {}
+
+    client = _get_openai_client()
+    webm_tmp = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+    webm_path = webm_tmp.name
+    try:
+        webm_tmp.write(audio_bytes)
+        webm_tmp.flush()
+        webm_tmp.close()
+
+        # Try WebM directly first
+        try:
+            with open(webm_path, "rb") as f:
+                result = client.audio.transcriptions.create(
+                    model=model,
+                    file=f,
+                    language=language,
+                    response_format="verbose_json",
+                    timestamp_granularities=["word", "segment"]
+                )
+                return result.model_dump() if hasattr(result, "model_dump") else dict(result)
+        except Exception as e:
+            logger.warning(f"[STT] WebM metadata transcription failed; trying WAV: {e}")
+
+        wav_path = _ffmpeg_to_wav(webm_path)
+        try:
+            return transcribe_wav_with_metadata(open(wav_path, "rb").read(), model=model, language=language)
         finally:
             try:
                 os.unlink(wav_path)

@@ -32,6 +32,14 @@ _FEWER_QUESTIONS_RE = re.compile(r"\b(too many questions|ask fewer questions|sto
 _MORE_HUMOR_RE = re.compile(r"\b(more humor|more humour|more funny|be funnier|more playful)\b", re.IGNORECASE)
 _LESS_HUMOR_RE = re.compile(r"\b(less humor|less humour|too playful|too jokey|too many jokes)\b", re.IGNORECASE)
 
+# Emotional cues tracking
+_EXCITED_RE = re.compile(r"\b(wow|awesome|great|cool|exciting|amazing|incredible|love|yay|excellent)\b", re.IGNORECASE)
+_FRUSTRATED_RE = re.compile(r"\b(argh|annoying|stupid|bad|wrong|hate|dumb|confused|hard|difficult)\b", re.IGNORECASE)
+_TIRED_RE = re.compile(r"\b(tired|sleepy|long day|exhausted|yawn|ready to stop)\b", re.IGNORECASE)
+
+# Technical vocabulary convergence: track terms like GraphRAG, K8s, o1-mini, etc.
+_TECHNICAL_TERM_RE = re.compile(r"\b([A-Z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*|[A-Z]{2,}[0-9]*|[a-z]+[A-Z][a-z]+|[a-z0-9]+-[a-z0-9]+)\b")
+
 
 def has_explicit_feedback_cues(text: Optional[str]) -> bool:
     """
@@ -94,6 +102,7 @@ def _default_metrics() -> Dict[str, float]:
         "text_detail_request_ratio": 0.15,
         "text_brief_request_ratio": 0.10,
         "feedback_alignment_score": 0.0,
+        "avg_sentiment": 0.0,
     }
 
 
@@ -278,6 +287,8 @@ def _derive_preferences(metrics: Dict[str, float], sample_count: int) -> Dict[st
             "end_silence_ms": end_silence_ms,
             "min_speech_ms": min_speech_ms,
         },
+        "vocabulary": metrics.get("top_vocabulary", []),
+        "sentiment": metrics.get("avg_sentiment", 0.0),
     }
 
 
@@ -328,6 +339,26 @@ def observe_voice_turn(
         metrics["avg_pause_ratio"] = _ewma(metrics["avg_pause_ratio"], pause_ratio, alpha)
 
     new_count = int(sample_count) + 1
+    
+    # Emotional Wave-Matching: track sentiment
+    sentiment_score = 0.0
+    if _EXCITED_RE.search(text): sentiment_score += 0.5
+    if _FRUSTRATED_RE.search(text): sentiment_score -= 0.5
+    if _TIRED_RE.search(text): sentiment_score -= 0.3
+    metrics["avg_sentiment"] = _ewma(metrics.get("avg_sentiment", 0.0), sentiment_score, alpha)
+
+    # Vocabulary tracking
+    vocab_map = _parse_json_obj(metrics.get("vocabulary_freq", {}))
+    tech_terms = _TECHNICAL_TERM_RE.findall(text)
+    for term in tech_terms:
+        if len(term) < 2: continue
+        vocab_map[term] = vocab_map.get(term, 0) + 1
+    
+    # Sort and keep top 10
+    sorted_vocab = sorted(vocab_map.items(), key=lambda x: x[1], reverse=True)[:10]
+    metrics["top_vocabulary"] = [item[0] for item in sorted_vocab]
+    metrics["vocabulary_freq"] = vocab_map
+
     prefs = _derive_preferences(metrics, new_count)
     _save_profile(user_id, tenant_id, new_count, metrics, prefs)
 
@@ -373,6 +404,25 @@ def observe_text_turn(
     metrics["interrupt_rate"] = _ewma(metrics["interrupt_rate"], 0.0, alpha)
 
     new_count = int(sample_count) + 1
+    
+    # Emotional Wave-Matching: track sentiment
+    sentiment_score = 0.0
+    if _EXCITED_RE.search(text): sentiment_score += 0.5
+    if _FRUSTRATED_RE.search(text): sentiment_score -= 0.5
+    if _TIRED_RE.search(text): sentiment_score -= 0.3
+    metrics["avg_sentiment"] = _ewma(metrics.get("avg_sentiment", 0.0), sentiment_score, alpha)
+
+    # Vocabulary tracking
+    vocab_map = _parse_json_obj(metrics.get("vocabulary_freq", {}))
+    tech_terms = _TECHNICAL_TERM_RE.findall(text)
+    for term in tech_terms:
+        if len(term) < 2: continue
+        vocab_map[term] = vocab_map.get(term, 0) + 1
+    
+    sorted_vocab = sorted(vocab_map.items(), key=lambda x: x[1], reverse=True)[:10]
+    metrics["top_vocabulary"] = [item[0] for item in sorted_vocab]
+    metrics["vocabulary_freq"] = vocab_map
+
     prefs = _derive_preferences(metrics, new_count)
     _save_profile(user_id, tenant_id, new_count, metrics, prefs)
 
@@ -559,6 +609,17 @@ def get_voice_response_style_hint(*, user_id: str, tenant_id: str) -> str:
         f"- Humor preference: {humor_style}.",
         f"- Detail preference: {detail_pref}.",
     ]
+    
+    avg_sentiment = float(p.get("sentiment") or 0.0)
+    if avg_sentiment > 0.3:
+        lines.append("- Mirror the user's high energy and excitement; use upbeat, encouraging tone.")
+    elif avg_sentiment < -0.3:
+        lines.append("- The user seems frustrated or tired; use a calm, empathetic, and patient tone. Be extra direct and clear.")
+
+    vocab = p.get("vocabulary", [])
+    if vocab:
+        lines.append(f"- Technical vocabulary: prioritize terms the user uses: {', '.join(vocab)}.")
+
     if alignment_instruction:
         lines.append(alignment_instruction.strip())
     lines.extend(

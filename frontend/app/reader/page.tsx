@@ -419,8 +419,268 @@ export default function ReaderPage() {
   );
 }
 
+function formatReaderMetricNumber(value: any, decimals = 2): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num.toLocaleString(undefined, {
+    maximumFractionDigits: decimals,
+    minimumFractionDigits: 0,
+  });
+}
+
+function compactReaderMetricNumber(value: any): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  const absNum = Math.abs(num);
+  if (absNum >= 1_000_000_000_000) return `${(num / 1_000_000_000_000).toFixed(2)}T`;
+  if (absNum >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(2)}B`;
+  if (absNum >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+  if (absNum >= 1_000) return `${(num / 1_000).toFixed(2)}K`;
+  return num.toFixed(2);
+}
+
+function formatReaderPercent(value: any): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`;
+}
+
+function formatReaderDelta(value: any): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}`;
+}
+
+function readerStructuredMetric(resource: Resource): Record<string, any> | null {
+  const meta = resource.metadata;
+  if (!meta || typeof meta !== 'object') return null;
+  const direct = (meta.metric || meta.quote || meta.structured_data) as Record<string, any> | undefined;
+  if (direct && typeof direct === 'object') return direct;
+  const sourceResult = (meta.source_result || {}) as Record<string, any>;
+  const nested = sourceResult.structured_data;
+  return nested && typeof nested === 'object' ? (nested as Record<string, any>) : null;
+}
+
+function readerStructuredHeadlines(resource: Resource): Array<Record<string, any>> {
+  const meta = resource.metadata;
+  if (!meta || typeof meta !== 'object') return [];
+  return Array.isArray((meta as any).headlines)
+    ? ((meta as any).headlines as Array<Record<string, any>>).filter((h) => h && typeof h === 'object')
+    : [];
+}
+
+function readerStructuredKind(resource: Resource): 'metric' | 'news' | null {
+  const meta = resource.metadata;
+  if (resource.kind === 'metric_snapshot') return 'metric';
+  if (meta && typeof meta === 'object') {
+    if ((meta as any).type === 'live_metric_snapshot' || (meta as any).check_kind === 'live_metric') return 'metric';
+    if ((meta as any).check_kind === 'exa_news' || resource.source === 'exa_news' || Array.isArray((meta as any).headlines)) return 'news';
+  }
+  return null;
+}
+
+function readerHost(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+function ReaderMetricResourceView({ resource }: { resource: Resource }) {
+  const meta = (resource.metadata && typeof resource.metadata === 'object') ? (resource.metadata as Record<string, any>) : {};
+  const metric = readerStructuredMetric(resource) || {};
+  const kind = String(metric.kind || meta.metric_kind || '').toLowerCase();
+  const asOf = metric.as_of || metric.observation_date || meta.refreshed_at || resource.created_at;
+  const provider = String(metric.provider || meta.provider || resource.source || 'market_data');
+
+  const pillStyle: React.CSSProperties = {
+    fontSize: '11px',
+    padding: '4px 8px',
+    borderRadius: '999px',
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+    color: 'var(--ink)',
+    display: 'inline-flex',
+    gap: '4px',
+    alignItems: 'center',
+  };
+
+  const renderPills = (items: Array<{ label: string; value: string | null | undefined }>) => (
+    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>
+      {items.filter((it) => it.value).map((it) => (
+        <span key={`${it.label}:${it.value}`} style={pillStyle}>
+          <strong style={{ fontWeight: 600 }}>{it.label}</strong> {it.value}
+        </span>
+      ))}
+    </div>
+  );
+
+  if (kind === 'stock_quote' || kind === 'crypto_quote') {
+    const price = formatReaderMetricNumber(metric.price, 2);
+    const change = formatReaderDelta(metric.change);
+    const pct = formatReaderPercent(metric.change_percent);
+    const isUp = Number(metric.change_percent) >= 0;
+    return (
+      <div style={{ maxWidth: '860px', margin: '0 auto', padding: '20px' }}>
+        <div style={{ border: '1px solid rgba(59,130,246,0.14)', borderRadius: '12px', background: 'linear-gradient(180deg, rgba(59,130,246,0.06), rgba(59,130,246,0.01))', padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                {kind === 'crypto_quote' ? 'Crypto Snapshot' : 'Market Quote Snapshot'}
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '28px', fontWeight: 700, color: 'var(--ink)', lineHeight: 1.1 }}>
+                {metric.symbol || meta.symbol || 'Ticker'}
+              </div>
+              {metric.name && (
+                <div style={{ marginTop: '4px', fontSize: '14px', color: 'var(--muted)' }}>{metric.name}</div>
+              )}
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--ink)' }}>
+                {price || 'N/A'} {metric.currency || ''}
+              </div>
+              {(change || pct) && (
+                <div style={{ marginTop: '6px', fontSize: '14px', fontWeight: 600, color: isUp ? '#15803d' : '#b91c1c' }}>
+                  {[change, pct].filter(Boolean).join(' · ')}
+                </div>
+              )}
+            </div>
+          </div>
+          {renderPills([
+            { label: 'Provider', value: provider },
+            { label: 'As of', value: asOf ? new Date(asOf).toLocaleString() : null },
+            { label: 'Exchange', value: metric.exchange ? String(metric.exchange) : null },
+            { label: 'State', value: metric.market_state ? String(metric.market_state) : null },
+            { label: 'Market Cap', value: compactReaderMetricNumber(metric.market_cap) },
+            { label: 'Volume', value: compactReaderMetricNumber(metric.volume) },
+          ])}
+          {(metric.source_delay_note || resource.caption) && (
+            <div style={{ marginTop: '14px', fontSize: '13px', color: 'var(--muted)', lineHeight: 1.55 }}>
+              {resource.caption}
+              {metric.source_delay_note ? <div style={{ marginTop: '8px' }}>{metric.source_delay_note}</div> : null}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === 'fx_rate' || kind === 'macro_indicator') {
+    return (
+      <div style={{ maxWidth: '860px', margin: '0 auto', padding: '20px' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: '12px', background: 'var(--surface)', padding: '20px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>
+            {kind === 'fx_rate' ? 'FX Snapshot' : 'Macro Indicator Snapshot'}
+          </div>
+          <div style={{ marginTop: '6px', fontSize: '22px', fontWeight: 700, color: 'var(--ink)' }}>
+            {resource.title || metric.title || 'Metric'}
+          </div>
+          <div style={{ marginTop: '8px', fontSize: '18px', color: 'var(--ink)' }}>
+            {kind === 'fx_rate'
+              ? `${metric.base || ''}/${metric.quote || ''} ${formatReaderMetricNumber(metric.rate, 6) || ''}`
+              : `${formatReaderMetricNumber(metric.value, 4) || String(metric.value ?? 'N/A')}${metric.unit ? ` ${metric.unit}` : ''}`}
+          </div>
+          {renderPills([
+            { label: 'Provider', value: provider },
+            { label: 'As of', value: asOf ? new Date(asOf).toLocaleString() : null },
+            { label: 'Series', value: metric.series_id ? String(metric.series_id) : null },
+            { label: 'Observation', value: metric.observation_date ? String(metric.observation_date) : null },
+          ])}
+          {resource.caption && (
+            <div style={{ marginTop: '14px', fontSize: '13px', color: 'var(--muted)', lineHeight: 1.55 }}>
+              {resource.caption}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: '860px', margin: '0 auto', padding: '20px' }}>
+      <div style={{ border: '1px solid var(--border)', borderRadius: '12px', background: 'var(--surface)', padding: '20px' }}>
+        <h3 style={{ margin: 0, fontSize: '18px' }}>{resource.title || 'Live metric snapshot'}</h3>
+        {resource.caption && <p style={{ fontSize: '13px', lineHeight: 1.6, color: 'var(--muted)' }}>{resource.caption}</p>}
+      </div>
+    </div>
+  );
+}
+
+function ReaderNewsResourceView({ resource }: { resource: Resource }) {
+  const headlines = readerStructuredHeadlines(resource);
+  return (
+    <div style={{ maxWidth: '920px', margin: '0 auto', padding: '20px' }}>
+      <div style={{ border: '1px solid rgba(245,158,11,0.16)', borderRadius: '12px', background: 'linear-gradient(180deg, rgba(245,158,11,0.04), rgba(245,158,11,0.01))', padding: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>News Feed Snapshot</div>
+            <div style={{ marginTop: '6px', fontSize: '20px', fontWeight: 700, color: 'var(--ink)' }}>
+              {resource.title || 'News headlines'}
+            </div>
+          </div>
+          <span style={{ fontSize: '12px', padding: '4px 10px', borderRadius: '999px', border: '1px solid rgba(245,158,11,0.18)', background: 'rgba(245,158,11,0.08)', color: '#b45309' }}>
+            {headlines.length} headline{headlines.length === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        {resource.caption && (
+          <div style={{ marginTop: '10px', fontSize: '13px', color: 'var(--muted)', lineHeight: 1.55 }}>
+            {resource.caption}
+          </div>
+        )}
+
+        <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {headlines.length > 0 ? headlines.map((headline, index) => {
+            const title = typeof headline.title === 'string' ? headline.title : `Headline ${index + 1}`;
+            const url = typeof headline.url === 'string' ? headline.url : undefined;
+            const snippet = typeof headline.snippet === 'string' ? headline.snippet : '';
+            const metadata = headline.metadata && typeof headline.metadata === 'object' ? headline.metadata as Record<string, any> : {};
+            const published = metadata.publishedDate || metadata.published_date || metadata.date || metadata.publishedAt;
+            return (
+              <div key={`${title}-${index}`} style={{ border: '1px solid var(--border)', borderRadius: '10px', background: 'var(--surface)', padding: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                  {url ? (
+                    <a href={url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: 'var(--ink)', fontWeight: 600, lineHeight: 1.35 }}>
+                      {title}
+                    </a>
+                  ) : (
+                    <div style={{ color: 'var(--ink)', fontWeight: 600, lineHeight: 1.35 }}>{title}</div>
+                  )}
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                    {readerHost(url) || 'web'}
+                  </div>
+                </div>
+                {(published || snippet) && (
+                  <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
+                    {published ? `${new Date(String(published)).toLocaleString()}${snippet ? ' · ' : ''}` : null}
+                    {snippet || null}
+                  </div>
+                )}
+              </div>
+            );
+          }) : (
+            <div style={{ fontSize: '13px', color: 'var(--muted)' }}>
+              No headline metadata found for this resource.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Resource Content Renderer
 function ResourceContent({ resource }: { resource: Resource }) {
+  const structuredKind = readerStructuredKind(resource);
+  if (structuredKind === 'metric') {
+    return <ReaderMetricResourceView resource={resource} />;
+  }
+  if (structuredKind === 'news') {
+    return <ReaderNewsResourceView resource={resource} />;
+  }
+
   const isWebLink = resource.kind === 'web_link' || resource.url?.startsWith('http');
   const isPDF = resource.kind === 'pdf' || resource.mime_type === 'application/pdf';
   const isText = resource.kind === 'file' && resource.mime_type?.startsWith('text/');
@@ -831,4 +1091,3 @@ function ContextRail({
     </div>
   );
 }
-

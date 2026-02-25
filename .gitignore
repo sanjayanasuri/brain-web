@@ -19,6 +19,9 @@ __pycache__/
 backend/.venv/
 backend/venv/
 backend/env/
+.venv/
+venv/
+env/
 *.egg-info/
 dist/
 build/
@@ -58,15 +61,20 @@ frontend/playwright-report/
 neo4j-data/
 neo4j-logs/
 
-# Cache files (can be regenerated)
+# Cache and data files (can be regenerated)
 backend/cache/
 backend/embeddings_cache.json
 backend/notion_*.json
 backend/notion_*.py
 .cache/
 .npm-cache/
-backend/*.db
-backend/*.db-*
+# SQLite/database files anywhere in the repo
+*.db
+*.db-wal
+*.db-shm
+*.db-*
+*.sqlite
+*.sqlite3
 
 # Notion state files (user-specific configuration)
 backend/notion_index_state.json

@@ -45,12 +45,10 @@ start_container() {
     fi
 }
 
-# Use local settings to enable JSON format and configure engines
-SETTINGS_PATH="$(pwd)/services/miyami-search/searxng_settings.yml"
-start_container "searxng" "searxng/searxng" "-p 8888:8080 -e BASE_URL=http://localhost:8888/ -v $SETTINGS_PATH:/etc/searxng/settings.yml"
+# Web search no longer requires local SearXNG/Miyami containers (Exa + structured providers).
 # Add your specific Neo4j/Postgres run commands here if they aren't in docker-compose
 # For now, assuming user might have them via docker-compose or named containers
-# If you have a docker-compose.yml, prefer: docker-compose up -d neo4j postgres searxng
+# If you have a docker-compose.yml, prefer: docker-compose up -d neo4j postgres
 
 # Try docker-compose first if file exists, else use specific container starts (fallback)
 if [ -f "docker-compose.yml" ]; then

@@ -1,4 +1,5 @@
 import { getSession } from 'next-auth/react';
+import { createRequestId, getOrCreateBrowserSessionId } from '../../lib/observability/correlation';
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
@@ -37,6 +38,13 @@ export async function getApiHeaders(): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
     };
+
+    // Correlation headers for observability (backend logs + Sentry tags)
+    headers['x-request-id'] = createRequestId();
+    const sessionId = getOrCreateBrowserSessionId();
+    if (sessionId) {
+        headers['x-session-id'] = sessionId;
+    }
 
     const token = await getAuthToken();
     if (token) {

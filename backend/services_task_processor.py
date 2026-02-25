@@ -8,6 +8,7 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
 import json
+import uuid
 
 from neo4j import Session
 
@@ -188,6 +189,34 @@ def process_task(session: Session, task_id: str) -> Optional[Task]:
         )
         
         logger.info(f"Task {task_id} completed successfully")
+        
+        # Emit ActivityEvent for task completion (Summary view)
+        if task.task_type in [TaskType.EXTRACT_CONCEPTS, TaskType.GENERATE_ANSWERS]:
+            try:
+                event_id = str(uuid.uuid4())
+                now = datetime.utcnow().isoformat() + "Z"
+                title = task.params.get("title") or task.params.get("question") or "Background Task"
+                
+                session.run(
+                    """
+                    CREATE (e:ActivityEvent {
+                        id: $id,
+                        user_id: $user_id,
+                        graph_id: $graph_id,
+                        type: 'INGESTION_COMPLETED',
+                        payload: $payload,
+                        created_at: $created_at
+                    })
+                    """,
+                    id=event_id,
+                    user_id=task.user_id,
+                    graph_id=task.graph_id,
+                    payload={"task_id": task_id, "title": title, "task_type": task.task_type.value},
+                    created_at=now
+                )
+            except Exception as e:
+                logger.warning(f"Failed to emit INGESTION_COMPLETED event: {e}")
+
         return get_task(session, task_id)
         
     except Exception as e:

@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: hetzner-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -22,8 +26,7 @@ jobs:
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
             cd ~/brain-web
-            git pull origin main
-            ./scripts/deploy.sh
+            AUTO_STASH_GIT_CHANGES=1 FULL_RESTART=0 BUILD_NO_CACHE=0 ./scripts/deploy.sh production
 
       - name: Verify Deployment
         uses: appleboy/ssh-action@v1.0.3
@@ -34,7 +37,7 @@ jobs:
           script: |
             cd ~/brain-web
             docker compose ps
-            curl -f http://localhost:8000/health || exit 1
+            curl -fL http://localhost:8000/health || curl -fL http://localhost:8000/api/health || exit 1
 
       - name: Deployment Status
         if: always()

@@ -45,6 +45,13 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
       - API_TOKEN_SECRET=${API_TOKEN_SECRET:-dev-secret-key-change-in-production}
       - ENABLE_NOTION_AUTO_SYNC=false
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_DSN_BACKEND=${SENTRY_DSN_BACKEND:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+      - SENTRY_PROFILES_SAMPLE_RATE=${SENTRY_PROFILES_SAMPLE_RATE:-0.0}
+      - RELEASE=${RELEASE:-}
+      - GIT_SHA=${GIT_SHA:-}
     ports:
       - "8000:8000"
 
@@ -54,6 +61,17 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://demo.sanjayanasuri.com/api}
+        - NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN:-}
+        - NEXT_PUBLIC_SENTRY_ENVIRONMENT=${NEXT_PUBLIC_SENTRY_ENVIRONMENT:-${SENTRY_ENVIRONMENT:-production}}
+        - NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-0.05}
+        - SENTRY_DSN=${SENTRY_DSN:-}
+        - SENTRY_DSN_FRONTEND_SERVER=${SENTRY_DSN_FRONTEND_SERVER:-}
+        - SENTRY_DSN_FRONTEND_EDGE=${SENTRY_DSN_FRONTEND_EDGE:-}
+        - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+        - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+        - SENTRY_ORG=${SENTRY_ORG:-}
+        - SENTRY_PROJECT=${SENTRY_PROJECT:-}
+        - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
     container_name: brainweb-frontend
     restart: unless-stopped
     ports:
@@ -61,10 +79,23 @@ services:
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://demo.sanjayanasuri.com/api}
+      - NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN:-}
+      - NEXT_PUBLIC_SENTRY_ENVIRONMENT=${NEXT_PUBLIC_SENTRY_ENVIRONMENT:-${SENTRY_ENVIRONMENT:-production}}
+      - NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE=${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-0.05}
       - NEXTAUTH_URL=${NEXTAUTH_URL:-https://demo.sanjayanasuri.com}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - API_TOKEN_SECRET=${API_TOKEN_SECRET}
       - OPENAI_API_KEY=${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_DSN_FRONTEND_SERVER=${SENTRY_DSN_FRONTEND_SERVER:-}
+      - SENTRY_DSN_FRONTEND_EDGE=${SENTRY_DSN_FRONTEND_EDGE:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-production}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-0.05}
+      - SENTRY_ORG=${SENTRY_ORG:-}
+      - SENTRY_PROJECT=${SENTRY_PROJECT:-}
+      - SENTRY_AUTH_TOKEN=${SENTRY_AUTH_TOKEN:-}
+      - RELEASE=${RELEASE:-}
+      - GIT_SHA=${GIT_SHA:-}
     depends_on:
       - backend
 
@@ -105,47 +136,8 @@ services:
       - redis-data:/data
     command: redis-server --appendonly yes
 
-  # Miyami Web Search API - Enhanced SearXNG wrapper with content extraction, stealth mode, etc.
-  # This provides better search capabilities than raw SearXNG
-  miyami-search:
-    build:
-      context: ./services/miyami-search
-      dockerfile: Dockerfile
-    container_name: brainweb-miyami-search
-    restart: unless-stopped
-    ports:
-      - "8081:8080" # FastAPI API (enhanced search, content extraction, etc.)
-    environment:
-      - PORT=8080
-      - SEARXNG_BIND_ADDRESS=127.0.0.1
-      - SEARXNG_PORT=8888
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # Standalone SearXNG (fallback if Miyami is not used)
-  searxng:
-    image: searxng/searxng:latest
-    container_name: brainweb-searxng
-    restart: unless-stopped
-    ports:
-      - "8888:8080" # SearXNG web interface and API
-    environment:
-      - SEARXNG_HOSTNAME=localhost
-    volumes:
-      - searxng-data:/etc/searxng
-      - searxng-config:/usr/local/searxng/searxng-src/searx
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-    profiles:
-      - standalone # Only start if explicitly requested
+  # Web search is now handled by the backend via Exa + structured live-data providers.
+  # Miyami/SearXNG containers were decommissioned from the default stack.
 
 volumes:
   neo4j-data:
@@ -153,5 +145,3 @@ volumes:
   qdrant-data:
   postgres-data:
   redis-data:
-  searxng-data:
-  searxng-config:

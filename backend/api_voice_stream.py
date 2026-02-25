@@ -28,7 +28,13 @@ from services_voice_style_profile import (
     observe_voice_interrupt,
     observe_voice_turn,
 )
-from services_stt import transcribe_wav_bytes, transcribe_webm_bytes, wav_bytes_from_pcm16
+from services_stt import (
+    transcribe_wav_bytes,
+    transcribe_webm_bytes,
+    transcribe_wav_with_metadata,
+    transcribe_webm_with_metadata,
+    wav_bytes_from_pcm16
+)
 from services_tts import (
     map_tutor_voice_id_to_openai_voice,
     split_sentences,
@@ -209,66 +215,134 @@ async def voice_stream_ws(websocket: WebSocket):
             session_voice_id = None
         return session_voice_id
 
-    async def _run_tts_stream(*, text: str, voice_id: Optional[str], speech_rate: float) -> None:
-        nonlocal tts_cancelled
-        tts_cancelled = False
-        _interrupt_event.clear()  # Reset per-stream so each reply starts clean
-
-        openai_voice = map_tutor_voice_id_to_openai_voice(voice_id)
-        instructions = tts_instructions_for_voice_id(voice_id)
-
-        # Raised ceiling from 1.25 → 2.0; comfortable floor stays at 0.85
-        speed = max(0.85, min(2.0, float(speech_rate or 1.0)))
-
-        # Shorter segments (160 chars) start audio sooner; queue handles sequential playback
-        segments = split_sentences(text, max_chars=160)
-        if not segments:
+    async def _handle_agent_stream(result: Dict[str, Any], transcript: str, perf_metrics: Dict[str, Any], user_id: str, tenant_id: str) -> None:
+        reply_stream = result.get("reply_stream")
+        agent_response = result.get("agent_response") or ""
+        should_speak = result.get("should_speak", True) is not False
+        speech_rate = float(result.get("speech_rate") or 1.15)
+        
+        if not should_speak:
             return
 
-        for idx, seg in enumerate(segments, start=1):
-            if tts_cancelled or _interrupt_event.is_set():
-                break
+        if not reply_stream:
+            # Fallback for simple acks or errors
             await _send_json(
                 {
-                    "type": "tts_start",
-                    "seq": idx,
-                    "format": "mp3",
-                    "voice": openai_voice,
-                    "text": seg[:120],
+                    "type": "agent_reply",
+                    "transcript": transcript,
+                    "agent_response": agent_response,
+                    "should_speak": should_speak,
+                    "speech_rate": speech_rate,
+                    "perf_metrics": perf_metrics,
+                    "policy": result.get("policy", {}),
+                    "learning_signals": result.get("learning_signals", []),
+                    "actions": result.get("actions", []),
+                    "action_summaries": result.get("action_summaries", []),
                 }
             )
-            try:
-                # Race synthesis against an interrupt so we don't block mid-segment
-                synth_task = asyncio.create_task(
-                    asyncio.to_thread(
-                        synthesize_speech_bytes,
-                        seg,
-                        voice=openai_voice,
-                        speed=speed,
-                        response_format="mp3",
-                        instructions=instructions,
-                    )
-                )
-                interrupt_wait = asyncio.create_task(_interrupt_event.wait())
-                done, pending = await asyncio.wait(
-                    {synth_task, interrupt_wait}, return_when=asyncio.FIRST_COMPLETED
-                )
-                for p in pending:
-                    p.cancel()
-                if _interrupt_event.is_set():
-                    tts_cancelled = True
-                    break
-                audio_bytes = synth_task.result()
-            except Exception as e:
-                await _send_json({"type": "tts_error", "message": str(e)[:300], "seq": idx})
-                break
+            if agent_response:
+                voice_id = await _resolve_session_voice_once()
+                await _run_tts_stream(text=agent_response, voice_id=voice_id, speech_rate=speech_rate)
+            return
 
-            if tts_cancelled or _interrupt_event.is_set():
+        # Streaming Path: Talk First
+        voice_id = await _resolve_session_voice_once()
+        openai_voice = map_tutor_voice_id_to_openai_voice(voice_id)
+        instructions = tts_instructions_for_voice_id(voice_id)
+        speed = max(0.85, min(2.0, float(speech_rate)))
+
+        full_reply = ""
+        sentence_buf = ""
+        seq = 0
+        
+        # Reset per-stream so each reply starts clean
+        nonlocal tts_cancelled
+        tts_cancelled = False
+        _interrupt_event.clear()
+
+        async for chunk in reply_stream:
+            if _interrupt_event.is_set():
+                tts_cancelled = True
                 break
-            if audio_bytes:
+                
+            if chunk["type"] == "content":
+                delta = chunk["delta"]
+                full_reply += delta
+                sentence_buf += delta
+                
+                # If we hit an end-of-sentence or newline, and have enough text to speak...
+                if any(c in delta for c in ".!?\n") and len(sentence_buf.strip()) > 10:
+                    seq += 1
+                    # Await sequential TTS delivery
+                    await _run_tts_segment(text=sentence_buf, seq=seq, voice=openai_voice, speed=speed, instructions=instructions)
+                    sentence_buf = ""
+            
+            elif chunk["type"] == "done":
+                # Final flush
+                if sentence_buf.strip():
+                    seq += 1
+                    await _run_tts_segment(text=sentence_buf, seq=seq, voice=openai_voice, speed=speed, instructions=instructions)
+                
+                # Now send the final JSON for the UI transcript
+                await _send_json(
+                    {
+                        "type": "agent_reply",
+                        "transcript": transcript,
+                        "agent_response": chunk["full_response"],
+                        "should_speak": True,
+                        "speech_rate": speech_rate,
+                        "perf_metrics": perf_metrics,
+                        "policy": result.get("policy", {}),
+                        "learning_signals": result.get("learning_signals", []),
+                        "is_eureka": result.get("is_eureka", False),
+                        "is_fog_clearing": result.get("is_fog_clearing", False),
+                        "fog_node_id": result.get("fog_node_id"),
+                        "actions": result.get("actions", []),
+                        "action_summaries": result.get("action_summaries", []),
+                    }
+                )
+
+    async def _run_tts_segment(*, text: str, seq: int, voice: str, speed: float, instructions: str) -> None:
+        nonlocal tts_cancelled
+        if tts_cancelled or _interrupt_event.is_set():
+            return
+
+        await _send_json(
+            {
+                "type": "tts_start",
+                "seq": seq,
+                "format": "mp3",
+                "voice": voice,
+                "text": text[:120],
+            }
+        )
+        try:
+            audio_bytes = await asyncio.to_thread(
+                synthesize_speech_bytes,
+                text,
+                voice=voice,
+                speed=speed,
+                response_format="mp3",
+                instructions=instructions,
+            )
+            if not _interrupt_event.is_set() and not tts_cancelled and audio_bytes:
                 await _send_bytes(audio_bytes)
-            await _send_json({"type": "tts_end", "seq": idx})
+                await _send_json({"type": "tts_end", "seq": seq})
+        except Exception as e:
+            logger.error(f"TTS segment {seq} failed: {e}")
 
+    async def _run_tts_stream(*, text: str, voice_id: Optional[str], speech_rate: float) -> None:
+        # Backward compat for simple strings (acks)
+        nonlocal tts_cancelled
+        tts_cancelled = False
+        _interrupt_event.clear()
+        openai_voice = map_tutor_voice_id_to_openai_voice(voice_id)
+        instructions = tts_instructions_for_voice_id(voice_id)
+        speed = max(0.85, min(2.0, float(speech_rate or 1.15)))
+        segments = split_sentences(text, max_chars=160)
+        for idx, seg in enumerate(segments, start=1):
+            if _interrupt_event.is_set(): break
+            await _run_tts_segment(text=seg, seq=idx, voice=openai_voice, speed=speed, instructions=instructions)
         await _send_json({"type": "tts_done"})
 
     async def _process_utterance_webm(*, client_start_ms: Optional[int] = None, client_end_ms: Optional[int] = None) -> None:
@@ -285,13 +359,15 @@ async def voice_stream_ws(websocket: WebSocket):
         audio_first_ms = None
         audio_last_ms = None
 
+        t0 = time.perf_counter()
         try:
-            transcript = await asyncio.to_thread(transcribe_webm_bytes, webm_bytes)
+            stt_result = await asyncio.to_thread(transcribe_webm_with_metadata, webm_bytes)
+            transcript = (stt_result.get("text") or "").strip()
         except Exception as e:
             await _send_json({"type": "stt_error", "message": str(e)[:400]})
             return
+        t_stt = time.perf_counter()
 
-        transcript = (transcript or "").strip()
         await _send_json({"type": "transcript", "text": transcript, "final": True})
         if not transcript:
             return
@@ -317,6 +393,7 @@ async def voice_stream_ws(websocket: WebSocket):
         if pipeline != "agent":
             return
 
+        t_context_start = time.perf_counter()
         try:
             result = await orchestrator.get_interaction_context(
                 graph_id,
@@ -326,40 +403,19 @@ async def voice_stream_ws(websocket: WebSocket):
                 session_id,
                 client_start_ms=start_ms,
                 client_end_ms=end_ms,
+                stt_metadata=stt_result,
             )
         except Exception as e:
             await _send_json({"type": "agent_error", "message": str(e)[:400]})
             return
+        t_context_end = time.perf_counter()
 
-        agent_response = result.get("agent_response") or ""
-        should_speak = result.get("should_speak", True) is not False
-        speech_rate = float(result.get("speech_rate") or 1.0)
-        policy = result.get("policy") or {}
+        perf_metrics = {
+            "stt_ms": int((t_stt - t0) * 1000),
+            "context_ms": int((t_context_end - t_context_start) * 1000),
+        }
 
-        await _send_json(
-            {
-                "type": "agent_reply",
-                "transcript": transcript,
-                "agent_response": agent_response,
-                "should_speak": should_speak,
-                "speech_rate": speech_rate,
-                "policy": policy,
-                "learning_signals": result.get("learning_signals", []),
-                "is_eureka": result.get("is_eureka", False),
-                "is_fog_clearing": result.get("is_fog_clearing", False),
-                "fog_node_id": result.get("fog_node_id"),
-                "user_transcript_chunk": result.get("user_transcript_chunk"),
-                "assistant_transcript_chunk": result.get("assistant_transcript_chunk"),
-                "actions": result.get("actions", []),
-                "action_summaries": result.get("action_summaries", []),
-            }
-        )
-
-        if not should_speak or not agent_response:
-            return
-
-        voice_id = await _resolve_session_voice_once()
-        await _run_tts_stream(text=agent_response, voice_id=voice_id, speech_rate=speech_rate)
+        await _handle_agent_stream(result, transcript, perf_metrics, user_id, tenant_id)
 
     async def _process_utterance_pcm(utt: _QueuedUtterance) -> None:
         if not utt.pcm16:
@@ -375,13 +431,15 @@ async def voice_stream_ws(websocket: WebSocket):
             await _send_json({"type": "stt_error", "message": f"Failed to build WAV: {str(e)[:240]}"})
             return
 
+        t0 = time.perf_counter()
         try:
-            transcript = await asyncio.to_thread(transcribe_wav_bytes, wav_bytes)
+            stt_result = await asyncio.to_thread(transcribe_wav_with_metadata, wav_bytes)
+            transcript = (stt_result.get("text") or "").strip()
         except Exception as e:
             await _send_json({"type": "stt_error", "message": str(e)[:400]})
             return
+        t_stt = time.perf_counter()
 
-        transcript = (transcript or "").strip()
         await _send_json({"type": "transcript", "text": transcript, "final": True})
         if not transcript:
             return
@@ -405,6 +463,7 @@ async def voice_stream_ws(websocket: WebSocket):
         if pipeline != "agent":
             return
 
+        t_context_start = time.perf_counter()
         try:
             result = await orchestrator.get_interaction_context(
                 graph_id,
@@ -414,40 +473,19 @@ async def voice_stream_ws(websocket: WebSocket):
                 session_id,
                 client_start_ms=int(utt.start_epoch_ms),
                 client_end_ms=int(utt.end_epoch_ms),
+                stt_metadata=stt_result,
             )
         except Exception as e:
             await _send_json({"type": "agent_error", "message": str(e)[:400]})
             return
+        t_context_end = time.perf_counter()
 
-        agent_response = result.get("agent_response") or ""
-        should_speak = result.get("should_speak", True) is not False
-        speech_rate = float(result.get("speech_rate") or 1.0)
-        policy = result.get("policy") or {}
+        perf_metrics = {
+            "stt_ms": int((t_stt - t0) * 1000),
+            "context_ms": int((t_context_end - t_context_start) * 1000),
+        }
 
-        await _send_json(
-            {
-                "type": "agent_reply",
-                "transcript": transcript,
-                "agent_response": agent_response,
-                "should_speak": should_speak,
-                "speech_rate": speech_rate,
-                "policy": policy,
-                "learning_signals": result.get("learning_signals", []),
-                "is_eureka": result.get("is_eureka", False),
-                "is_fog_clearing": result.get("is_fog_clearing", False),
-                "fog_node_id": result.get("fog_node_id"),
-                "user_transcript_chunk": result.get("user_transcript_chunk"),
-                "assistant_transcript_chunk": result.get("assistant_transcript_chunk"),
-                "actions": result.get("actions", []),
-                "action_summaries": result.get("action_summaries", []),
-            }
-        )
-
-        if not should_speak or not agent_response:
-            return
-
-        voice_id = await _resolve_session_voice_once()
-        await _run_tts_stream(text=agent_response, voice_id=voice_id, speech_rate=speech_rate)
+        await _handle_agent_stream(result, transcript, perf_metrics, user_id, tenant_id)
 
     async def _utterance_worker() -> None:
         while True:

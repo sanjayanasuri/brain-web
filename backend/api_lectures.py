@@ -4,6 +4,8 @@ API endpoints for lecture management and ingestion.
 Do not call backend endpoints from backend services. Use ingestion kernel/internal services to prevent ingestion path drift.
 """
 from typing import List
+import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 
@@ -144,6 +146,30 @@ def ingest_lecture_endpoint(
     auto_export_csv(background_tasks)
     invalidate_cache_pattern("lectures")
     
+    # Emit ActivityEvent for ingestion start
+    try:
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'INGESTION_STARTED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id=auth.get("user_id"),
+            graph_id=get_active_graph_context(session, tenant_id=tenant_id)[0],
+            payload={"lecture_id": out.lecture_id, "title": payload.lecture_title},
+            created_at=now
+        )
+    except Exception as e:
+        logger.warning(f"Failed to emit INGESTION_STARTED event: {e}")
+
     return out
 
 
@@ -705,3 +731,31 @@ def freeform_canvas_capture(
     except Exception as e:
         print(f"ERROR in freeform canvas capture: {e}")
         raise HTTPException(status_code=500, detail=f"Freeform canvas capture failed: {str(e)}")
+    
+    # Emit ActivityEvent for canvas capture
+    try:
+        tenant_id = auth.get("tenant_id")
+        user_id = auth.get("user_id")
+        graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id)
+        
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'CANVAS_CAPTURED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id=user_id,
+            graph_id=graph_id,
+            payload={"title": payload.title or "Untitled Canvas"},
+            created_at=now
+        )
+    except Exception as e:
+        logger.warning(f"Failed to emit CANVAS_CAPTURED event: {e}")

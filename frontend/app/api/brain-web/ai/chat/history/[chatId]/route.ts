@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { getCorrelationHeaders } from '../../../../../_utils/correlation';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +10,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { chatId: string } },
 ) {
+  const { requestId, headers: correlationHeaders } = getCorrelationHeaders(request);
   try {
     const token = await getToken({ req: request });
     const accessToken = (token as any)?.accessToken;
@@ -26,26 +28,27 @@ export async function GET(
       headers: {
         'Content-Type': 'application/json',
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...correlationHeaders,
       },
       cache: 'no-store',
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Chat History API] Backend error:', errorText);
+      console.error(`[Chat History API] [${requestId}] Backend error:`, errorText);
       return NextResponse.json(
         { error: 'Failed to fetch chat history' },
-        { status: response.status },
+        { status: response.status, headers: correlationHeaders },
       );
     }
 
     const data = await response.json();
-    return NextResponse.json(data);
+    return NextResponse.json(data, { headers: correlationHeaders });
   } catch (error) {
-    console.error('[Chat History API] Error:', error);
+    console.error(`[Chat History API] [${requestId}] Error:`, error);
     return NextResponse.json(
       { error: 'Internal server error' },
-      { status: 500 },
+      { status: 500, headers: correlationHeaders },
     );
   }
 }

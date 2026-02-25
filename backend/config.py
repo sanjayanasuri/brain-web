@@ -109,6 +109,11 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "concepts")
 USE_QDRANT = os.getenv("USE_QDRANT", "true").lower() in ("true", "1", "yes")  # Enable Qdrant by default
 
+# Unified content pipeline collections (Phase 0 contract).
+# Keep these separate from the existing concepts collection to avoid mixing payload schemas.
+QDRANT_COLLECTION_CONTENT_ITEM_TEXT = os.getenv("QDRANT_COLLECTION_CONTENT_ITEM_TEXT", "content_item_text")
+QDRANT_COLLECTION_TRANSCRIPT_CHUNKS = os.getenv("QDRANT_COLLECTION_TRANSCRIPT_CHUNKS", "transcript_chunks")
+
 # PostgreSQL configuration (for event store)
 # Support Railway's DATABASE_URL format: postgresql://user:pass@host:port/db
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -157,6 +162,13 @@ else:
     REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
     REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 USE_REDIS = os.getenv("USE_REDIS", "true").lower() in ("true", "1", "yes")  # Enable Redis by default
+
+# Ingest API rate limits (per user, fixed window per minute).
+INGEST_RATE_LIMIT_PER_MINUTE = int(os.getenv("INGEST_RATE_LIMIT_PER_MINUTE", "60"))
+
+# Content pipeline worker controls.
+ENABLE_CONTENT_PIPELINE_WORKER = os.getenv("ENABLE_CONTENT_PIPELINE_WORKER", "true").lower() in ("true", "1", "yes")
+CONTENT_PIPELINE_MAX_JOB_ATTEMPTS = int(os.getenv("CONTENT_PIPELINE_MAX_JOB_ATTEMPTS", "5"))
 
 # Demo Mode configuration
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")

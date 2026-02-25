@@ -25,6 +25,8 @@ export * from './api/admin';
 export * from './api/feedback';
 export * from './api/signals';
 export * from './api/web-search';
+export * from './api/refresh';
+export * from './api/templates';
 export * from './api/note-images';
 export * from './api/fill';
 

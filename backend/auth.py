@@ -97,6 +97,22 @@ def extract_token_from_request(request: Request) -> Optional[str]:
     return None
 
 
+def extract_api_key_from_request(request: Request) -> Optional[str]:
+    """
+    Extract personal API key from request headers.
+
+    Supported:
+    - X-API-Key: <key>
+    """
+    api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    if not api_key:
+        return None
+    api_key = str(api_key).strip()
+    if not api_key or len(api_key) > 512:
+        return None
+    return api_key
+
+
 def get_user_context_from_request(request: Request) -> Dict[str, Any]:
     """
     Extract user context from request (token).
@@ -104,29 +120,40 @@ def get_user_context_from_request(request: Request) -> Dict[str, Any]:
     Returns:
         Dict with user_id, tenant_id, and is_authenticated
     """
-    # Try to extract token
+    # 1) JWT bearer token (primary)
     token = extract_token_from_request(request)
-    if not token:
-        return {
-            "user_id": None,
-            "tenant_id": None,
-            "is_authenticated": False,
-        }
-    
-    # Verify token
-    try:
-        payload = verify_token(token)
-        return {
-            "user_id": payload.get("user_id"),
-            "tenant_id": payload.get("tenant_id"),
-            "is_authenticated": True,
-        }
-    except HTTPException:
-        return {
-            "user_id": None,
-            "tenant_id": None,
-            "is_authenticated": False,
-        }
+    if token:
+        try:
+            payload = verify_token(token)
+            return {
+                "user_id": payload.get("user_id"),
+                "tenant_id": payload.get("tenant_id"),
+                "is_authenticated": True,
+            }
+        except HTTPException:
+            pass
+
+    # 2) Personal API key (clipper/mobile)
+    api_key = extract_api_key_from_request(request)
+    if api_key:
+        try:
+            from services_api_keys import verify_personal_api_key
+
+            res = verify_personal_api_key(api_key)
+            if res:
+                return {
+                    "user_id": res.user_id,
+                    "tenant_id": res.tenant_id,
+                    "is_authenticated": True,
+                }
+        except Exception:
+            pass
+
+    return {
+        "user_id": None,
+        "tenant_id": None,
+        "is_authenticated": False,
+    }
 
 
 def require_auth(
@@ -231,4 +258,3 @@ def is_public_endpoint(path: str) -> bool:
             return True
     
     return False
-

@@ -43,6 +43,17 @@ class ConfusionSkillRequest(BaseModel):
     limit: int = 8
 
 
+class StockQuoteResourceRequest(BaseModel):
+    concept_id: Optional[str] = None
+    symbol: Optional[str] = None
+    query: Optional[str] = None
+
+
+class LiveMetricResourceRequest(BaseModel):
+    concept_id: Optional[str] = None
+    query: str
+
+
 def _require_graph_identity(request: Request) -> tuple[str, str]:
     user_id = getattr(request.state, "user_id", None)
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -264,6 +275,35 @@ def _caption_from_confusion_output(out: Dict[str, Any]) -> str:
     return "\n".join(lines).strip() or "Browser Use skill output attached."
 
 
+def _caption_from_stock_quote_result(result: Dict[str, Any]) -> str:
+    structured = (result or {}).get("structured_data") or {}
+    symbol = structured.get("symbol") or (result or {}).get("metadata", {}).get("symbol") or "UNKNOWN"
+    name = structured.get("name") or symbol
+    price = structured.get("price")
+    currency = structured.get("currency") or ""
+    change = structured.get("change")
+    change_pct = structured.get("change_percent")
+    as_of = structured.get("as_of") or (result or {}).get("metadata", {}).get("as_of")
+
+    parts = [f"{name} ({symbol})"]
+    if isinstance(price, (int, float)):
+        parts.append(f"{price:.2f} {currency}".strip())
+    elif price is not None:
+        parts.append(str(price))
+    if isinstance(change, (int, float)) and isinstance(change_pct, (int, float)):
+        parts.append(f"({change:+.2f}, {change_pct:+.2f}%)")
+    if as_of:
+        parts.append(f"as of {as_of}")
+    return " ".join([p for p in parts if p]).strip() or f"Live market quote for {symbol}"
+
+
+def _caption_from_live_metric_result(result: Dict[str, Any]) -> str:
+    content = (result or {}).get("content") or ""
+    if content:
+        return content[:400]
+    return (result or {}).get("title") or "Live metric snapshot"
+
+
 @router.post("/fetch/confusions", response_model=Resource)
 async def fetch_confusions(
     req: ConfusionSkillRequest,
@@ -272,7 +312,7 @@ async def fetch_confusions(
     session=Depends(get_neo4j_session),
 ):
     """
-    Fetch confusions and pitfalls using local web search (SearXNG).
+    Fetch confusions and pitfalls using internal web search (Exa-backed).
     Replaces the external Browser Use skill with internal search_and_fetch.
     """
     from services_web_search import search_and_fetch
@@ -287,9 +327,7 @@ async def fetch_confusions(
         # each result has 'search_result' and 'fetched_content'
         search_out = await search_and_fetch(
             query=search_query,
-            num_results=req.limit, 
-            # We can use specific engines if configured, or default
-            rerank=True,  # usage of AI reranker if available
+            num_results=req.limit,
         )
     except Exception as e:
         # Fallback if search service fails
@@ -329,6 +367,143 @@ async def fetch_confusions(
         caption=_caption_from_confusion_output(skill_out),
         source="web_search",
         metadata=skill_out,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    if req.concept_id:
+        try:
+            link_resource_to_concept(
+                session=session,
+                concept_id=req.concept_id,
+                resource_id=resource.resource_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    return resource
+
+
+@router.post("/fetch/stock-quote", response_model=Resource)
+async def fetch_stock_quote_resource(
+    req: StockQuoteResourceRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Fetch a structured live stock quote snapshot and save it as a Resource in the graph.
+    Useful for finance/company research workspaces that need current market metrics.
+    """
+    from services_web_search import get_stock_quote, search_live_market_data, resolve_stock_symbol
+
+    user_id, tenant_id = _require_graph_identity(request)
+
+    resolved_symbol = (req.symbol or "").strip().upper() or (resolve_stock_symbol(req.query or "") if req.query else None)
+    if not resolved_symbol:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide `symbol` or a `query` containing a recognizable public stock/company ticker",
+        )
+
+    quote_result = await get_stock_quote(resolved_symbol)
+    if not quote_result and req.query:
+        quote_result = await search_live_market_data(req.query)
+    if not quote_result:
+        raise HTTPException(status_code=404, detail=f"No live quote data found for symbol '{resolved_symbol}'")
+
+    structured = quote_result.get("structured_data") or {}
+    metadata = {
+        "type": "live_metric_snapshot",
+        "metric_kind": "stock_quote",
+        "query": req.query,
+        "symbol": structured.get("symbol") or resolved_symbol,
+        "provider": quote_result.get("engine", "market_data"),
+        "is_realtime": bool(quote_result.get("is_realtime")),
+        "quote": structured,
+        "source_result": {
+            "title": quote_result.get("title"),
+            "url": quote_result.get("url"),
+            "snippet": quote_result.get("snippet"),
+            "metadata": quote_result.get("metadata"),
+        },
+    }
+
+    resource = create_resource(
+        session=session,
+        kind="metric_snapshot",
+        url=quote_result.get("url") or f"brainweb://market/quote/{resolved_symbol}",
+        title=f"Live Quote: {structured.get('name') or resolved_symbol} ({structured.get('symbol') or resolved_symbol})",
+        caption=_caption_from_stock_quote_result(quote_result),
+        source=quote_result.get("engine", "market_data"),
+        metadata=metadata,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+
+    if req.concept_id:
+        try:
+            link_resource_to_concept(
+                session=session,
+                concept_id=req.concept_id,
+                resource_id=resource.resource_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    return resource
+
+
+@router.post("/fetch/live-metric", response_model=Resource)
+async def fetch_live_metric_resource(
+    req: LiveMetricResourceRequest,
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session),
+):
+    """
+    Fetch a structured live metric snapshot (stocks, crypto, FX, macro) and save it as a Resource.
+    """
+    from services_web_search import search_live_market_data
+
+    user_id, tenant_id = _require_graph_identity(request)
+
+    metric_result = await search_live_market_data(req.query)
+    if not metric_result:
+        raise HTTPException(status_code=404, detail="No structured live metric provider matched the query")
+
+    structured = metric_result.get("structured_data") or {}
+    metric_kind = structured.get("kind") or metric_result.get("source_type") or "live_metric"
+    title = metric_result.get("title") or f"Live Metric: {metric_kind}"
+
+    metadata = {
+        "type": "live_metric_snapshot",
+        "metric_kind": metric_kind,
+        "query": req.query,
+        "provider": metric_result.get("engine", "market_data"),
+        "is_realtime": bool(metric_result.get("is_realtime")),
+        "metric": structured,
+        "source_result": {
+            "title": metric_result.get("title"),
+            "url": metric_result.get("url"),
+            "snippet": metric_result.get("snippet"),
+            "metadata": metric_result.get("metadata"),
+            "source_type": metric_result.get("source_type"),
+        },
+    }
+
+    resource = create_resource(
+        session=session,
+        kind="metric_snapshot",
+        url=metric_result.get("url") or f"brainweb://metrics/{metric_kind}",
+        title=title,
+        caption=_caption_from_live_metric_result(metric_result),
+        source=metric_result.get("engine", "market_data"),
+        metadata=metadata,
         tenant_id=tenant_id,
         user_id=user_id,
     )

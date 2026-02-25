@@ -1,0 +1,100 @@
+{
+  "default_profile": "default_web",
+  "profiles": {
+    "default_web": {
+      "type": "auto",
+      "category": null,
+      "content_mode": "text",
+      "content_max_characters": 12000,
+      "max_age_hours": null
+    },
+    "news_live": {
+      "type": "auto",
+      "category": "news",
+      "content_mode": "text",
+      "content_max_characters": 12000,
+      "max_age_hours": 1
+    },
+    "research_paper": {
+      "type": "auto",
+      "category": "research paper",
+      "content_mode": "text",
+      "content_max_characters": 16000,
+      "max_age_hours": null
+    },
+    "company_entity": {
+      "type": "auto",
+      "category": "company",
+      "content_mode": "highlights",
+      "content_max_characters": 3000,
+      "max_age_hours": 24
+    },
+    "people_entity": {
+      "type": "auto",
+      "category": "people",
+      "content_mode": "highlights",
+      "content_max_characters": 3000,
+      "max_age_hours": 24
+    },
+    "tweet_social": {
+      "type": "auto",
+      "category": "tweet",
+      "content_mode": "text",
+      "content_max_characters": 4000,
+      "max_age_hours": 1
+    },
+    "code_docs": {
+      "type": "auto",
+      "category": null,
+      "content_mode": "text",
+      "content_max_characters": 16000,
+      "max_age_hours": 24,
+      "include_domains": ["github.com", "stackoverflow.com", "developer.mozilla.org", "docs.python.org"]
+    },
+    "wiki_lookup": {
+      "type": "auto",
+      "category": null,
+      "content_mode": "text",
+      "content_max_characters": 14000,
+      "max_age_hours": 168,
+      "include_domains": ["wikipedia.org"]
+    }
+  },
+  "rules": [
+    {
+      "name": "explicit_wikipedia",
+      "profile": "wiki_lookup",
+      "match_any": ["wikipedia", "wiki"]
+    },
+    {
+      "name": "breaking_news",
+      "profile": "news_live",
+      "match_any": ["breaking", "latest", "news", "today", "announced", "update", "headline"]
+    },
+    {
+      "name": "research_papers",
+      "profile": "research_paper",
+      "match_any": ["research paper", "paper", "arxiv", "preprint", "study"]
+    },
+    {
+      "name": "people_profiles",
+      "profile": "people_entity",
+      "match_any": ["who is", "founder", "ceo", "linkedin profile", "researcher", "profile"]
+    },
+    {
+      "name": "company_lookup",
+      "profile": "company_entity",
+      "match_any": ["company", "startup", "firm", "business", "organization"]
+    },
+    {
+      "name": "social_posts",
+      "profile": "tweet_social",
+      "match_any": ["tweet", "twitter", "x post"]
+    },
+    {
+      "name": "coding_docs",
+      "profile": "code_docs",
+      "match_any": ["stackoverflow", "github repo", "docs", "api docs", "python docs", "typescript docs", "reference implementation"]
+    }
+  ]
+}

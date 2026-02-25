@@ -15,6 +15,10 @@ class DeepResearchRequest(BaseModel):
     intent: str = "auto"
     graph_id: Optional[str] = None
     branch_id: Optional[str] = None
+    use_exa_research: bool = False
+    exa_research_wait: bool = True
+    exa_research_timeout_seconds: int = 300
+    exa_research_model: Optional[str] = None
 
 class DeepResearchResponse(BaseModel):
     status: str
@@ -38,7 +42,11 @@ async def run_deep_research(
             depth=payload.depth,
             intent=payload.intent,
             graph_id=payload.graph_id,
-            branch_id=payload.branch_id
+            branch_id=payload.branch_id,
+            use_exa_research=payload.use_exa_research,
+            exa_research_wait=payload.exa_research_wait,
+            exa_research_timeout_seconds=payload.exa_research_timeout_seconds,
+            exa_research_model=payload.exa_research_model,
         )
         
         return DeepResearchResponse(

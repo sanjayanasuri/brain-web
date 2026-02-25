@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi import Request
 from pydantic import BaseModel, Field
 from neo4j import Session
+import uuid
+from datetime import datetime
 
 from db_neo4j import get_neo4j_session
 from auth import require_auth
@@ -389,16 +391,48 @@ def capture_workflow(
         else:
             raise HTTPException(status_code=400, detail=f"Unknown content_type: {request.content_type}")
         
-        return CaptureResponse(
-            success=True,
-            result=result,
-            next_actions=next_actions,
-        )
-        
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Capture failed: {str(e)}")
+
+    # Emit ActivityEvent for successful capture
+    try:
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        
+        title = "Selection"
+        if request.content_type == "selection":
+            title = request.page_title or "Selection"
+        elif request.content_type == "url":
+            title = request.url
+        elif request.content_type == "file":
+            title = request.file_data.get("title") or "File"
+
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'INGESTION_STARTED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id=user_id,
+            graph_id=graph_id,
+            payload={"title": title, "capture_mode": request.content_type},
+            created_at=now
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("brain_web").warning(f"Failed to emit INGESTION_STARTED event in workflow: {e}")
+
+    return CaptureResponse(
+        success=True,
+        result=result,
+        next_actions=next_actions,
+    )
 
 
 # -------------------- Explore Workflow --------------------

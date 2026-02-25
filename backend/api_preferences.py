@@ -8,7 +8,9 @@ This module handles:
 """
 
 from fastapi import APIRouter, Depends, Request
-from typing import List
+from typing import List, Optional
+import uuid
+from datetime import datetime
 
 from models import (
     ResponseStyleProfileWrapper,
@@ -123,7 +125,38 @@ def set_profile(profile: UserProfile, request: Request, session=Depends(get_neo4
     Update the user profile.
     """
     user_id = _get_request_user_id(request)
-    return update_user_profile(session, profile, user_id=user_id)
+    result = update_user_profile(session, profile, user_id=user_id)
+    
+    # Emit ActivityEvent for PROFILE_UPDATED
+    try:
+        from services_branch_explorer import get_active_graph_context
+        tenant_id = _get_request_tenant_id(request)
+        graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
+        
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'PROFILE_UPDATED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id=user_id,
+            graph_id=graph_id,
+            payload={"source": "user_profile"},
+            created_at=now
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("brain_web").warning(f"Failed to emit PROFILE_UPDATED event: {e}")
+        
+    return result
 
 
 @router.patch("/user-profile", response_model=UserProfile)
@@ -159,7 +192,38 @@ def patch_tutor_profile(patch: TutorProfilePatch, request: Request, session=Depe
     Patch the per-user TutorProfile (partial update).
     """
     user_id = _get_request_user_id(request)
-    return patch_tutor_profile_service(session, user_id=user_id, patch=patch)
+    result = patch_tutor_profile_service(session, user_id=user_id, patch=patch)
+    
+    # Emit ActivityEvent for PROFILE_UPDATED
+    try:
+        from services_branch_explorer import get_active_graph_context
+        tenant_id = _get_request_tenant_id(request)
+        graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
+        
+        event_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat() + "Z"
+        session.run(
+            """
+            CREATE (e:ActivityEvent {
+                id: $id,
+                user_id: $user_id,
+                graph_id: $graph_id,
+                type: 'PROFILE_UPDATED',
+                payload: $payload,
+                created_at: $created_at
+            })
+            """,
+            id=event_id,
+            user_id=user_id,
+            graph_id=graph_id,
+            payload={"source": "tutor_profile_patch"},
+            created_at=now
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger("brain_web").warning(f"Failed to emit PROFILE_UPDATED event: {e}")
+        
+    return result
 
 
 @router.get("/ui", response_model=UIPreferences)
@@ -171,11 +235,56 @@ def get_ui_prefs(session=Depends(get_neo4j_session)):
 
 
 @router.post("/ui", response_model=UIPreferences)
-def set_ui_prefs(prefs: UIPreferences, session=Depends(get_neo4j_session)):
+def set_ui_prefs(
+    prefs: UIPreferences, 
+    request: Request,
+    auth: dict = Depends(require_auth),
+    session=Depends(get_neo4j_session)
+):
     """
     Update UI preferences (lens system, etc.).
     """
-    return update_ui_preferences(session, prefs)
+    result = update_ui_preferences(session, prefs)
+    
+    # Emit ActivityEvent for LENS_CHANGED
+    try:
+        user_id = _get_request_user_id(request)
+        tenant_id = _get_request_tenant_id(request)
+        from services_branch_explorer import get_active_graph_context
+        graph_id, _ = get_active_graph_context(session, tenant_id=tenant_id, user_id=user_id)
+        
+        # We assume that if someone is calling this, they might be changing the lens
+        # For simplicity, we'll emit LENS_CHANGED if an active_lens is present in the payload
+        # This could be refined to check if it actually CHANGED.
+        active_lens = getattr(prefs, "active_lens", None)
+        if not active_lens and hasattr(prefs, "dict"):
+             active_lens = prefs.dict().get("active_lens")
+             
+        if active_lens:
+            event_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat() + "Z"
+            session.run(
+                """
+                CREATE (e:ActivityEvent {
+                    id: $id,
+                    user_id: $user_id,
+                    graph_id: $graph_id,
+                    type: 'LENS_CHANGED',
+                    payload: $payload,
+                    created_at: $created_at
+                })
+                """,
+                id=event_id,
+                user_id=user_id,
+                graph_id=graph_id,
+                payload={"lens_name": active_lens},
+                created_at=now
+            )
+    except Exception as e:
+        import logging
+        logging.getLogger("brain_web").warning(f"Failed to emit LENS_CHANGED event: {e}")
+        
+    return result
 
 
 @router.post("/conversation-summaries", response_model=ConversationSummary)

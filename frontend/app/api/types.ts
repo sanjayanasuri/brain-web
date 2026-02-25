@@ -67,6 +67,101 @@ export interface GraphSummary {
     intent?: string | null;
 }
 
+export interface RefreshCheckConfig {
+    check_id?: string | null;
+    kind: string;
+    query: string;
+    title?: string | null;
+    enabled?: boolean;
+    params?: Record<string, any>;
+}
+
+export interface RefreshBindingConfig {
+    version?: number;
+    enabled: boolean;
+    inherit_workspace_defaults?: boolean;
+    triggers: string[];
+    ttl_seconds: number;
+    checks: RefreshCheckConfig[];
+}
+
+export interface RefreshBindingStatus {
+    enabled: boolean;
+    triggers: string[];
+    ttl_seconds: number;
+    check_count: number;
+    is_stale: boolean;
+    age_seconds?: number | null;
+    last_run_at?: string | null;
+    last_success_at?: string | null;
+    next_due_at?: string | null;
+    last_status?: string | null;
+    last_trigger?: string | null;
+    last_error?: string | null;
+}
+
+export interface ConceptRefreshBindingResponse {
+    concept: {
+        concept_id: string;
+        name: string;
+        graph_id: string;
+    };
+    config: RefreshBindingConfig;
+    workspace_defaults: RefreshBindingConfig;
+    effective_config: RefreshBindingConfig;
+    state: Record<string, any>;
+    status: RefreshBindingStatus;
+}
+
+export interface ConceptRefreshRunResponse {
+    ok: boolean;
+    run_status: string;
+    skip_reason?: string;
+    binding: ConceptRefreshBindingResponse;
+    resources_created: Resource[];
+    resources_created_count: number;
+    check_results?: Array<Record<string, any>>;
+}
+
+export interface GraphRefreshDefaultsResponse {
+    graph_id: string;
+    refresh_defaults: RefreshBindingConfig;
+}
+
+export interface WorkspaceTemplate {
+    template_id: string;
+    template_family_id?: string | null;
+    version?: number;
+    parent_template_id?: string | null;
+    label: string;
+    description?: string | null;
+    vertical?: string | null;
+    tags: string[];
+    intent?: string | null;
+    node_types: string[];
+    starter_nodes?: string[];
+    node_layout?: Record<string, any> | null;
+    default_checks: string[];
+    connection_patterns: string[];
+    refresh_defaults?: RefreshBindingConfig | null;
+    tenant_id?: string | null;
+    created_by_user_id?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    is_builtin?: boolean;
+}
+
+export interface WorkspaceTemplateListResponse {
+    templates: WorkspaceTemplate[];
+}
+
+export interface WorkspaceTemplateExportPayload {
+    schema_version: number;
+    kind: string;
+    exported_at: string;
+    template: WorkspaceTemplate;
+}
+
 export interface GraphListResponse {
     graphs: GraphSummary[];
     active_graph_id: string;

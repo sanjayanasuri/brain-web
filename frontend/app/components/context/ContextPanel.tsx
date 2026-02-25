@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { Concept, Resource, Suggestion, SuggestionType, ConceptNote } from '../../api-client';
+import type { Concept, Resource, Suggestion, SuggestionType, ConceptNote, ConceptRefreshBindingResponse, RefreshBindingConfig, RefreshCheckConfig } from '../../api-client';
 import { fetchEvidenceForConcept, type FetchEvidenceResult } from '../../lib/evidenceFetch';
-import { uploadResourceForConcept, getResourcesForConcept, getSuggestions, getSuggestedPaths, resolveLectureLinks, type SuggestedPath, getConceptNotes } from '../../api-client';
+import { uploadResourceForConcept, getResourcesForConcept, getSuggestions, getSuggestedPaths, resolveLectureLinks, type SuggestedPath, getConceptNotes, getConceptRefreshBinding, updateConceptRefreshBinding, runConceptRefresh } from '../../api-client';
 import { togglePinConcept, isConceptPinned } from '../../lib/sessionState';
 import { addConceptToHistory } from '../../lib/conceptNavigationHistory';
 import { getChatSession, getCurrentSessionId } from '../../lib/chatSessions';
@@ -25,6 +25,403 @@ import { generateSuggestionObservation } from '../../lib/observations';
 import { storeLectureLinkReturn } from '../../lib/lectureLinkNavigation';
 import { getAuthHeaders } from '../../lib/authToken';
 import type { ArtifactRef, BBoxSelector } from '../../types/unified';
+
+function formatRefreshTimestampLabel(ts?: string | null): string {
+  if (!ts) return 'Never';
+  try {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return 'Never';
+    return d.toLocaleString();
+  } catch {
+    return 'Never';
+  }
+}
+
+function buildDefaultRefreshConfigForConcept(
+  conceptName: string,
+  currentConfig?: RefreshBindingConfig | null,
+  workspaceDefaults?: RefreshBindingConfig | null
+): RefreshBindingConfig {
+  const existing = currentConfig || {
+    enabled: false,
+    inherit_workspace_defaults: true,
+    triggers: ['manual'],
+    ttl_seconds: 3600,
+    checks: [],
+  };
+  const existingChecks = Array.isArray(existing.checks) ? existing.checks : [];
+  const hasWorkspaceChecks = !!(workspaceDefaults && Array.isArray(workspaceDefaults.checks) && workspaceDefaults.checks.length > 0);
+  const nextTriggers = Array.from(new Set([...(existing.triggers || []), 'manual', 'on_open']));
+  return {
+    version: existing.version || 1,
+    enabled: true,
+    inherit_workspace_defaults: existing.inherit_workspace_defaults ?? true,
+    triggers: nextTriggers,
+    ttl_seconds: existing.ttl_seconds || 1800,
+    checks:
+      existingChecks.length > 0 || hasWorkspaceChecks
+        ? existingChecks
+        : [
+            {
+              check_id: 'updates',
+              kind: 'exa_answer',
+              title: 'Recent updates',
+              query: `latest updates about ${conceptName}`,
+              enabled: true,
+              params: { max_age_hours: 24 },
+            },
+          ],
+  };
+}
+
+function cloneRefreshBindingConfig(config?: RefreshBindingConfig | null): RefreshBindingConfig {
+  const base: RefreshBindingConfig = config || {
+    version: 1,
+    enabled: false,
+    inherit_workspace_defaults: true,
+    triggers: ['manual'],
+    ttl_seconds: 3600,
+    checks: [],
+  };
+  return {
+    version: base.version || 1,
+    enabled: Boolean(base.enabled),
+    inherit_workspace_defaults: base.inherit_workspace_defaults ?? true,
+    triggers: Array.isArray(base.triggers) ? [...base.triggers] : ['manual'],
+    ttl_seconds: typeof base.ttl_seconds === 'number' ? base.ttl_seconds : 3600,
+    checks: Array.isArray(base.checks)
+      ? base.checks.map((check) => ({
+          check_id: check.check_id || null,
+          kind: check.kind || 'exa_answer',
+          query: check.query || '',
+          title: check.title || '',
+          enabled: check.enabled ?? true,
+          params: check.params ? { ...check.params } : {},
+        }))
+      : [],
+  };
+}
+
+function createEmptyRefreshCheck(conceptName: string): RefreshCheckConfig {
+  return {
+    check_id: `chk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    kind: 'exa_answer',
+    title: 'Recent updates',
+    query: `latest updates about ${conceptName}`,
+    enabled: true,
+    params: { max_age_hours: 24 },
+  };
+}
+
+function compactMetricNumber(value: any): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  const absNum = Math.abs(num);
+  if (absNum >= 1_000_000_000_000) return `${(num / 1_000_000_000_000).toFixed(2)}T`;
+  if (absNum >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(2)}B`;
+  if (absNum >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+  if (absNum >= 1_000) return `${(num / 1_000).toFixed(2)}K`;
+  return num.toFixed(2);
+}
+
+function formatMetricValue(value: any, decimals = 2): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num.toLocaleString(undefined, { maximumFractionDigits: decimals, minimumFractionDigits: 0 });
+}
+
+function formatPercent(value: any): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}%`;
+}
+
+function formatDelta(value: any): string | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return `${num > 0 ? '+' : ''}${num.toFixed(2)}`;
+}
+
+function getStructuredMetricPayload(resource: Resource): Record<string, any> | null {
+  const meta = resource.metadata;
+  if (!meta || typeof meta !== 'object') return null;
+  const direct = (meta.metric || meta.quote || meta.structured_data) as Record<string, any> | undefined;
+  if (direct && typeof direct === 'object') return direct;
+  const sourceResult = (meta.source_result || {}) as Record<string, any>;
+  const nested = sourceResult.structured_data;
+  return nested && typeof nested === 'object' ? (nested as Record<string, any>) : null;
+}
+
+function getStructuredNewsHeadlines(resource: Resource): Array<Record<string, any>> {
+  const meta = resource.metadata;
+  if (!meta || typeof meta !== 'object') return [];
+  const headlines = meta.headlines;
+  return Array.isArray(headlines) ? headlines.filter((item) => item && typeof item === 'object') : [];
+}
+
+function getStructuredEvidenceKind(resource: Resource): 'metric' | 'news' | null {
+  const meta = resource.metadata;
+  if (resource.kind === 'metric_snapshot') return 'metric';
+  if (meta && typeof meta === 'object') {
+    if (meta.type === 'live_metric_snapshot' || meta.check_kind === 'live_metric') return 'metric';
+    if (meta.check_kind === 'exa_news' || resource.source === 'exa_news' || Array.isArray(meta.headlines)) return 'news';
+  }
+  return null;
+}
+
+function getHostnameLabel(url?: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+function MetricEvidenceCard({ resource, isExpanded }: { resource: Resource; isExpanded: boolean }) {
+  const meta = (resource.metadata && typeof resource.metadata === 'object') ? resource.metadata : {};
+  const metric = getStructuredMetricPayload(resource) || {};
+  const kind = String(metric.kind || meta.metric_kind || '').toLowerCase();
+  const provider = String(metric.provider || meta.provider || resource.source || 'market_data');
+  const asOf = metric.as_of || metric.observation_date || meta.refreshed_at || resource.created_at;
+
+  const renderPills = (items: Array<{ label: string; value: string | null | undefined }>) => (
+    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+      {items
+        .filter((item) => item.value)
+        .map((item) => (
+          <span
+            key={`${item.label}:${item.value}`}
+            className="pill pill--small"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--ink)' }}
+          >
+            <strong style={{ fontWeight: 600 }}>{item.label}:</strong>&nbsp;{item.value}
+          </span>
+        ))}
+    </div>
+  );
+
+  if (kind === 'stock_quote' || kind === 'crypto_quote') {
+    const price = formatMetricValue(metric.price, 2);
+    const change = formatDelta(metric.change);
+    const pct = formatPercent(metric.change_percent);
+    const isUp = Number(metric.change_percent) >= 0;
+    return (
+      <div
+        style={{
+          border: '1px solid rgba(59, 130, 246, 0.15)',
+          borderRadius: '8px',
+          background: 'linear-gradient(180deg, rgba(59,130,246,0.06), rgba(59,130,246,0.01))',
+          padding: '10px',
+          marginBottom: '8px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+              {kind === 'crypto_quote' ? 'Crypto Snapshot' : 'Ticker Snapshot'}
+            </div>
+            <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--ink)', lineHeight: 1.2 }}>
+              {metric.symbol || meta.symbol || 'Ticker'}
+              {price ? (
+                <span style={{ marginLeft: '8px', fontSize: '16px', fontWeight: 600 }}>
+                  {price} {metric.currency || ''}
+                </span>
+              ) : null}
+            </div>
+            {metric.name && (
+              <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>
+                {metric.name}
+              </div>
+            )}
+          </div>
+          {(change || pct) && (
+            <div
+              style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: isUp ? '#15803d' : '#b91c1c',
+                background: isUp ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${isUp ? 'rgba(34,197,94,0.18)' : 'rgba(239,68,68,0.18)'}`,
+                borderRadius: '999px',
+                padding: '4px 8px',
+              }}
+            >
+              {[change, pct].filter(Boolean).join(' · ')}
+            </div>
+          )}
+        </div>
+        {renderPills([
+          { label: 'Provider', value: provider },
+          { label: 'As of', value: asOf ? formatRefreshTimestampLabel(String(asOf)) : null },
+          { label: 'Exchange', value: metric.exchange ? String(metric.exchange) : null },
+          { label: 'State', value: metric.market_state ? String(metric.market_state) : null },
+          { label: 'Market Cap', value: compactMetricNumber(metric.market_cap) },
+          { label: 'Volume', value: compactMetricNumber(metric.volume) },
+        ])}
+        {isExpanded && (resource.caption || metric.source_delay_note) && (
+          <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
+            {resource.caption}
+            {metric.source_delay_note ? (
+              <div style={{ marginTop: '6px' }}>{metric.source_delay_note}</div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (kind === 'fx_rate') {
+    const pair = `${metric.base || ''}/${metric.quote || ''}`.replace(/^\/|\/$/g, '');
+    const rate = formatMetricValue(metric.rate, 6);
+    const converted = formatMetricValue(metric.converted_amount, 4);
+    const amount = formatMetricValue(metric.amount, 4);
+    return (
+      <div style={{ border: '1px solid rgba(14,165,233,0.14)', borderRadius: '8px', background: 'rgba(14,165,233,0.03)', padding: '10px', marginBottom: '8px' }}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>FX Rate Snapshot</div>
+        <div style={{ marginTop: '4px', fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }}>
+          {pair || 'FX pair'} {rate ? <span style={{ fontSize: '14px', fontWeight: 600 }}>= {rate}</span> : null}
+        </div>
+        {amount && converted && metric.base && metric.quote && (
+          <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--muted)' }}>
+            {amount} {metric.base} = {converted} {metric.quote}
+          </div>
+        )}
+        {renderPills([
+          { label: 'Provider', value: provider },
+          { label: 'As of', value: asOf ? formatRefreshTimestampLabel(String(asOf)) : null },
+          { label: 'Inverse', value: formatMetricValue(metric.inverse_rate, 6) },
+        ])}
+        {isExpanded && resource.caption && (
+          <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>{resource.caption}</div>
+        )}
+      </div>
+    );
+  }
+
+  if (kind === 'macro_indicator') {
+    return (
+      <div style={{ border: '1px solid rgba(16,185,129,0.16)', borderRadius: '8px', background: 'rgba(16,185,129,0.03)', padding: '10px', marginBottom: '8px' }}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>Macro Indicator Snapshot</div>
+        <div style={{ marginTop: '4px', fontSize: '16px', fontWeight: 700, color: 'var(--ink)' }}>
+          {metric.title || resource.title || 'Indicator'}
+        </div>
+        <div style={{ marginTop: '2px', fontSize: '14px', color: 'var(--ink)' }}>
+          {formatMetricValue(metric.value, 4) || String(metric.value ?? 'N/A')}
+          {metric.unit ? ` ${metric.unit}` : ''}
+        </div>
+        {renderPills([
+          { label: 'Provider', value: provider },
+          { label: 'Series', value: metric.series_id ? String(metric.series_id) : null },
+          { label: 'Obs', value: metric.observation_date ? String(metric.observation_date) : null },
+          { label: 'As of', value: asOf ? formatRefreshTimestampLabel(String(asOf)) : null },
+          { label: 'Transform', value: metric.transform ? String(metric.transform) : null },
+        ])}
+        {isExpanded && resource.caption && (
+          <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>{resource.caption}</div>
+        )}
+      </div>
+    );
+  }
+
+  // Generic metric fallback card
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', padding: '10px', marginBottom: '8px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase' }}>Live Metric Snapshot</div>
+      <div style={{ marginTop: '4px', fontSize: '14px', fontWeight: 600, color: 'var(--ink)' }}>
+        {resource.title || metric.title || 'Metric'}
+      </div>
+      {renderPills([
+        { label: 'Provider', value: provider },
+        { label: 'Kind', value: kind || String(meta.metric_kind || '') || null },
+        { label: 'As of', value: asOf ? formatRefreshTimestampLabel(String(asOf)) : null },
+      ])}
+      {resource.caption && (
+        <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--muted)', lineHeight: 1.45 }}>
+          {isExpanded || resource.caption.length <= 240 ? resource.caption : `${resource.caption.slice(0, 240)}...`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewsEvidenceCard({ resource, isExpanded }: { resource: Resource; isExpanded: boolean }) {
+  const headlines = getStructuredNewsHeadlines(resource);
+  const visible = isExpanded ? headlines : headlines.slice(0, 4);
+  return (
+    <div
+      style={{
+        border: '1px solid rgba(245, 158, 11, 0.18)',
+        borderRadius: '8px',
+        background: 'linear-gradient(180deg, rgba(245,158,11,0.05), rgba(245,158,11,0.01))',
+        padding: '10px',
+        marginBottom: '8px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+          News Feed Snapshot
+        </div>
+        <span className="pill pill--small" style={{ borderColor: 'rgba(245,158,11,0.2)', color: '#b45309', background: 'rgba(245,158,11,0.08)' }}>
+          {headlines.length} headline{headlines.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      {visible.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {visible.map((headline, idx) => {
+            const url = typeof headline.url === 'string' ? headline.url : undefined;
+            const title = typeof headline.title === 'string' ? headline.title : `Headline ${idx + 1}`;
+            const snippet = typeof headline.snippet === 'string' ? headline.snippet : '';
+            const hostname = getHostnameLabel(url);
+            const md = headline.metadata && typeof headline.metadata === 'object' ? headline.metadata : {};
+            const published = (md.publishedDate || md.published_date || md.date || md.publishedAt) as string | undefined;
+            return (
+              <div key={`${title}-${idx}`} style={{ border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', padding: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+                  {url ? (
+                    <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', fontWeight: 600, fontSize: '12px', textDecoration: 'none', lineHeight: 1.35 }}>
+                      {title}
+                    </a>
+                  ) : (
+                    <div style={{ color: 'var(--ink)', fontWeight: 600, fontSize: '12px', lineHeight: 1.35 }}>{title}</div>
+                  )}
+                  <span style={{ fontSize: '10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{hostname || 'web'}</span>
+                </div>
+                {(published || snippet) && (
+                  <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--muted)', lineHeight: 1.35 }}>
+                    {published ? `${formatRefreshTimestampLabel(published)}${snippet ? ' · ' : ''}` : null}
+                    {snippet ? (snippet.length > 180 && !isExpanded ? `${snippet.slice(0, 180)}...` : snippet) : null}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+          No headline list metadata found. This may be a generic web/news resource.
+        </div>
+      )}
+
+      {resource.caption && (
+        <div style={{ fontSize: '11px', color: 'var(--muted)', lineHeight: 1.4 }}>
+          {isExpanded || resource.caption.length <= 260 ? resource.caption : `${resource.caption.slice(0, 260)}...`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StructuredEvidenceCardBody({ resource, isExpanded }: { resource: Resource; isExpanded: boolean }) {
+  const kind = getStructuredEvidenceKind(resource);
+  if (kind === 'metric') return <MetricEvidenceCard resource={resource} isExpanded={isExpanded} />;
+  if (kind === 'news') return <NewsEvidenceCard resource={resource} isExpanded={isExpanded} />;
+  return null;
+}
 
 // Overflow menu component for suggestions
 function SuggestionOverflowMenu({
@@ -270,6 +667,17 @@ export default function ContextPanel({
     addedCount?: number;
     error?: string;
   }>({ conceptId: '', status: 'idle' });
+  const [refreshBinding, setRefreshBinding] = useState<ConceptRefreshBindingResponse | null>(null);
+  const [refreshBindingLoading, setRefreshBindingLoading] = useState(false);
+  const [refreshBindingError, setRefreshBindingError] = useState<string | null>(null);
+  const [refreshBindingSaving, setRefreshBindingSaving] = useState(false);
+  const [refreshRunLoading, setRefreshRunLoading] = useState(false);
+  const [refreshEditorOpen, setRefreshEditorOpen] = useState(false);
+  const [refreshDraftConfig, setRefreshDraftConfig] = useState<RefreshBindingConfig | null>(null);
+  const [refreshDraftDirty, setRefreshDraftDirty] = useState(false);
+  const [refreshCheckParamsJson, setRefreshCheckParamsJson] = useState<Record<string, string>>({});
+  const [refreshCheckParamsErrors, setRefreshCheckParamsErrors] = useState<Record<string, string>>({});
+  const autoRefreshRunKeyRef = useRef<string | null>(null);
 
   const [notesDigest, setNotesDigest] = useState<NotesDigest | null>(null);
   const [notesLoading, setNotesLoading] = useState(false);
@@ -829,6 +1237,263 @@ export default function ContextPanel({
   const connectionsCount = connections.length || neighborCount;
 
   const isPinned = selectedNode ? isConceptPinned(selectedNode.node_id) : false;
+
+  const loadRefreshBinding = async (conceptId: string) => {
+    setRefreshBindingLoading(true);
+    setRefreshBindingError(null);
+    try {
+      const binding = await getConceptRefreshBinding(conceptId);
+      setRefreshBinding(binding);
+      return binding;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Failed to load refresh settings';
+      setRefreshBindingError(msg);
+      setRefreshBinding(null);
+      return null;
+    } finally {
+      setRefreshBindingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedNode?.node_id) {
+      setRefreshBinding(null);
+      setRefreshBindingError(null);
+      setRefreshDraftConfig(null);
+      setRefreshDraftDirty(false);
+      return;
+    }
+    if (IS_DEMO_MODE) {
+      setRefreshBinding(null);
+      setRefreshBindingError(null);
+      setRefreshDraftConfig(null);
+      setRefreshDraftDirty(false);
+      return;
+    }
+    autoRefreshRunKeyRef.current = null;
+    void loadRefreshBinding(selectedNode.node_id);
+  }, [selectedNode?.node_id, IS_DEMO_MODE]);
+
+  useEffect(() => {
+    if (!refreshBinding) {
+      setRefreshDraftConfig(null);
+      setRefreshDraftDirty(false);
+      setRefreshCheckParamsJson({});
+      setRefreshCheckParamsErrors({});
+      return;
+    }
+    setRefreshDraftConfig(cloneRefreshBindingConfig(refreshBinding.config));
+    setRefreshDraftDirty(false);
+    const nextJson: Record<string, string> = {};
+    for (const check of refreshBinding.config?.checks || []) {
+      const key = check.check_id || '';
+      if (!key) continue;
+      try {
+        nextJson[key] = JSON.stringify(check.params || {}, null, 2);
+      } catch {
+        nextJson[key] = '{}';
+      }
+    }
+    setRefreshCheckParamsJson(nextJson);
+    setRefreshCheckParamsErrors({});
+  }, [refreshBinding]);
+
+  const handleToggleRefreshUpdates = async () => {
+    if (!selectedNode) return;
+    if (!refreshBinding) {
+      await loadRefreshBinding(selectedNode.node_id);
+      return;
+    }
+    setRefreshBindingSaving(true);
+    setRefreshBindingError(null);
+    try {
+      const effectiveEnabled = Boolean(refreshBinding.effective_config?.enabled);
+      let nextConfig: RefreshBindingConfig;
+      if (effectiveEnabled) {
+        nextConfig = {
+          ...(refreshBinding.config || {
+            enabled: false,
+            inherit_workspace_defaults: true,
+            triggers: ['manual'],
+            ttl_seconds: 3600,
+            checks: [],
+          }),
+          enabled: false,
+        };
+      } else {
+        nextConfig = buildDefaultRefreshConfigForConcept(
+          selectedNode.name,
+          refreshBinding.config,
+          refreshBinding.workspace_defaults
+        );
+      }
+      const updated = await updateConceptRefreshBinding(selectedNode.node_id, nextConfig);
+      setRefreshBinding(updated);
+      autoRefreshRunKeyRef.current = null;
+    } catch (error) {
+      setRefreshBindingError(error instanceof Error ? error.message : 'Failed to update refresh settings');
+    } finally {
+      setRefreshBindingSaving(false);
+    }
+  };
+
+  const updateRefreshDraft = (updater: (prev: RefreshBindingConfig) => RefreshBindingConfig) => {
+    setRefreshDraftConfig((prev) => {
+      const base = cloneRefreshBindingConfig(prev || refreshBinding?.config || null);
+      const next = cloneRefreshBindingConfig(updater(base));
+      return next;
+    });
+    setRefreshDraftDirty(true);
+  };
+
+  const handleSaveRefreshConfig = async () => {
+    if (!selectedNode || !refreshDraftConfig) return;
+    if (Object.values(refreshCheckParamsErrors).some(Boolean)) {
+      setRefreshBindingError('Fix invalid JSON in advanced check params before saving');
+      return;
+    }
+    setRefreshBindingSaving(true);
+    setRefreshBindingError(null);
+    try {
+      const normalizedDraft = cloneRefreshBindingConfig(refreshDraftConfig);
+      if (!Array.isArray(normalizedDraft.triggers) || normalizedDraft.triggers.length === 0) {
+        normalizedDraft.triggers = ['manual'];
+      }
+      if (!Array.isArray(normalizedDraft.checks)) {
+        normalizedDraft.checks = [];
+      }
+      normalizedDraft.ttl_seconds = Math.max(30, Math.min(7 * 24 * 3600, Number(normalizedDraft.ttl_seconds || 3600)));
+      const updated = await updateConceptRefreshBinding(selectedNode.node_id, normalizedDraft);
+      setRefreshBinding(updated);
+      autoRefreshRunKeyRef.current = null;
+    } catch (error) {
+      setRefreshBindingError(error instanceof Error ? error.message : 'Failed to save refresh settings');
+    } finally {
+      setRefreshBindingSaving(false);
+    }
+  };
+
+  const toggleRefreshTrigger = (trigger: 'manual' | 'on_open' | 'scheduled') => {
+    updateRefreshDraft((draft) => {
+      const existing = new Set(Array.isArray(draft.triggers) ? draft.triggers : []);
+      if (existing.has(trigger)) {
+        existing.delete(trigger);
+      } else {
+        existing.add(trigger);
+      }
+      if (existing.size === 0) existing.add('manual');
+      return { ...draft, triggers: Array.from(existing) };
+    });
+  };
+
+  const handleAddRefreshCheck = () => {
+    if (!selectedNode) return;
+    const newCheck = createEmptyRefreshCheck(selectedNode.name);
+    updateRefreshDraft((draft) => ({
+      ...draft,
+      checks: [...(Array.isArray(draft.checks) ? draft.checks : []), newCheck],
+    }));
+    const newCheckId = newCheck.check_id || '';
+    if (newCheckId) {
+      setRefreshCheckParamsJson((prev) => ({ ...prev, [newCheckId]: JSON.stringify(newCheck.params || {}, null, 2) }));
+      setRefreshCheckParamsErrors((prev) => {
+        const next = { ...prev };
+        delete next[newCheckId];
+        return next;
+      });
+    }
+    setRefreshEditorOpen(true);
+  };
+
+  const updateRefreshCheck = (checkId: string | null | undefined, updater: (check: RefreshCheckConfig) => RefreshCheckConfig) => {
+    updateRefreshDraft((draft) => ({
+      ...draft,
+      checks: (Array.isArray(draft.checks) ? draft.checks : []).map((check) => {
+        const currentId = check.check_id || null;
+        if (currentId !== (checkId || null)) return check;
+        return updater({
+          ...check,
+          params: check.params ? { ...check.params } : {},
+        });
+      }),
+    }));
+  };
+
+  const removeRefreshCheck = (checkId: string | null | undefined) => {
+    updateRefreshDraft((draft) => ({
+      ...draft,
+      checks: (Array.isArray(draft.checks) ? draft.checks : []).filter((check) => (check.check_id || null) !== (checkId || null)),
+    }));
+    const key = checkId || '';
+    if (key) {
+      setRefreshCheckParamsJson((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setRefreshCheckParamsErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  const handleRunRefresh = async (trigger: 'manual' | 'on_open' = 'manual', force = false) => {
+    if (!selectedNode) return;
+    if (refreshRunLoading) return;
+    setRefreshRunLoading(true);
+    setRefreshBindingError(null);
+    try {
+      const runResult = await runConceptRefresh(selectedNode.node_id, { trigger, force });
+      if (runResult.binding) {
+        setRefreshBinding(runResult.binding);
+      }
+      if ((runResult.resources_created_count || 0) > 0 || runResult.run_status === 'success' || runResult.run_status === 'partial') {
+        try {
+          const resources = await getResourcesForConcept(selectedNode.node_id);
+          onFetchEvidence?.({
+            addedCount: runResult.resources_created_count || 0,
+            resources,
+          });
+        } catch (refreshErr) {
+          console.warn('[ContextPanel] Failed to reload resources after refresh run:', refreshErr);
+        }
+      }
+    } catch (error) {
+      setRefreshBindingError(error instanceof Error ? error.message : 'Failed to run refresh');
+    } finally {
+      setRefreshRunLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (IS_DEMO_MODE) return;
+    if (activeTab !== 'evidence') return;
+    if (!selectedNode?.node_id) return;
+    if (!refreshBinding) return;
+    if (refreshRunLoading || refreshBindingSaving) return;
+    const effective = refreshBinding.effective_config;
+    const status = refreshBinding.status;
+    if (!effective?.enabled) return;
+    const triggers = Array.isArray(effective.triggers) ? effective.triggers : [];
+    if (!triggers.includes('on_open')) return;
+    if (!status?.is_stale) return;
+    const runKey = `${selectedNode.node_id}:${status.next_due_at || status.last_success_at || 'never'}`;
+    if (autoRefreshRunKeyRef.current === runKey) return;
+    autoRefreshRunKeyRef.current = runKey;
+    void handleRunRefresh('on_open', false);
+  }, [
+    activeTab,
+    selectedNode?.node_id,
+    refreshBinding?.effective_config?.enabled,
+    refreshBinding?.status?.is_stale,
+    refreshBinding?.status?.next_due_at,
+    refreshBinding?.status?.last_success_at,
+    refreshRunLoading,
+    refreshBindingSaving,
+    IS_DEMO_MODE,
+  ]);
 
   const handleGenerateDescription = async () => {
     if (!selectedNode) return;
@@ -2164,6 +2829,490 @@ export default function ContextPanel({
           <div className="fade-in">
             {/* Filters and Search */}
             <div style={{ marginBottom: '16px' }}>
+              {!IS_DEMO_MODE && selectedNode && (
+                <div
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    background: 'var(--panel)',
+                    padding: '10px',
+                    marginBottom: '12px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '10px',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <label
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '12px',
+                          color: 'var(--ink)',
+                          cursor: refreshBindingSaving ? 'not-allowed' : 'pointer',
+                          opacity: refreshBindingSaving ? 0.7 : 1,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(refreshBinding?.effective_config?.enabled)}
+                          disabled={refreshBindingLoading || refreshBindingSaving}
+                          onChange={() => {
+                            void handleToggleRefreshUpdates();
+                          }}
+                        />
+                        Check for updates
+                      </label>
+
+                      {refreshBinding?.effective_config?.enabled && (
+                        <span
+                          className="pill pill--small"
+                          style={{
+                            background: refreshBinding.status?.is_stale ? 'rgba(245, 158, 11, 0.12)' : 'rgba(34, 197, 94, 0.12)',
+                            color: refreshBinding.status?.is_stale ? '#b45309' : '#15803d',
+                            border: `1px solid ${refreshBinding.status?.is_stale ? 'rgba(245, 158, 11, 0.25)' : 'rgba(34, 197, 94, 0.22)'}`,
+                          }}
+                          title={
+                            refreshBinding.status?.is_stale
+                              ? 'Updates are due based on this node refresh TTL'
+                              : 'Data is currently within the configured refresh TTL'
+                          }
+                        >
+                          {refreshBinding.status?.is_stale ? 'Stale' : 'Fresh'}
+                        </span>
+                      )}
+
+                      {refreshBinding?.status?.check_count ? (
+                        <span className="pill pill--small" style={{ borderColor: 'var(--border)' }}>
+                          {refreshBinding.status.check_count} check{refreshBinding.status.check_count === 1 ? '' : 's'}
+                        </span>
+                      ) : null}
+
+                      {refreshBindingLoading && (
+                        <span style={{ fontSize: '12px', color: 'var(--muted)' }}>Loading refresh settings...</span>
+                      )}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleRunRefresh('manual', true);
+                        }}
+                        disabled={
+                          refreshBindingLoading ||
+                          refreshBindingSaving ||
+                          refreshRunLoading ||
+                          !Boolean(refreshBinding?.effective_config?.enabled)
+                        }
+                        className="pill pill--small"
+                        style={{
+                          cursor:
+                            refreshBindingLoading ||
+                            refreshBindingSaving ||
+                            refreshRunLoading ||
+                            !Boolean(refreshBinding?.effective_config?.enabled)
+                              ? 'not-allowed'
+                              : 'pointer',
+                          opacity:
+                            refreshBindingLoading ||
+                            refreshBindingSaving ||
+                            refreshRunLoading ||
+                            !Boolean(refreshBinding?.effective_config?.enabled)
+                              ? 0.6
+                              : 1,
+                          background: 'var(--surface)',
+                          border: '1px solid var(--border)',
+                          color: 'var(--ink)',
+                        }}
+                        title="Run configured refresh checks now"
+                      >
+                        {refreshRunLoading ? 'Checking...' : 'Check for updates now'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {refreshBinding && (
+                    <div
+                      style={{
+                        marginTop: '8px',
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '10px',
+                        fontSize: '11px',
+                        color: 'var(--muted)',
+                      }}
+                    >
+                      <span>Last checked: {formatRefreshTimestampLabel(refreshBinding.status?.last_run_at)}</span>
+                      <span>Last success: {formatRefreshTimestampLabel(refreshBinding.status?.last_success_at)}</span>
+                      <span>Next due: {formatRefreshTimestampLabel(refreshBinding.status?.next_due_at)}</span>
+                      {Array.isArray(refreshBinding.effective_config?.triggers) && refreshBinding.effective_config.triggers.length > 0 && (
+                        <span>Triggers: {refreshBinding.effective_config.triggers.join(', ')}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {refreshBinding && refreshDraftConfig && (
+                    <div
+                      style={{
+                        marginTop: '10px',
+                        borderTop: '1px solid var(--border)',
+                        paddingTop: '10px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="pill pill--small"
+                          onClick={() => setRefreshEditorOpen((v) => !v)}
+                          style={{
+                            cursor: 'pointer',
+                            background: 'var(--surface)',
+                            border: '1px solid var(--border)',
+                            color: 'var(--ink)',
+                          }}
+                        >
+                          {refreshEditorOpen ? 'Hide refresh rules' : 'Edit refresh rules'}
+                        </button>
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {refreshDraftDirty && (
+                            <span style={{ fontSize: '11px', color: 'var(--muted)' }}>Unsaved changes</span>
+                          )}
+                          <button
+                            type="button"
+                            className="pill pill--small"
+                            onClick={() => {
+                              setRefreshDraftConfig(cloneRefreshBindingConfig(refreshBinding.config));
+                              setRefreshDraftDirty(false);
+                              const nextJson: Record<string, string> = {};
+                              for (const check of refreshBinding.config?.checks || []) {
+                                const key = check.check_id || '';
+                                if (!key) continue;
+                                try {
+                                  nextJson[key] = JSON.stringify(check.params || {}, null, 2);
+                                } catch {
+                                  nextJson[key] = '{}';
+                                }
+                              }
+                              setRefreshCheckParamsJson(nextJson);
+                              setRefreshCheckParamsErrors({});
+                            }}
+                            disabled={!refreshDraftDirty || refreshBindingSaving}
+                            style={{
+                              cursor: !refreshDraftDirty || refreshBindingSaving ? 'not-allowed' : 'pointer',
+                              opacity: !refreshDraftDirty || refreshBindingSaving ? 0.6 : 1,
+                              background: 'transparent',
+                              border: '1px solid var(--border)',
+                              color: 'var(--muted)',
+                            }}
+                          >
+                            Reset
+                          </button>
+                          <button
+                            type="button"
+                            className="pill pill--small"
+                            onClick={() => {
+                              void handleSaveRefreshConfig();
+                            }}
+                            disabled={!refreshDraftDirty || refreshBindingSaving || Object.values(refreshCheckParamsErrors).some(Boolean)}
+                            style={{
+                              cursor:
+                                !refreshDraftDirty || refreshBindingSaving || Object.values(refreshCheckParamsErrors).some(Boolean)
+                                  ? 'not-allowed'
+                                  : 'pointer',
+                              opacity:
+                                !refreshDraftDirty || refreshBindingSaving || Object.values(refreshCheckParamsErrors).some(Boolean)
+                                  ? 0.6
+                                  : 1,
+                              background: 'var(--accent)',
+                              border: '1px solid var(--accent)',
+                              color: 'white',
+                            }}
+                          >
+                            {refreshBindingSaving ? 'Saving...' : 'Save rules'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {refreshEditorOpen && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                            <label style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', fontSize: '12px', color: 'var(--ink)' }}>
+                              <input
+                                type="checkbox"
+                                checked={refreshDraftConfig.inherit_workspace_defaults ?? true}
+                                onChange={(e) => {
+                                  updateRefreshDraft((draft) => ({
+                                    ...draft,
+                                    inherit_workspace_defaults: e.target.checked,
+                                  }));
+                                }}
+                              />
+                              Inherit workspace defaults
+                            </label>
+
+                            <label style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', fontSize: '12px', color: 'var(--ink)' }}>
+                              TTL
+                              <select
+                                value={String(refreshDraftConfig.ttl_seconds || 3600)}
+                                onChange={(e) => {
+                                  const ttl = Number(e.target.value || 3600);
+                                  updateRefreshDraft((draft) => ({ ...draft, ttl_seconds: ttl }));
+                                }}
+                                style={{
+                                  fontSize: '12px',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '6px',
+                                  background: 'var(--background)',
+                                  color: 'var(--ink)',
+                                  padding: '4px 6px',
+                                }}
+                              >
+                                <option value="300">5 min</option>
+                                <option value="900">15 min</option>
+                                <option value="1800">30 min</option>
+                                <option value="3600">1 hour</option>
+                                <option value="21600">6 hours</option>
+                                <option value="43200">12 hours</option>
+                                <option value="86400">1 day</option>
+                              </select>
+                            </label>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                            {(['manual', 'on_open', 'scheduled'] as const).map((trigger) => (
+                              <label key={trigger} style={{ display: 'inline-flex', gap: '6px', alignItems: 'center', fontSize: '12px', color: 'var(--ink)', textTransform: 'capitalize' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Array.isArray(refreshDraftConfig.triggers) && refreshDraftConfig.triggers.includes(trigger)}
+                                  onChange={() => toggleRefreshTrigger(trigger)}
+                                />
+                                {trigger === 'on_open' ? 'On open' : trigger}
+                              </label>
+                            ))}
+                          </div>
+
+                          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                            Workspace default checks: {refreshBinding.workspace_defaults?.checks?.length || 0}
+                            {' · '}
+                            Node override checks: {refreshDraftConfig.checks?.length || 0}
+                            {(refreshDraftConfig.inherit_workspace_defaults ?? true) && (refreshBinding.workspace_defaults?.checks?.length || 0) > 0
+                              ? ' · effective checks include both workspace defaults and node overrides'
+                              : ''}
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {(refreshDraftConfig.checks || []).map((check, idx) => (
+                              <div
+                                key={check.check_id || `check-${idx}`}
+                                style={{
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '8px',
+                                  padding: '8px',
+                                  background: 'var(--surface)',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '8px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--ink)' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={check.enabled ?? true}
+                                      onChange={(e) => {
+                                        updateRefreshCheck(check.check_id, (current) => ({ ...current, enabled: e.target.checked }));
+                                      }}
+                                    />
+                                    Enabled
+                                  </label>
+
+                                  <select
+                                    value={check.kind || 'exa_answer'}
+                                    onChange={(e) => {
+                                      updateRefreshCheck(check.check_id, (current) => ({
+                                        ...current,
+                                        kind: e.target.value,
+                                      }));
+                                    }}
+                                    style={{
+                                      fontSize: '12px',
+                                      border: '1px solid var(--border)',
+                                      borderRadius: '6px',
+                                      background: 'var(--background)',
+                                      color: 'var(--ink)',
+                                      padding: '4px 6px',
+                                    }}
+                                  >
+                                    <option value="exa_answer">Exa answer</option>
+                                    <option value="exa_news">Exa news</option>
+                                    <option value="search_and_fetch">Web search</option>
+                                    <option value="live_metric">Live metric</option>
+                                  </select>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => removeRefreshCheck(check.check_id)}
+                                    className="pill pill--small"
+                                    style={{
+                                      marginLeft: 'auto',
+                                      cursor: 'pointer',
+                                      background: 'transparent',
+                                      border: '1px solid rgba(239, 68, 68, 0.2)',
+                                      color: '#b91c1c',
+                                    }}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+
+                                <input
+                                  type="text"
+                                  value={check.title || ''}
+                                  placeholder="Check title (optional)"
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    updateRefreshCheck(check.check_id, (current) => ({ ...current, title: value }));
+                                  }}
+                                  style={{
+                                    width: '100%',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: '6px',
+                                    padding: '6px 8px',
+                                    fontSize: '12px',
+                                    background: 'var(--background)',
+                                    color: 'var(--ink)',
+                                  }}
+                                />
+
+                                <input
+                                  type="text"
+                                  value={check.query || ''}
+                                  placeholder="Query (supports {{concept_name}} placeholder)"
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    updateRefreshCheck(check.check_id, (current) => ({ ...current, query: value }));
+                                  }}
+                                  style={{
+                                    width: '100%',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: '6px',
+                                    padding: '6px 8px',
+                                    fontSize: '12px',
+                                    background: 'var(--background)',
+                                    color: 'var(--ink)',
+                                  }}
+                                />
+
+                                <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                                  Tip: use <code>{'{{concept_name}}'}</code> in workspace defaults or node checks for reusable templates.
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <div style={{ fontSize: '11px', color: 'var(--muted)' }}>Advanced params (JSON)</div>
+                                  <textarea
+                                    value={refreshCheckParamsJson[check.check_id || ''] ?? (() => {
+                                      try {
+                                        return JSON.stringify(check.params || {}, null, 2);
+                                      } catch {
+                                        return '{}';
+                                      }
+                                    })()}
+                                    onChange={(e) => {
+                                      const key = check.check_id || '';
+                                      const text = e.target.value;
+                                      setRefreshCheckParamsJson((prev) => ({ ...prev, [key]: text }));
+                                      try {
+                                        const parsed = text.trim() ? JSON.parse(text) : {};
+                                        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                                          setRefreshCheckParamsErrors((prev) => {
+                                            const next = { ...prev };
+                                            delete next[key];
+                                            return next;
+                                          });
+                                          updateRefreshCheck(check.check_id, (current) => ({ ...current, params: parsed as Record<string, any> }));
+                                        } else {
+                                          setRefreshCheckParamsErrors((prev) => ({ ...prev, [key]: 'Params must be a JSON object' }));
+                                        }
+                                      } catch (err) {
+                                        setRefreshCheckParamsErrors((prev) => ({
+                                          ...prev,
+                                          [key]: err instanceof Error ? err.message : 'Invalid JSON',
+                                        }));
+                                      }
+                                    }}
+                                    placeholder={`{\n  "max_age_hours": 6,\n  "limit": 8\n}`}
+                                    rows={5}
+                                    style={{
+                                      width: '100%',
+                                      border: '1px solid var(--border)',
+                                      borderRadius: '6px',
+                                      padding: '8px',
+                                      fontSize: '11px',
+                                      fontFamily: 'var(--font-mono)',
+                                      background: 'var(--background)',
+                                      color: 'var(--ink)',
+                                      resize: 'vertical',
+                                    }}
+                                  />
+                                  {refreshCheckParamsErrors[check.check_id || ''] && (
+                                    <div style={{ fontSize: '11px', color: '#b91c1c' }}>
+                                      {refreshCheckParamsErrors[check.check_id || '']}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+
+                            <button
+                              type="button"
+                              onClick={handleAddRefreshCheck}
+                              className="pill pill--small"
+                              style={{
+                                alignSelf: 'flex-start',
+                                cursor: 'pointer',
+                                background: 'var(--surface)',
+                                border: '1px solid var(--border)',
+                                color: 'var(--ink)',
+                              }}
+                            >
+                              + Add check
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {refreshBindingError && (
+                    <div
+                      style={{
+                        marginTop: '8px',
+                        fontSize: '12px',
+                        color: 'var(--accent-2)',
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px solid rgba(239, 68, 68, 0.16)',
+                        borderRadius: '6px',
+                        padding: '6px 8px',
+                      }}
+                    >
+                      {refreshBindingError}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
                 {(['all', 'browser_use', 'upload', 'notion'] as const).map(filter => (
                   <button
@@ -2312,6 +3461,7 @@ export default function ContextPanel({
                   )}
                   {filtered.map(res => {
                     const isExpanded = expandedResources.has(res.resource_id);
+                    const structuredCardKind = getStructuredEvidenceKind(res);
                     return (
                       <div
                         key={res.resource_id}
@@ -2331,8 +3481,20 @@ export default function ContextPanel({
                           <span className="badge badge--soft" style={{ fontSize: '11px' }}>
                             {res.source || 'unknown'}
                           </span>
+                          {structuredCardKind === 'metric' && (
+                            <span className="badge badge--soft" style={{ fontSize: '11px', background: 'rgba(59,130,246,0.08)', color: '#1d4ed8', borderColor: 'rgba(59,130,246,0.14)' }}>
+                              live metric
+                            </span>
+                          )}
+                          {structuredCardKind === 'news' && (
+                            <span className="badge badge--soft" style={{ fontSize: '11px', background: 'rgba(245,158,11,0.08)', color: '#b45309', borderColor: 'rgba(245,158,11,0.14)' }}>
+                              news feed
+                            </span>
+                          )}
                         </div>
-                        {res.caption && (
+                        {structuredCardKind ? (
+                          <StructuredEvidenceCardBody resource={res} isExpanded={isExpanded} />
+                        ) : res.caption && (
                           <p style={{
                             fontSize: '13px',
                             lineHeight: '1.5',

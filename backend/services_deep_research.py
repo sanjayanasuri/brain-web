@@ -8,12 +8,18 @@ Orchestrates the "Deep Research" workflow:
 4.  Synthesize: Produce a structured "Learning Brief".
 """
 import asyncio
+import json
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from neo4j import Session
 
-from services_web_search import search_and_fetch
+from services_web_search import (
+    search_and_fetch,
+    fetch_page_content,
+    create_exa_research_task,
+    wait_for_exa_research_task,
+)
 from services_retrieval_plans import run_plan
 from services_retrieval_helpers import retrieve_focus_communities, retrieve_claims_for_community_ids
 from services_ingestion_runs import create_ingestion_run, update_ingestion_run_status
@@ -25,6 +31,113 @@ from models import Intent
 
 logger = logging.getLogger("brain_web")
 
+
+def _exa_research_text(task: Dict[str, Any]) -> str:
+    if not task:
+        return ""
+    answer = task.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        return answer.strip()
+    output = task.get("output")
+    if isinstance(output, str):
+        return output.strip()
+    if output is not None:
+        try:
+            return json.dumps(output, ensure_ascii=True, indent=2)
+        except Exception:
+            return str(output)
+    raw = task.get("raw")
+    if raw is not None:
+        try:
+            return json.dumps(raw, ensure_ascii=True, indent=2)
+        except Exception:
+            return str(raw)
+    return ""
+
+
+def _is_exa_task_completed(task: Optional[Dict[str, Any]]) -> bool:
+    status = str((task or {}).get("status") or "").strip().lower()
+    return status == "completed"
+
+
+async def _build_fetches_from_exa_research_task(topic: str, task: Dict[str, Any], breadth: int) -> List[Dict[str, Any]]:
+    """
+    Normalize Exa Research output into a search_and_fetch-like shape so the rest of the
+    deep research pipeline can reuse the existing ingestion/analysis logic.
+    """
+    fetches: List[Dict[str, Any]] = []
+    task_id = (task or {}).get("id") or "unknown"
+    report_text = _exa_research_text(task)
+    report_url = f"exa://research/task/{task_id}"
+
+    if report_text:
+        fetches.append(
+            {
+                "search_result": {
+                    "title": f"Exa Research Report: {topic}",
+                    "url": report_url,
+                    "snippet": report_text[:500],
+                    "engine": "exa_research",
+                    "source_type": "research_report",
+                },
+                "fetched_content": {
+                    "title": f"Exa Research Report: {topic}",
+                    "content": report_text,
+                    "url": report_url,
+                    "metadata": {
+                        "provider": "exa",
+                        "research_task_id": task_id,
+                        "research_status": task.get("status"),
+                        "research_model": task.get("model"),
+                    },
+                    "source_type": "research_report",
+                    "engine": "exa_research",
+                },
+                "fetch_status": "success",
+            }
+        )
+
+    citations = task.get("citations") if isinstance(task.get("citations"), list) else []
+    max_citation_fetches = max(1, min(10, int(breadth) * 2))
+    for citation in citations[:max_citation_fetches]:
+        if not isinstance(citation, dict):
+            continue
+        url = str(citation.get("url") or "").strip()
+        if not url:
+            continue
+        title = str(citation.get("title") or "Untitled")
+        snippet = str(citation.get("snippet") or "")
+        fetched = await fetch_page_content(url=url, max_length=15000)
+        if fetched:
+            fetched_content = fetched
+            fetch_status = "success"
+        else:
+            fetched_content = {
+                "title": title,
+                "content": snippet,
+                "url": url,
+                "metadata": {"provider": "exa", "research_task_id": task_id, "citation_only": True},
+                "source_type": "web_page",
+                "engine": "exa",
+            }
+            fetch_status = "success" if snippet else "failed"
+
+        fetches.append(
+            {
+                "search_result": {
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet[:500],
+                    "engine": "exa",
+                    "source_type": "web_page",
+                },
+                "fetched_content": fetched_content,
+                "fetch_status": fetch_status,
+            }
+        )
+
+    return fetches
+
 async def perform_deep_research(
     topic: str,
     breadth: int = 3,
@@ -32,6 +145,10 @@ async def perform_deep_research(
     intent: str = "auto",
     graph_id: Optional[str] = None,
     branch_id: Optional[str] = None,
+    use_exa_research: bool = False,
+    exa_research_wait: bool = True,
+    exa_research_timeout_seconds: int = 300,
+    exa_research_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute a deep research run on a topic.
@@ -64,17 +181,42 @@ async def perform_deep_research(
         
         try:
             # 3. Search & Fetch (Phase 1)
-            # We use `search_and_fetch` which does both efficiently
-            search_result = await search_and_fetch(
-                query=topic,
-                num_results=breadth,
-                engines="google,bing,duckduckgo",
-                rerank=True,
-                stealth_mode="medium", # Good balance
-                max_content_length=15000, 
-            )
-            
-            fetches = search_result.get("results", [])
+            # Optional Exa Research mode: create a research task, ingest the report + cited pages,
+            # then continue with the same graph analysis/synthesis pipeline.
+            exa_task: Optional[Dict[str, Any]] = None
+            fetches: List[Dict[str, Any]] = []
+            if use_exa_research:
+                logger.info("Deep Research: Using Exa Research task for topic '%s'", topic)
+                exa_task = await create_exa_research_task(
+                    instructions=topic,
+                    model=exa_research_model,
+                )
+                if exa_task and exa_research_wait and exa_task.get("id"):
+                    exa_task = await wait_for_exa_research_task(
+                        task_id=exa_task["id"],
+                        timeout_seconds=exa_research_timeout_seconds,
+                        poll_interval_seconds=2.0,
+                        include_events=False,
+                    ) or exa_task
+
+                if _is_exa_task_completed(exa_task):
+                    fetches = await _build_fetches_from_exa_research_task(topic, exa_task or {}, breadth=breadth)
+                else:
+                    logger.warning(
+                        "Deep Research: Exa Research task unavailable/incomplete for '%s' (status=%s). Falling back to search_and_fetch.",
+                        topic,
+                        (exa_task or {}).get("status") if exa_task else None,
+                    )
+
+            if not fetches:
+                # Default path: `search_and_fetch` gets top sources and fetched content.
+                search_result = await search_and_fetch(
+                    query=topic,
+                    num_results=breadth,
+                    max_content_length=15000,
+                )
+                fetches = search_result.get("results", [])
+
             logger.info(f"Deep Research: Found {len(fetches)} matching sources for '{topic}'")
             for i, f in enumerate(fetches):
                 url = f.get("search_result", {}).get("url")
@@ -103,12 +245,19 @@ async def perform_deep_research(
                     "source_title": title,
                 }
                 
+                fetched_source_type = (content_data.get("source_type") or item.get("search_result", {}).get("source_type") or "web_page")
+                is_research_report = fetched_source_type == "research_report" or (url or "").startswith("exa://research/")
                 artifact_input = ArtifactInput(
-                    artifact_type="webpage",
-                    source_url=url,
+                    artifact_type="manual" if is_research_report else "webpage",
+                    source_url=None if is_research_report else url,
                     title=title,
                     text=content_data.get("content", ""),
-                    metadata=meta,
+                    metadata={
+                        **meta,
+                        "source_type": fetched_source_type,
+                        "search_engine": item.get("search_result", {}).get("engine"),
+                        **({"research_task_id": (content_data.get("metadata") or {}).get("research_task_id")} if (content_data.get("metadata") or {}).get("research_task_id") else {}),
+                    },
                     actions=IngestionActions(
                         run_lecture_extraction=True,
                         run_chunk_and_claims=True,
@@ -249,6 +398,14 @@ async def perform_deep_research(
                     for i in fetches if i.get("fetch_status") == "success"
                 ]
             }
+            if exa_task:
+                response["exa_research_task"] = {
+                    "id": exa_task.get("id"),
+                    "status": exa_task.get("status"),
+                    "timed_out": bool(exa_task.get("timed_out")),
+                    "model": exa_task.get("model"),
+                    "citation_count": len(exa_task.get("citations") or []) if isinstance(exa_task.get("citations"), list) else 0,
+                }
             
             # 9. Recursive Exploration (Depth > 1)
             if depth > 1:
@@ -280,7 +437,11 @@ async def perform_deep_research(
                         depth=depth - 1,
                         intent="auto",
                         graph_id=graph_id,
-                        branch_id=branch_id
+                        branch_id=branch_id,
+                        use_exa_research=use_exa_research,
+                        exa_research_wait=exa_research_wait,
+                        exa_research_timeout_seconds=exa_research_timeout_seconds,
+                        exa_research_model=exa_research_model,
                     )
                     sub_results.append(sub_res)
                 

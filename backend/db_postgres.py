@@ -172,6 +172,17 @@ def init_postgres_db():
         """,
         "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);",
         "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);",
+        # Personal API key (for clipper/mobile ingest) — stored hashed; plaintext never persisted.
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS personal_api_key_hash TEXT;",
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS personal_api_key_prefix TEXT;",
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS personal_api_key_created_at TIMESTAMPTZ;",
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS personal_api_key_last_used_at TIMESTAMPTZ;",
+        "ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS personal_api_key_revoked_at TIMESTAMPTZ;",
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_personal_api_key_hash_unique
+        ON users(personal_api_key_hash)
+        WHERE personal_api_key_hash IS NOT NULL;
+        """,
         """
         CREATE TABLE IF NOT EXISTS tenants (
             tenant_id TEXT PRIMARY KEY,
@@ -344,6 +355,78 @@ def init_postgres_db():
         );
         """,
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, created_at ASC);",
+
+        # -------------------------------------------------------------------
+        # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
+        # -------------------------------------------------------------------
+        """
+        CREATE TABLE IF NOT EXISTS content_items (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            type TEXT NOT NULL CHECK (type IN ('article', 'social_post', 'social_comment', 'snippet', 'transcript')),
+            source_url TEXT,
+            source_platform TEXT,
+            title TEXT,
+            raw_text TEXT,
+            raw_html TEXT,
+            raw_media_url TEXT,
+            extracted_text TEXT,
+            status TEXT NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'extracted', 'extracted_partial', 'analyzed', 'failed')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_content_items_user_created_at ON content_items(user_id, created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_content_items_user_status ON content_items(user_id, status);",
+
+        """
+        CREATE TABLE IF NOT EXISTS content_analyses (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            content_item_id UUID NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+            model TEXT NOT NULL,
+            summary_short TEXT,
+            summary_long TEXT,
+            key_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+            entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+            topics JSONB NOT NULL DEFAULT '[]'::jsonb,
+            questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+            action_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+            analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_content_analyses_item_created_at ON content_analyses(content_item_id, created_at DESC);",
+
+        """
+        CREATE TABLE IF NOT EXISTS transcript_chunks (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            content_item_id UUID NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+            chunk_index INTEGER NOT NULL,
+            speaker TEXT NOT NULL CHECK (speaker IN ('user', 'assistant')),
+            text TEXT NOT NULL,
+            start_ms INTEGER,
+            end_ms INTEGER,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (content_item_id, chunk_index)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_transcript_chunks_item_chunk_index ON transcript_chunks(content_item_id, chunk_index);",
+
+        """
+        CREATE TABLE IF NOT EXISTS thoughts (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            type TEXT NOT NULL CHECK (type IN ('question', 'decision', 'insight')),
+            source_content_item_id UUID NOT NULL REFERENCES content_items(id) ON DELETE CASCADE,
+            source_chunk_id UUID REFERENCES transcript_chunks(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_thoughts_user_created_at ON thoughts(user_id, created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_thoughts_source_content_item_id ON thoughts(source_content_item_id);",
+        "CREATE INDEX IF NOT EXISTS idx_thoughts_source_chunk_id ON thoughts(source_chunk_id);",
+
         # --- tenant_id type standardization (legacy mixed UUID/VARCHAR -> TEXT) ---
         "ALTER TABLE IF EXISTS users ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
         "ALTER TABLE IF EXISTS study_sessions ALTER COLUMN tenant_id TYPE TEXT USING tenant_id::text;",
@@ -365,6 +448,10 @@ def init_postgres_db():
         "ALTER TABLE IF EXISTS usage_logs ENABLE ROW LEVEL SECURITY;",
         "ALTER TABLE IF EXISTS chat_messages ENABLE ROW LEVEL SECURITY;",
         "ALTER TABLE IF EXISTS memory_sync_events ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS content_items ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS content_analyses ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS transcript_chunks ENABLE ROW LEVEL SECURITY;",
+        "ALTER TABLE IF EXISTS thoughts ENABLE ROW LEVEL SECURITY;",
         # --- RLS policies (tenant scoped) ---
         "DROP POLICY IF EXISTS tenants_tenant_isolation ON tenants;",
         """
@@ -419,6 +506,63 @@ def init_postgres_db():
         CREATE POLICY memory_sync_events_tenant_isolation ON memory_sync_events
         USING (tenant_id = current_setting('app.tenant_id', true))
         WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+        """,
+
+        # --- RLS policies (user scoped; unified content pipeline) ---
+        "DROP POLICY IF EXISTS content_items_user_isolation ON content_items;",
+        """
+        CREATE POLICY content_items_user_isolation ON content_items
+        USING (user_id::text = current_setting('app.user_id', true))
+        WITH CHECK (user_id::text = current_setting('app.user_id', true));
+        """,
+
+        "DROP POLICY IF EXISTS content_analyses_user_isolation ON content_analyses;",
+        """
+        CREATE POLICY content_analyses_user_isolation ON content_analyses
+        USING (
+            EXISTS (
+                SELECT 1
+                FROM content_items ci
+                WHERE ci.id = content_analyses.content_item_id
+                  AND ci.user_id::text = current_setting('app.user_id', true)
+            )
+        )
+        WITH CHECK (
+            EXISTS (
+                SELECT 1
+                FROM content_items ci
+                WHERE ci.id = content_analyses.content_item_id
+                  AND ci.user_id::text = current_setting('app.user_id', true)
+            )
+        );
+        """,
+
+        "DROP POLICY IF EXISTS transcript_chunks_user_isolation ON transcript_chunks;",
+        """
+        CREATE POLICY transcript_chunks_user_isolation ON transcript_chunks
+        USING (
+            EXISTS (
+                SELECT 1
+                FROM content_items ci
+                WHERE ci.id = transcript_chunks.content_item_id
+                  AND ci.user_id::text = current_setting('app.user_id', true)
+            )
+        )
+        WITH CHECK (
+            EXISTS (
+                SELECT 1
+                FROM content_items ci
+                WHERE ci.id = transcript_chunks.content_item_id
+                  AND ci.user_id::text = current_setting('app.user_id', true)
+            )
+        );
+        """,
+
+        "DROP POLICY IF EXISTS thoughts_user_isolation ON thoughts;",
+        """
+        CREATE POLICY thoughts_user_isolation ON thoughts
+        USING (user_id::text = current_setting('app.user_id', true))
+        WITH CHECK (user_id::text = current_setting('app.user_id', true));
         """,
     ]
 
