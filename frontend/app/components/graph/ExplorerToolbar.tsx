@@ -162,7 +162,7 @@ export default function ExplorerToolbar(props: Props & {
           active={mode === 'lasso'}
           onClick={() => onModeChange(mode === 'lasso' ? 'select' : 'lasso')}
           icon={<Lasso size={22} />}
-          label="Lasso by drawing"
+          label="Lasso Select"
         />
 
         <div style={{ position: 'relative' }}>
@@ -212,7 +212,7 @@ export default function ExplorerToolbar(props: Props & {
           active={false}
           onClick={onAddNode}
           icon={<PlusCircle size={22} />}
-          label="Add Node"
+          label="Add Topic"
         />
 
         <GraphToolButton

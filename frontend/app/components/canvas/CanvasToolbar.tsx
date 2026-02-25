@@ -136,15 +136,16 @@ export default function CanvasToolbar({
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           {([
-            ['pen', 'P'],
-            ['highlighter', 'H'],
-            ['eraser', 'E'],
-            ['text', 'T'],
-            ['select', 'V'],
-          ] as [ToolType, string][]).map(([tool, shortcut]) => (
+            ['pen', '✏️', 'Pen (P)'],
+            ['highlighter', '🖍️', 'Highlighter (H)'],
+            ['eraser', '🧹', 'Eraser (E)'],
+            ['text', 'Aa', 'Text (T)'],
+            ['select', '👆', 'Select (V)'],
+          ] as [ToolType, string, string][]).map(([tool, icon, tooltip]) => (
             <button
               key={tool}
               onClick={() => setActiveTool(tool)}
+              title={tooltip}
               style={{
                 minWidth: 42,
                 padding: '8px 10px',
@@ -155,9 +156,8 @@ export default function CanvasToolbar({
                 fontWeight: 700,
                 cursor: 'pointer',
               }}
-              title={`${tool} (${shortcut})`}
             >
-              {shortcut}
+              {icon}
             </button>
           ))}
 

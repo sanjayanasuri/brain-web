@@ -338,7 +338,7 @@ export default function FloatingActionButton({ activeGraphId, className }: Float
           boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
           whiteSpace: 'nowrap',
         }}>
-          F to expand • V for Voice
+          Quick Actions
         </div>
       )}
 
