@@ -47,6 +47,7 @@ import ChatMessagesList from "../components/chat/ChatMessagesList";
 import StudyPanel from "../components/dashboard/StudyPanel";
 import VoiceAgentPanel from "../components/voice/VoiceAgentPanel";
 import { ActionButtons } from "../components/chat/ActionButtons";
+import HomeFeedCard from "../components/home/HomeFeedCard";
 
 function HomePageInner() {
   const router = useRouter();
@@ -620,6 +621,8 @@ function HomePageInner() {
                     Explore your knowledge graph or the web with agentic research.
                   </div>
                 </div>
+
+                <HomeFeedCard />
 
                 <form onSubmit={handleSubmit} style={{ width: "100%", maxWidth: "1000px", marginTop: "10px" }}>
                   <div
