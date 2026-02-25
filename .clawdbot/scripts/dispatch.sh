@@ -7,6 +7,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
 source "$SCRIPT_DIR/helpers.sh"
+# Optional local runtime env (not committed): .clawdbot/.env
+if [[ -f "$CLAWDBOT_DIR/.env" ]]; then
+  set -a
+  source "$CLAWDBOT_DIR/.env"
+  set +a
+fi
 SPAWN_SCRIPT="$SCRIPT_DIR/spawn.sh"
 ROUTER_SCRIPT="$SCRIPT_DIR/task-router.sh"
 require_cmd jq
