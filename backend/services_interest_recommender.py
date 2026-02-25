@@ -135,10 +135,45 @@ def get_recent_suggestions(*, user_id: str, tenant_id: str, limit: int = 10) -> 
         """
         SELECT id, kind, title, reason, query, score, created_at
         FROM content_suggestions
-        WHERE user_id=%s AND tenant_id=%s
+        WHERE user_id=%s AND tenant_id=%s AND dismissed=FALSE
         ORDER BY created_at DESC
         LIMIT %s
         """,
         (user_id, tenant_id, limit),
     ) or []
     return rows
+
+
+def record_suggestion_event(*, suggestion_id: str, user_id: str, tenant_id: str, event_type: str, metadata: Dict | None = None) -> None:
+    execute_update(
+        """
+        INSERT INTO content_suggestion_events (id, suggestion_id, user_id, tenant_id, event_type, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+        """,
+        (
+            f"cse_{abs(hash(suggestion_id + user_id + event_type + str(__import__('time').time_ns()))) % 10**15}",
+            suggestion_id,
+            user_id,
+            tenant_id,
+            event_type,
+            json.dumps(metadata or {}),
+        ),
+    )
+
+
+def dismiss_suggestion(*, suggestion_id: str, user_id: str, tenant_id: str) -> None:
+    execute_update(
+        """
+        UPDATE content_suggestions
+        SET dismissed=TRUE
+        WHERE id=%s AND user_id=%s AND tenant_id=%s
+        """,
+        (suggestion_id, user_id, tenant_id),
+    )
+    record_suggestion_event(
+        suggestion_id=suggestion_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        event_type="dismissed",
+        metadata={},
+    )

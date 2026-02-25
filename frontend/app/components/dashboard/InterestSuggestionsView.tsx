@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getInterestSuggestions, refreshInterestSuggestions, type InterestSuggestion } from '../../api/interest';
+import { dismissInterestSuggestion, getInterestSuggestions, markInterestSuggestionOpened, refreshInterestSuggestions, type InterestSuggestion } from '../../api/interest';
 
 export default function InterestSuggestionsView() {
   const [items, setItems] = useState<InterestSuggestion[]>([]);
@@ -70,10 +70,34 @@ export default function InterestSuggestionsView() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {items.map((item, idx) => (
-            <div key={`${item.title}-${idx}`} style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)' }}>
+            <div key={`${item.id ?? item.title}-${idx}`} style={{ padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)' }}>
               <div style={{ fontWeight: 600 }}>{idx + 1}. {item.title}</div>
               {item.reason && <div style={{ marginTop: 4, color: 'var(--muted)', fontSize: 13 }}>{item.reason}</div>}
               {item.query && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--accent)' }}>Query: {item.query}</div>}
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                {item.query && (
+                  <button
+                    onClick={async () => {
+                      if (item.id) await markInterestSuggestionOpened(item.id);
+                      window.open(`https://duckduckgo.com/?q=${encodeURIComponent(item.query || item.title)}`, '_blank', 'noopener,noreferrer');
+                    }}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    Search
+                  </button>
+                )}
+                {item.id && (
+                  <button
+                    onClick={async () => {
+                      await dismissInterestSuggestion(item.id!);
+                      setItems(prev => prev.filter(x => x.id !== item.id));
+                    }}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--panel)', cursor: 'pointer', fontSize: 12 }}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

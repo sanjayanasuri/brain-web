@@ -396,10 +396,25 @@ def init_postgres_db():
             query TEXT,
             score DOUBLE PRECISION NOT NULL DEFAULT 0,
             metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            dismissed BOOLEAN NOT NULL DEFAULT FALSE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """,
+        "ALTER TABLE IF EXISTS content_suggestions ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT FALSE;",
         "CREATE INDEX IF NOT EXISTS idx_content_suggestions_user_created ON content_suggestions(user_id, tenant_id, created_at DESC);",
+
+        """
+        CREATE TABLE IF NOT EXISTS content_suggestion_events (
+            id TEXT PRIMARY KEY,
+            suggestion_id TEXT NOT NULL,
+            user_id VARCHAR(255) NOT NULL,
+            tenant_id TEXT NOT NULL,
+            event_type VARCHAR(32) NOT NULL,
+            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_content_suggestion_events_user_created ON content_suggestion_events(user_id, tenant_id, created_at DESC);",
 
         # -------------------------------------------------------------------
         # Unified Content Pipeline (ContentItem + Analysis + Transcript + Thoughts)
